@@ -668,6 +668,28 @@ compositor receives and the watching connection sees go.
 
 Still missing: **game mode**, a way for the dock to know it, so that it hides (see below).
 
+## Trash (D-21j)
+
+As on macOS, the trash ends the dock, after the separator (`items.rs`, `trash.rs`). It is the
+user's freedesktop trash, `$XDG_DATA_HOME/Trash` (`~/.local/share/Trash`), the one Evidence
+fills. Its tile (`dock::trash_icon`) is a bin, with sheets of paper in it while `Trash/files`
+holds something: a thread follows the folder with inotify (`trash::watch`, as the dock follows
+its file) and tells the dock each time it fills or empties; nothing polls.
+
+- A click opens it in Evidence (`evidence trash:///`, Evidence's argument for its trash).
+- An icon of the pinned list dragged onto it and let go is thrown away: unpinned, in a puff of
+  smoke, as when it is let go out of the dock.
+- Its menu: « Ouvrir », then « Vider la corbeille » while it holds something. A first click
+  arms it (« Reclique pour vider », the menu stays open); a second one, past the launcher's
+  `CONFIRM_DELAY` (a double click only arms), deletes what it holds on a thread of its own:
+  each entry of `Trash/files` and its record in `Trash/info`, a link removed itself, never what
+  it points to, 100,000 entries at most at a time.
+
+Files cannot be dropped on it from Evidence yet: iced starts no Wayland drag and drop.
+
+![The trash, full, at the end of the dock](../desktop/dock/screenshots/trash.png)
+![Its menu, armed](../desktop/dock/screenshots/trash-menu.png)
+
 ## Menu of an icon
 
 A right click opens the menu of the icon under the pointer, as an `xdg_popup` attached to the

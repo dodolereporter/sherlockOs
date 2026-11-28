@@ -69,6 +69,8 @@ pub const PATH: &str = "path";
 pub struct Config {
     pub home: PathBuf,
     pub start: PathBuf,
+    /// Opens on the trash (`trash:///` as argument, lot D-21j), when there is one.
+    pub start_trash: bool,
     pub favorites: Vec<Place>,
     pub trash: Option<Trash>,
     /// `--measure <folder> [--maximized]`: measures smoothness on this folder, then quits.
@@ -101,8 +103,11 @@ impl Config {
             _ => None,
         };
         let maximized = measure.is_some() && args.iter().any(|a| a == "--maximized");
+        // `trash:///`, as the dock's trash asks (lot D-21j): Evidence opens on the trash.
+        let start_trash = measure.is_none() && args.first().is_some_and(|a| a == "trash:///");
         let start = match measure {
             Some(_) => home.clone(),
+            None if start_trash => home.clone(),
             None => args
                 .first()
                 .and_then(|p| std::path::absolute(p).ok())
@@ -113,6 +118,7 @@ impl Config {
         Self {
             home,
             start,
+            start_trash,
             favorites,
             trash: Trash::user(),
             measure,
@@ -458,7 +464,10 @@ pub struct App {
 impl App {
     pub fn new(config: Config) -> (Self, Task<Message>) {
         let built = Instant::now();
-        let start = Location::Folder(config.start.clone());
+        let start = match config.start_trash && config.trash.is_some() {
+            true => Location::Trash,
+            false => Location::Folder(config.start.clone()),
+        };
         let (width, height) = metrics::REFERENCE_WINDOW;
         let mut app = Self {
             menubar: None,

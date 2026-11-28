@@ -34,6 +34,9 @@ renderer is several times slower (see Performance). Evidence logs the renderer i
 | `view` | The window, after the design board | yes |
 | `scenarios` | End-to-end tests driven by the keyboard, headless capture | tests |
 
+Started with `trash:///` as its argument (what the dock's trash asks, lot D-21j), Evidence opens
+on the trash instead of a folder.
+
 Installed applications, file types and default applications come from the workspace crate
 `mime-apps` (`docs/mime-apps.md`), which Control Room will reuse.
 

@@ -57,6 +57,8 @@ pub enum Pointer {
 #[to_layer_message(multi)]
 #[derive(Debug, Clone)]
 pub enum Message {
+    /// The trash filled or emptied (lot D-21j).
+    Trash(bool),
     Surface(Id),
     Pointer(Pointer),
     Frame(Instant),
@@ -136,6 +138,10 @@ pub struct Dock {
     pub(crate) sources: Sources,
     glyphs: HashMap<String, Glyph>,
     pub geometry: Geometry,
+    /// The trash at the end of the dock, full or empty, once its watcher said (lot D-21j).
+    pub trash: Option<bool>,
+    /// « Vider la corbeille » clicked once, and when: a second click empties it.
+    trash_armed: Option<Instant>,
     /// Size of the dock surface.
     pub surface_size: Size,
     surface: Option<Id>,
@@ -198,6 +204,8 @@ impl Dock {
             sources,
             glyphs: HashMap::new(),
             geometry,
+            trash: None,
+            trash_armed: None,
             surface_size: Size::ZERO,
             surface: None,
             tracks: Vec::new(),
@@ -401,6 +409,7 @@ impl Dock {
         let mut builder = Builder {
             applications: self.sources.applications,
             sherlock: self.sherlock,
+            trash: self.trash,
             catalog: &self.sources.catalog,
             lookup: &self.sources.lookup,
             icon_size,
@@ -556,6 +565,13 @@ impl Dock {
             Some(path) => Subscription::run_with(path, |path| appearance(path)).map(Message::Theme),
             None => Subscription::none(),
         };
+        let trash = match crate::trash::folder() {
+            Some(folder) => {
+                Subscription::run_with(folder, |folder| crate::trash::watch(folder.clone()))
+                    .map(Message::Trash)
+            }
+            None => Subscription::none(),
+        };
         let gesture = if self.press.is_some() {
             iced::event::listen_with(drag::gesture).map(Message::Gesture)
         } else {
@@ -577,6 +593,7 @@ impl Dock {
             config,
             frames,
             sherlock_ui::raster::drawn().map(|()| Message::IconDrawn),
+            trash,
         ])
     }
 
@@ -650,6 +667,15 @@ impl Dock {
                     hidden: Some(self.hide.hidden()),
                 };
                 return Task::batch([self.input_region(), self.follow_windows()]);
+            }
+            Message::Trash(full) => {
+                self.trash = Some(full);
+                if !full {
+                    self.trash_armed = None;
+                }
+                self.clock();
+                let previous = self.geometry;
+                return self.refresh(previous);
             }
             Message::Screen(id, screen) => {
                 self.outputs.insert(id, screen);
@@ -1112,6 +1138,15 @@ impl Dock {
             }
             return Task::none();
         }
+        // Let go over the trash: thrown away, as out of the dock (lot D-21j).
+        let over_trash = held
+            .icon_for(press.pointer)
+            .and_then(|i| self.items.get(i))
+            .is_some_and(|i| matches!(i.kind, Kind::Trash(_)));
+        let press = drag::Press {
+            out: press.out || over_trash,
+            ..press
+        };
         let free = self.layout(now);
         let (Some(drawn), Some(place)) = (held.icons.get(index), free.icons.get(index)) else {
             return Task::none();
@@ -1410,6 +1445,9 @@ impl Dock {
     /// The entries of the menu of icon `index`: its windows in the order they came, as on
     /// macOS, an untitled one under the application's name, then its actions.
     pub fn menu_lines(&self, index: usize) -> Vec<Line> {
+        if let Some(Kind::Trash(full)) = self.items.get(index).map(|i| &i.kind) {
+            return menu::trash_entries(*full, self.trash_armed.is_some());
+        }
         let name = self.items.get(index).map_or("", |i| i.name.as_str());
         let mut windows = self.windows_of(index);
         windows.sort_by_key(|w| {
@@ -1451,6 +1489,14 @@ impl Dock {
     /// A click on icon `index`: brings its windows forward (`windows::click`), minimizes them
     /// when they already are, or starts the application.
     pub fn click(&mut self, index: usize) {
+        if self
+            .items
+            .get(index)
+            .is_some_and(|i| matches!(i.kind, Kind::Trash(_)))
+        {
+            open_trash();
+            return;
+        }
         if self
             .items
             .get(index)
@@ -1682,6 +1728,16 @@ impl Dock {
         else {
             return Task::none();
         };
+        if entry == Entry::EmptyTrash {
+            return self.empty_trash();
+        }
+        if target == Some(crate::items::Target::Trash) {
+            let close = self.close_menu();
+            if entry == Entry::Open {
+                open_trash();
+            }
+            return close;
+        }
         let close = self.close_menu();
         if entry == Entry::ShowSherlock {
             let task = if self.sherlock {
@@ -1732,9 +1788,58 @@ impl Dock {
                 self.request(index, Request::Close);
                 Task::none()
             }
-            Entry::ShowSherlock => Task::none(),
+            Entry::ShowSherlock | Entry::EmptyTrash => Task::none(),
         };
         Task::batch([close, task])
+    }
+
+    /// « Vider la corbeille »: the first click arms it, the menu staying open; a second one,
+    /// past the launcher's `CONFIRM_DELAY` (a double click only arms), empties the trash on a
+    /// thread of its own and closes the menu.
+    fn empty_trash(&mut self) -> Task<Message> {
+        let now = Instant::now();
+        match self.trash_armed {
+            Some(at) if now.duration_since(at) >= sherlock_ui::launcher::CONFIRM_DELAY => {}
+            Some(_) => return Task::none(),
+            None => {
+                self.trash_armed = Some(now);
+                // The menu says what the next click does.
+                let trash = self
+                    .items
+                    .iter()
+                    .position(|i| matches!(i.kind, Kind::Trash(_)));
+                if let Some(index) = trash {
+                    let lines = self.menu_lines(index);
+                    if let Some(menu) = &mut self.menu {
+                        menu.entries = lines;
+                    }
+                }
+                return Task::none();
+            }
+        }
+        self.trash_armed = None;
+        let close = self.close_menu();
+        let Some(folder) = crate::trash::folder() else {
+            return close;
+        };
+        let emptied = Task::future(async move {
+            let (sender, receiver) = iced::futures::channel::oneshot::channel();
+            let spawned = std::thread::Builder::new()
+                .name(String::from("empty-trash"))
+                .spawn(move || {
+                    let _ = sender.send(crate::trash::empty(&folder));
+                });
+            if spawned.is_err() {
+                return None;
+            }
+            match receiver.await.ok()? {
+                Ok(count) => tracing::info!(count, "trash emptied"),
+                Err(error) => tracing::warn!(%error, "cannot empty the trash"),
+            }
+            None
+        })
+        .and_then(Task::done);
+        Task::batch([close, emptied])
     }
 
     /// Adds the open application of icon `index` to the pinned list, at its end.
@@ -1843,5 +1948,13 @@ fn on_screen(event: ShellEvent) -> Option<Message> {
             }),
         )),
         _ => None,
+    }
+}
+
+/// Opens the trash in Evidence, logging when it cannot.
+fn open_trash() {
+    match launch::open_trash() {
+        Ok(pid) => tracing::info!(pid, "trash opened"),
+        Err(error) => tracing::warn!(%error, "cannot open the trash"),
     }
 }

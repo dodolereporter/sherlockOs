@@ -72,6 +72,16 @@ pub fn toggle_applications() -> Result<u32, LaunchError> {
     spawn(&program, &[], None)
 }
 
+/// Opens the trash in Evidence (`trash:///`, lot D-21j), found beside the session's programs or
+/// in the `PATH`.
+pub fn open_trash() -> Result<u32, LaunchError> {
+    let program = std::env::var_os("SHERLOCKOS_BIN")
+        .map(|dir| Path::new(&dir).join("evidence"))
+        .filter(|path| path.is_file())
+        .unwrap_or_else(|| "evidence".into());
+    spawn(&program, &[String::from("trash:///")], None)
+}
+
 /// Program of the launcher, Super + Space (`docs/launcher.md`).
 pub const LAUNCHER: &str = "launcher";
 

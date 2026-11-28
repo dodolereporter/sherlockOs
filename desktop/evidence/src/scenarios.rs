@@ -36,6 +36,7 @@ impl Bench {
         let config = Config {
             home: tmp.path().to_path_buf(),
             start: project,
+            start_trash: false,
             favorites: places::favorites(tmp.path(), None),
             trash: Some(Trash::at(&tmp.path().join("donnees/Trash"))),
             measure: None,
@@ -414,6 +415,7 @@ fn window_renders_headless() {
     let config = Config {
         home: tmp.path().to_path_buf(),
         start: dir.clone(),
+        start_trash: false,
         favorites: places::favorites(tmp.path(), None),
         trash: Some(Trash::at(&tmp.path().join("donnees/Trash"))),
         measure: None,
@@ -626,6 +628,7 @@ fn frame_cost() {
     let config = Config {
         home: tmp.path().to_path_buf(),
         start: dir.clone(),
+        start_trash: false,
         favorites: places::favorites(tmp.path(), None),
         trash: None,
         measure: None,
@@ -711,6 +714,7 @@ fn devices_mount_open_unmount_and_eject_through_their_source() {
     let config = Config {
         home: tmp.path().to_path_buf(),
         start: tmp.path().to_path_buf(),
+        start_trash: false,
         favorites: places::favorites(tmp.path(), None),
         trash: None,
         measure: None,
@@ -801,6 +805,7 @@ fn open_with_lists_installed_applications_and_remembers_a_default() {
     let config = Config {
         home: tmp.path().to_path_buf(),
         start: project,
+        start_trash: false,
         favorites: places::favorites(tmp.path(), None),
         trash: None,
         measure: None,
@@ -1442,6 +1447,7 @@ fn a_silent_bus_never_delays_the_first_view() {
     let config = Config {
         home: tmp.path().to_path_buf(),
         start: project,
+        start_trash: false,
         favorites: places::favorites(tmp.path(), None),
         trash: None,
         measure: None,
@@ -1501,6 +1507,7 @@ fn bench_with_apps(name: &str, names: &[String]) -> Bench {
     let config = Config {
         home: tmp.path().to_path_buf(),
         start: project,
+        start_trash: false,
         favorites: places::favorites(tmp.path(), None),
         trash: None,
         measure: None,

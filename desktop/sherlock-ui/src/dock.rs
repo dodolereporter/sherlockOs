@@ -160,6 +160,10 @@ pub mod text {
     pub const UNPIN: &str = "Retirer du Dock";
     /// The button that opens the applications view (D-41), in its label and menu.
     pub const APPLICATIONS: &str = "Applications";
+    // The trash at the end of the dock (D-21j).
+    pub const TRASH: &str = "Corbeille";
+    pub const EMPTY_TRASH: &str = "Vider la corbeille";
+    pub const EMPTY_TRASH_CONFIRM: &str = "Reclique pour vider";
     pub const QUIT: &str = "Quitter";
     /// App Expose (lot D-21c2): Mission Control on the windows of one application.
     pub const SHOW_ALL: &str = "Afficher toutes les fenêtres";
@@ -202,6 +206,31 @@ pub fn applications_icon() -> String {
          width=\"23.82\" height=\"23.82\" rx=\"5.19\" fill=\"none\" stroke=\"white\" \
          stroke-opacity=\".1\" stroke-width=\".18\"/></svg>",
         tile = hex(crate::color::TILE_APPLICATIONS),
+    )
+}
+
+/// The trash of the dock (lot D-21j): a bin on the dock's tile, drawn with `Icon::Trash`'s
+/// strokes in cream, and when it is full, sheets of paper in it.
+pub fn trash_icon(full: bool) -> String {
+    let accent = hex(crate::color::ACCENT);
+    let papers = if full {
+        format!(
+            "<path d=\"M9.5 9.5l1 7M14.5 9.5l-1 7M12 9v7.5\" stroke=\"{accent}\" stroke-width=\"1.3\" \
+         stroke-linecap=\"round\"/>"
+        )
+    } else {
+        String::new()
+    };
+    format!(
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\"><rect width=\"24\" \
+         height=\"24\" rx=\"5.28\" fill=\"{tile}\"/><g transform=\"translate(2.4 2.4) scale(.8)\" \
+         fill=\"none\" stroke=\"{ink}\" stroke-width=\"1.6\" stroke-linecap=\"round\" \
+         stroke-linejoin=\"round\"><path d=\"{bin}\"/></g>{papers}<rect x=\".09\" y=\".09\" \
+         width=\"23.82\" height=\"23.82\" rx=\"5.19\" fill=\"none\" stroke=\"white\" \
+         stroke-opacity=\".1\" stroke-width=\".18\"/></svg>",
+        tile = hex(crate::color::TILE_APPLICATIONS),
+        ink = hex(crate::color::CREAM),
+        bin = crate::icon::Icon::Trash.path(),
     )
 }
 
