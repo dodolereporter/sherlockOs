@@ -621,7 +621,9 @@ impl App {
         } else {
             Subscription::none()
         };
-        Subscription::batch([closed, events, frames, devices, network, appearance, menubar])
+        Subscription::batch([
+            closed, events, frames, devices, network, appearance, menubar,
+        ])
     }
 
     /// Asks the Wayland daemon for the window (`shell`), and keeps its id.
