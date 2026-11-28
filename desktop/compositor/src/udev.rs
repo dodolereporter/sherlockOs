@@ -255,6 +255,11 @@ pub fn init(
         &event_loop.handle(),
         desktop_config::touchpad::config_file(var),
     )?;
+    // The layout and the repeat of Control Room's keyboard page (lot D-26c).
+    state.watch_keyboard(
+        &event_loop.handle(),
+        desktop_config::keyboard::config_file(var),
+    )?;
     // The lock after inactivity, and the lock of logind and before the sleep (lot D-25a3).
     state.watch_idle(&event_loop.handle(), desktop_config::lock::config_file(var))?;
     // What is copied, for Super + V, and its setting (lot D-42).
@@ -315,16 +320,18 @@ pub fn init(
     // Screenshots (lot D-35c), drawn the same way, between two frames.
     state.enable_screenshots(crate::capture::Settings::default());
     let weak = Rc::downgrade(&backend);
-    state.set_capturer(Box::new(move |state, target| {
+    state.set_capturer(Box::new(move |state, target, cursor| {
         let backend = weak.upgrade()?;
         let mut backend = backend.try_borrow_mut().ok()?;
         let Backend {
             scene,
             renderer,
             textures,
+            cursors,
             ..
         } = &mut *backend;
-        crate::capture::image(scene, renderer, textures, state, target)
+        let cursors = cursor.then_some(cursors);
+        crate::capture::image(scene, renderer, textures, state, target, cursors)
     }));
     // The screens' saved settings, and the hardware's part of a configuration (ADR 0025).
     state.remember_screens(desktop_config::displays::config_file(var));
@@ -834,6 +841,8 @@ impl Backend {
                 Ok(()) => {
                     head.pacing.drawn(epoch, true, animating);
                     head.lock_queued = locked;
+                    // A new picture: the screen captures waiting for one are due (lot D-28b).
+                    state.screen_changed(&head.output);
                     None
                 }
                 Err(err) => Some(format!("DRM: {err}")),

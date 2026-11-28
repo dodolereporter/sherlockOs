@@ -16,6 +16,7 @@ use std::{
     path::{Path, PathBuf},
     rc::Rc,
     sync::{Arc, mpsc},
+    time::Duration,
 };
 
 use sherlock_ui::{
@@ -26,8 +27,10 @@ use smithay::{
     backend::{
         allocator::Fourcc,
         renderer::{
-            Bind as _, ExportMem as _, Texture as _, TextureMapping as _,
-            gles::{GlesRenderer, GlesTexture},
+            Bind as _, ExportMem as _, Frame as _, Renderer as _, Texture as _,
+            TextureMapping as _,
+            element::{Element as _, RenderElement as _},
+            gles::{GlesError, GlesRenderer, GlesTexture},
         },
     },
     desktop::Window,
@@ -41,12 +44,13 @@ use smithay::{
         },
         rustix,
     },
-    utils::{Physical, Rectangle, Size},
+    utils::{Physical, Rectangle, Scale, Size, Transform},
     wayland::selection::{SelectionTarget, data_device::set_data_device_selection},
 };
 
 use crate::{
     State,
+    cursor::Cursors,
     damage::Ids,
     output::View,
     render::Scene,
@@ -110,8 +114,10 @@ impl Image {
     }
 }
 
-/// Draws a target into an image: given by the backend, which has the renderer.
-pub type Capturer = Box<dyn FnMut(&mut State, &Target) -> Option<Image>>;
+/// Draws a target into an image, with the cursor or without: given by the backend, which has
+/// the renderer and the cursor images. Screenshots never show the cursor; a screen share asks
+/// for it (lot D-28c).
+pub type Capturer = Box<dyn FnMut(&mut State, &Target, bool) -> Option<Image>>;
 
 /// Where the screenshots go and how they are confirmed. The tests give folders and a bus of
 /// their own.
@@ -234,7 +240,7 @@ fn encode(image: &Image) -> Result<Vec<u8>, image::ImageError> {
 
 /// The worker: each image written, put in the clipboard by the loop, then confirmed.
 fn work(settings: Settings, jobs: mpsc::Receiver<Job>, saved: channel::Sender<Arc<[u8]>>) {
-    let mut bus: Option<zbus::Connection> = None;
+    let notifier = notifier(settings.session_bus.clone());
     while let Ok(job) = jobs.recv() {
         let png = match encode(&job.image) {
             Ok(png) => png,
@@ -266,23 +272,61 @@ fn work(settings: Settings, jobs: mpsc::Receiver<Job>, saved: channel::Sender<Ar
         if saved.send(Arc::from(png)).is_err() {
             return;
         }
-        let sent = zbus::block_on(async {
-            if bus.is_none() {
-                let builder = match &settings.session_bus {
-                    Some(address) => zbus::connection::Builder::address(address.as_str())?,
-                    None => zbus::connection::Builder::session()?,
-                };
-                bus = Some(builder.build().await?);
-            }
-            match &bus {
-                Some(bus) => system_services::notify::send(bus, ui::APP, title, &body)
-                    .await
-                    .map_err(|p| zbus::Error::Failure(p.to_string())),
-                None => Ok(0),
+        // Handed to the notifier: a notifications daemon that no longer answers never holds
+        // the next screenshots back. Past a few waiting, the confirmation is left out.
+        if let Some(notifier) = &notifier
+            && notifier.try_send((title, body)).is_err()
+        {
+            tracing::warn!("screenshot notification left out: the notifier is behind");
+        }
+    }
+}
+
+/// Longest wait for the notifications daemon, to connect or to answer.
+const NOTIFY_LIMIT: Duration = Duration::from_secs(5);
+
+/// Confirmations waiting for the notifier, at most.
+const NOTIFY_QUEUE: usize = 4;
+
+/// A confirmation: its title and its text.
+type Confirmation = (&'static str, String);
+
+/// A thread of its own that sends the confirmations of the screenshots on the session bus at
+/// `address` (the session's without one), each call limited to `NOTIFY_LIMIT`. Its connection
+/// is made again after an error: a bus or a daemon that restarted is found again.
+fn notifier(address: Option<String>) -> Option<mpsc::SyncSender<Confirmation>> {
+    let (sender, confirmations) = mpsc::sync_channel::<Confirmation>(NOTIFY_QUEUE);
+    let spawned = std::thread::Builder::new()
+        .name(String::from("screenshot-notify"))
+        .spawn(move || {
+            let mut bus: Option<zbus::Connection> = None;
+            while let Ok((title, body)) = confirmations.recv() {
+                let sent = zbus::block_on(async {
+                    if bus.is_none() {
+                        let builder = match &address {
+                            Some(address) => zbus::connection::Builder::address(address.as_str())?,
+                            None => zbus::connection::Builder::session()?,
+                        };
+                        bus = Some(builder.method_timeout(NOTIFY_LIMIT).build().await?);
+                    }
+                    match &bus {
+                        Some(bus) => system_services::notify::send(bus, ui::APP, title, &body)
+                            .await
+                            .map_err(|p| zbus::Error::Failure(p.to_string())),
+                        None => Ok(0),
+                    }
+                });
+                if let Err(err) = sent {
+                    tracing::warn!("screenshot notification: {err}");
+                    bus = None;
+                }
             }
         });
-        if let Err(err) = sent {
-            tracing::warn!("screenshot notification: {err}");
+    match spawned {
+        Ok(_) => Some(sender),
+        Err(err) => {
+            tracing::warn!("cannot start the screenshot notifier: {err}");
+            None
         }
     }
 }
@@ -313,6 +357,15 @@ impl State {
     /// How the backend draws a screenshot.
     pub fn set_capturer(&mut self, capturer: Capturer) {
         self.capture.capturer = Some(capturer);
+    }
+
+    /// Draws `target` with the backend's capturer, for screen sharing (lot D-28b), the cursor
+    /// over it if `cursor` (lot D-28c). `None` without a renderer.
+    pub(crate) fn draw_capture(&mut self, target: &Target, cursor: bool) -> Option<Image> {
+        let mut capturer = self.capture.capturer.take()?;
+        let image = capturer(self, target, cursor);
+        self.capture.capturer = Some(capturer);
+        image
     }
 
     pub(crate) fn takes_screenshots(&self) -> bool {
@@ -358,7 +411,7 @@ impl State {
             tracing::warn!("screenshot: no renderer");
             return;
         };
-        let image = capturer(self, target);
+        let image = capturer(self, target, false);
         self.capture.capturer = Some(capturer);
         let image = match (image, crop) {
             (Some(image), Some(rect)) => image.crop(rect),
@@ -480,16 +533,34 @@ fn read(renderer: &mut GlesRenderer, mut texture: GlesTexture) -> Option<Image> 
     })
 }
 
-/// Draws `target`: a screen as it shows now, without the cursor; a window as at rest, its title
-/// bar, border and corners included. The backends call it from their `Capturer`.
+/// The size in pixels of the picture of `target`: a screen's frame, or a window as at rest with
+/// its title bar (`window_anim::snapshot`). `None` for a screen or a window gone.
+pub fn target_size(state: &State, target: &Target) -> Option<Size<i32, Physical>> {
+    match target {
+        Target::Screen(output) => {
+            let views = state.views();
+            let (_, view) = views.iter().find(|(o, _)| o == output)?;
+            Some(view.frame.size)
+        }
+        Target::Window(window) => {
+            let (_, _, size) = window_anim::snapshot_place(state, window)?;
+            (!size.is_empty()).then_some(size)
+        }
+    }
+}
+
+/// Draws `target`: a screen as it shows now; a window as at rest, its title bar, border and
+/// corners included. With `cursors`, the cursor goes over it where the pointer is, if it is on
+/// the target (a screen share, lot D-28c). The backends call it from their `Capturer`.
 pub fn image(
     scene: &Scene,
     renderer: &mut GlesRenderer,
     textures: &mut wallpaper::Textures,
     state: &mut State,
     target: &Target,
+    cursors: Option<&mut Cursors>,
 ) -> Option<Image> {
-    let texture = match target {
+    let mut texture = match target {
         Target::Window(window) => window_anim::snapshot(scene, renderer, state, window)?,
         Target::Screen(output) => {
             let (_, view) = state.views().into_iter().find(|(o, _)| o == output)?;
@@ -511,12 +582,92 @@ pub fn image(
                 .ok()?
         }
     };
+    if let Some(cursors) = cursors
+        && let Err(err) = draw_cursor(renderer, &mut texture, cursors, state, target)
+    {
+        tracing::warn!("screen share: drawing the cursor: {err}");
+    }
     read(renderer, texture)
+}
+
+/// Draws the cursor over `texture`, the picture of `target`, if the pointer is on it.
+fn draw_cursor(
+    renderer: &mut GlesRenderer,
+    texture: &mut GlesTexture,
+    cursors: &mut Cursors,
+    state: &State,
+    target: &Target,
+) -> Result<(), GlesError> {
+    let (Some(icon), Some(pointer)) = (
+        state.cursor_shape(),
+        state.seat.get_pointer().map(|p| p.current_location()),
+    ) else {
+        return Ok(());
+    };
+    // The tip in the texture's pixels, and the scale of the picture.
+    let place = match target {
+        Target::Screen(output) => state
+            .space
+            .output_under(pointer)
+            .any(|o| o == output)
+            .then(|| state.views().into_iter().find(|(o, _)| o == output))
+            .flatten()
+            .map(|(_, view)| {
+                let frame = view.frame.loc.to_f64();
+                (view.point(pointer) - frame, view.scale)
+            }),
+        Target::Window(window) => window_anim::snapshot_place(state, window)
+            .filter(|(whole, _, _)| whole.to_f64().contains(pointer))
+            .map(|(whole, scale, _)| ((pointer - whole.loc.to_f64()).to_physical(scale), scale)),
+    };
+    let Some((at, scale)) = place else {
+        return Ok(());
+    };
+    let Some((element, _)) = cursors.element(renderer, icon, at, (scale, 1.0), state.now()) else {
+        return Ok(());
+    };
+    let size = texture.size();
+    let size = Size::<i32, Physical>::from((size.w, size.h));
+    let mut target = renderer.bind(texture)?;
+    let mut frame = renderer.render(&mut target, size, Transform::Normal)?;
+    let dst = element.geometry(Scale::from(1.0));
+    let damage = [Rectangle::from_size(dst.size)];
+    element.draw(&mut frame, element.src(), dst, &damage, &[])?;
+    // Read next in the same GL context, which keeps the order: nothing to wait for.
+    let _ = frame.finish()?;
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_daemon_that_never_answers_holds_no_screenshot_back() {
+        // A bus that takes the connection and never says a word: the notifier waits there,
+        // the screenshots go on, and past a few waiting the confirmations are left out.
+        let dir = std::env::temp_dir().join(format!("capture-notify-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let socket = dir.join("bus");
+        let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+        let notifier = notifier(Some(format!("unix:path={}", socket.display()))).unwrap();
+        notifier
+            .try_send((ui::SAVED, String::from("first")))
+            .unwrap();
+        // The notifier took the first one and waits on the silent bus.
+        let _held = listener.accept().unwrap();
+        let start = std::time::Instant::now();
+        let taken = (0..20)
+            .filter(|n| notifier.try_send((ui::SAVED, format!("shot {n}"))).is_ok())
+            .count();
+        assert!(start.elapsed() < Duration::from_millis(500));
+        assert!(
+            (NOTIFY_QUEUE - 1..=NOTIFY_QUEUE).contains(&taken),
+            "{taken}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn the_keys_choose_what_is_taken() {
