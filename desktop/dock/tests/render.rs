@@ -642,7 +642,7 @@ fn downloads(count: usize) -> dock::stack::Stack {
         "notes.txt",
         "capture.jpg",
     ];
-    let items = (0..count)
+    let items: Vec<dock::stack::Shown> = (0..count)
         .map(|n| {
             let name = names[n % names.len()];
             let folder = name == "Projets";
@@ -659,10 +659,17 @@ fn downloads(count: usize) -> dock::stack::Stack {
             }
         })
         .collect();
+    // The cards of its icon (D-21k2): a real picture in front, then the glyphs of the kinds.
+    let mut pile = dock::stack::pile(&items);
+    let picture = std::fs::read(fixtures().join("../screenshots/trash.png"));
+    if let (Some(front), Ok(bytes)) = (pile.first_mut(), picture) {
+        *front = sherlock_ui::dock::PileCard::Png(bytes);
+    }
     dock::stack::Stack {
         folder: PathBuf::from("/home/me/Downloads"),
         name: String::from("Downloads"),
         items,
+        pile,
     }
 }
 

@@ -740,8 +740,14 @@ changes, not its content.
   « Retirer du Dock ». The choice is checked, kept in `dock.conf` with the pinned list (one
   atomic write, off the interface thread), and the folder is read again in the new order. Out
   of the dock, the dock's own menu brings it back (« Afficher les téléchargements dans le
-  Dock »). For now the icon is the folder's and the content opens as the grid, whatever is
-  chosen: the stack of thumbnails, the fan and the list follow.
+  Dock »). For now the content opens as the grid, whatever is chosen: the fan and the list
+  follow.
+- « Afficher comme » « Pile » (the default, lot D-21k2): the icon is the stack of its three first
+  items, as macOS draws it, the first one in front and the two others behind it, turned and
+  shifted a little (`dock::stack_pile`). A PNG shows on its card, from its own bytes (512 KiB at
+  most, read on the watcher's thread, drawn by the raster thread, which only takes a PNG written
+  in the document); any other item shows the glyph of its kind, as in Evidence's lists. Empty, or
+  « Dossier », the folder's icon.
 
 The fan of macOS is not drawn: the grid is shown on every edge.
 

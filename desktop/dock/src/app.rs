@@ -466,7 +466,13 @@ impl Dock {
                 .stack
                 .as_ref()
                 .filter(|_| self.sources.config.stack.shown)
-                .map(|s| (s.folder.as_path(), s.name.as_str())),
+                .map(|s| {
+                    let shown_as_stack =
+                        self.sources.config.stack.display == dock_config::stack::Display::Stack;
+                    let pile: &[sherlock_ui::dock::PileCard] =
+                        if shown_as_stack { &s.pile } else { &[] };
+                    (s.folder.as_path(), s.name.as_str(), pile)
+                }),
             catalog: &self.sources.catalog,
             lookup: &self.sources.lookup,
             icon_size,
@@ -764,8 +770,9 @@ impl Dock {
             }
             Message::Stack(stack) => {
                 // The same folder read again: only the grid changes, the dock stays.
-                let moved = self.stack.as_ref().map(|s| (&s.folder, &s.name))
-                    != stack.as_ref().map(|s| (&s.folder, &s.name));
+                // Its icon follows its newest items too (lot D-21k2).
+                let moved = self.stack.as_ref().map(|s| (&s.folder, &s.name, &s.pile))
+                    != stack.as_ref().map(|s| (&s.folder, &s.name, &s.pile));
                 self.stack = stack;
                 if !moved {
                     return Task::none();

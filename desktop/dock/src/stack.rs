@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use dock_config::stack::Sort;
+use sherlock_ui::dock::PileCard;
 
 use iced::futures::Stream;
 use iced::futures::channel::mpsc;
@@ -25,6 +26,46 @@ pub struct Stack {
     pub folder: PathBuf,
     pub name: String,
     pub items: Vec<Shown>,
+    /// Its three first items as the cards of its icon (lot D-21k2): a PNG's own bytes, else
+    /// the glyph of its kind.
+    pub pile: Vec<PileCard>,
+}
+
+/// Bytes of a PNG drawn on a card of the stack's icon, at most: a larger picture shows its
+/// kind's glyph.
+pub const MAX_PILE_PNG: u64 = 512 * 1024;
+
+/// The cards of the stack's icon for `items`: read here, on the watcher's thread.
+pub fn pile(items: &[Shown]) -> Vec<PileCard> {
+    items
+        .iter()
+        .take(3)
+        .map(|item| {
+            let png = item
+                .path
+                .extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case("png"));
+            png.then(|| read_png(&item.path))
+                .flatten()
+                .map_or(PileCard::Glyph(item.icon), PileCard::Png)
+        })
+        .collect()
+}
+
+/// The bytes of the PNG at `path`, a regular file of `MAX_PILE_PNG` at most.
+fn read_png(path: &Path) -> Option<Vec<u8>> {
+    use std::io::Read;
+    if !std::fs::metadata(path).ok()?.is_file() {
+        return None;
+    }
+    let mut bytes = Vec::new();
+    std::fs::File::open(path)
+        .ok()?
+        .take(MAX_PILE_PNG + 1)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    let png = bytes.starts_with(b"\x89PNG\r\n\x1a\n");
+    (png && bytes.len() as u64 <= MAX_PILE_PNG).then_some(bytes)
 }
 
 /// An item of a stack.
@@ -53,10 +94,12 @@ pub fn watch(home: PathBuf, config_home: PathBuf, sort: Sort) -> impl Stream<Ite
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default();
             let read = || {
+                let items = newest(&folder, sort);
                 Some(Stack {
                     folder: folder.clone(),
                     name: name.clone(),
-                    items: newest(&folder, sort),
+                    pile: pile(&items),
+                    items,
                 })
             };
             if let Err(error) = crate::trash::follow(&folder, read, &sender) {
