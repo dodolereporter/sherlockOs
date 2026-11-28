@@ -68,16 +68,26 @@ impl State {
         let var = |key: &str| std::env::var_os(key);
         let env = mesa::xwayland_env(var, mesa::backends_without_nvidia(var));
         tracing::debug!(?env, "Xwayland environment");
-        let (xwayland, client) = XWayland::spawn(
-            &self.display_handle,
-            None,
-            env,
-            true,
-            Stdio::null(),
-            // Its errors stay visible, on our standard error.
-            Stdio::inherit(),
-            |_| (),
-        )
+        let spawn = |display: Option<u32>| {
+            XWayland::spawn(
+                &self.display_handle,
+                display,
+                env.clone(),
+                true,
+                Stdio::null(),
+                // Its errors stay visible, on our standard error.
+                Stdio::inherit(),
+                |_| (),
+            )
+        };
+        let (xwayland, client) = match self.x_first_display {
+            None => spawn(None),
+            // The first free number from `first`: smithay takes the given number only.
+            Some(first) => (first..first + X_DISPLAYS)
+                .map(|display| spawn(Some(display)))
+                .find(Result::is_ok)
+                .unwrap_or_else(|| spawn(Some(first))),
+        }
         .map_err(Error::Xwayland)?;
         let mut ready = Some(ready);
         let token = event_loop
@@ -95,6 +105,7 @@ impl State {
                                 state.xwm = Some(xwm);
                                 state.x_display = Some(display_number);
                                 state.connect_xdnd(display_number);
+                                state.listen_x11_activation(display_number);
                                 Some(display_number)
                             }
                             Err(err) => {
@@ -128,6 +139,13 @@ impl State {
         Ok(())
     }
 
+    /// XWayland takes the first free display number from `first` on. Without it, smithay
+    /// looks from 0, and on its way removes the socket of a display whose lock file is missing
+    /// before binding it again: the tests start at `TEST_X_DISPLAY`, far from the user's.
+    pub fn set_first_x_display(&mut self, first: u32) {
+        self.x_first_display = Some(first);
+    }
+
     /// Stops XWayland: it exits, and its lock and its socket (`/tmp/.X11-unix/X<N>`) go away.
     /// To call when quitting: the X11Wm source keeps a handle to the loop, which is therefore
     /// never freed, nor XWayland with it.
@@ -138,6 +156,11 @@ impl State {
         self.disconnect_xdnd();
     }
 }
+
+/// First display number of the tests' XWayland: far above those of the user's sessions.
+pub const TEST_X_DISPLAY: u32 = 90;
+/// Display numbers tried from the first one.
+const X_DISPLAYS: u32 = 32;
 
 /// Creates `/tmp/.X11-unix`, where the X server sockets go, if it does not exist: on a machine
 /// without an X server, like the CI one, nobody has created it. It belongs to everyone, with the
@@ -330,6 +353,12 @@ impl XwmHandler for State {
         {
             self.minimize(&window);
         }
+    }
+
+    /// `WM_CHANGE_STATE` to `NormalState`: the application asks for its window back, as with
+    /// `_NET_ACTIVE_WINDOW` from an application (lot Q-52).
+    fn unminimize_request(&mut self, _xwm: XwmId, surface: X11Surface) {
+        self.x11_activation(&surface, 1);
     }
 
     fn resize_request(&mut self, _xwm: XwmId, surface: X11Surface, _button: u32, edge: ResizeEdge) {

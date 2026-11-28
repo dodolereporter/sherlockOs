@@ -490,6 +490,93 @@ fn capture(app: &App, name: &str, size: (f32, f32)) -> PathBuf {
 /// bar, and a narrow one, where the sidebar folds.
 const SIZES: [((f32, f32), &str); 2] = [((1920.0, 1032.0), "wide"), ((520.0, 760.0), "narrow")];
 
+/// The Bluetooth page (lot D-26o) with what BlueZ would give: a headset connected at 80 %, a
+/// mouse paired, a speaker around while the scan runs; then the question of a pairing. Both
+/// sizes, both themes: `bluetooth-<size>-<theme>`, `bluetooth-pairing-wide-dark`.
+#[test]
+fn captures_of_the_bluetooth_page() {
+    use crate::bluetooth::Msg;
+    use system_services::bluetooth::{Asked, Bluetooth, Device, Kind, Reply};
+    let device = |path: &str, name: &str, kind, paired, connected, battery| Device {
+        path: path.to_owned(),
+        name: name.to_owned(),
+        kind,
+        paired,
+        connected,
+        battery,
+    };
+    let read = Bluetooth {
+        adapter: String::from("/org/bluez/hci0"),
+        powered: true,
+        connected: 1,
+        devices: vec![
+            device(
+                "/dev/1",
+                "Casque WH-1000XM4",
+                Kind::Audio,
+                true,
+                true,
+                Some(80),
+            ),
+            device(
+                "/dev/2",
+                "Souris MX Master 3 de Camille, au bureau",
+                Kind::Mouse,
+                true,
+                false,
+                None,
+            ),
+            device(
+                "/dev/3",
+                "Enceinte du salon",
+                Kind::Audio,
+                false,
+                false,
+                None,
+            ),
+        ],
+    };
+    for (which, theme_name) in [(Theme::Dark, "dark"), (Theme::Light, "light")] {
+        let _theme = in_theme(which);
+        let (_tmp, mut app) = bench("bluetooth", Vec::new());
+        let _ = app.update(Message::Go(Page::Bluetooth));
+        let _ = app.update(Message::Bluetooth(Msg::Read(Ok(read.clone()))));
+        app.settle();
+        for &(size, size_name) in &SIZES {
+            let path = capture(&app, &format!("bluetooth-{size_name}-{theme_name}"), size);
+            assert!(path.exists(), "{}", path.display());
+        }
+        if which == Theme::Dark {
+            let messages: Vec<Message> = {
+                let mut ui = simulator(&app, SIZES[0].0);
+                ui.click(t::CONNECT).expect("the mouse connects");
+                ui.click(t::PAIR).expect("the speaker pairs");
+                ui.into_messages().collect()
+            };
+            assert!(
+                matches!(
+                    messages.as_slice(),
+                    [
+                        Message::Bluetooth(Msg::Device(mouse)),
+                        Message::Bluetooth(Msg::Device(speaker)),
+                    ] if mouse == "/dev/2" && speaker == "/dev/3"
+                ),
+                "{messages:?}"
+            );
+            // A pairing asks to confirm a code.
+            app.bluetooth.busy = Some(String::from("/dev/3"));
+            let (sender, _answer) = iced::futures::channel::oneshot::channel();
+            let asked = Asked::Confirm(String::from("123456"));
+            app.bluetooth.asked = Some((asked, Reply::new(sender)));
+            let path = capture(&app, "bluetooth-pairing-wide-dark", SIZES[0].0);
+            assert!(path.exists());
+        }
+        // Leaving the page stops the scan and what was under way.
+        let _ = app.update(Message::Go(Page::Sound));
+        assert!(app.bluetooth.asked.is_none() && app.bluetooth.busy.is_none());
+    }
+}
+
 #[test]
 fn captures_of_the_pages_in_both_themes() {
     let (_, dirs) = wallpapers();

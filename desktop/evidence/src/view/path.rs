@@ -16,8 +16,11 @@ use sherlock_ui::texts::evidence as t;
 use sherlock_ui::theme;
 use sherlock_ui::{color, metrics, typography};
 
-use crate::app::{App, Message, PATH, PathEdit};
+use crate::app::{App, Location, Message, PATH, PathEdit, SUGGESTIONS};
 use crate::pathbar;
+
+/// The labels of the breadcrumb and their widths, the folders they open, and how many fold.
+type TrailParts = (Vec<(String, f32)>, Vec<(String, Location)>, usize);
 
 /// Width of a label of the breadcrumb, shaped as it is drawn.
 fn label_width(label: &str, current: bool) -> f32 {
@@ -33,7 +36,14 @@ impl App {
     /// Left edge and width of the path bar in the toolbar, for this window.
     pub(crate) fn path_bar_span(&self) -> (f32, f32) {
         let left = metrics::TOOLBAR_PADDING + 2.0 * (metrics::ICON_BUTTON + metrics::GAP_ICON);
-        let mut right = metrics::GAP_ICON + metrics::SEARCH_WIDTH + metrics::TOOLBAR_PADDING;
+        let search = if self.search_folded() {
+            metrics::ICON_BUTTON
+        } else {
+            metrics::SEARCH_WIDTH
+        };
+        // The search, then the preview's button (lot E-08).
+        let mut right =
+            2.0 * metrics::GAP_ICON + search + metrics::ICON_BUTTON + metrics::TOOLBAR_PADDING;
         if let Some(branch) = self.repo.as_ref().and_then(|r| r.branch.as_deref()) {
             let (_, padding) = metrics::BRANCH_CHIP_PADDING;
             let label = t::branch(branch);
@@ -42,6 +52,11 @@ impl App {
                 + ellipsis::width(&label, typography::CODE, typography::CODE_SMALL_SIZE);
         }
         (left, (self.size.width - left - right).max(0.0))
+    }
+
+    /// In a narrow window, the search shows as its icon until it is used.
+    pub(crate) fn search_folded(&self) -> bool {
+        self.size.width < more::SEARCH_COMPACT_WIDTH && !self.search_open && self.search.is_empty()
     }
 
     /// The bar: the breadcrumb, the field coming in or going out over it.
@@ -90,7 +105,9 @@ impl App {
     /// Segments of the path, each opening its folder; the empty part of the bar starts the
     /// field. Long names keep their start and their end, and the segments after the first
     /// fold behind « … » until the others fit the bar.
-    fn trail(&self) -> Element<'_, Message> {
+    /// The segments as drawn: their labels and widths, the folders they open, and how many
+    /// fold behind « … » after the first.
+    fn trail_parts(&self) -> TrailParts {
         let crumbs = self.breadcrumb();
         let count = crumbs.len();
         let (_, padding) = metrics::CRUMB_PADDING;
@@ -117,6 +134,12 @@ impl App {
             fold_width,
             span - 2.0 * metrics::BREADCRUMB_PADDING,
         );
+        (labels, crumbs, folded)
+    }
+
+    fn trail(&self) -> Element<'_, Message> {
+        let (labels, crumbs, folded) = self.trail_parts();
+        let count = crumbs.len();
         let chevron = || {
             ui::icon(
                 Icon::Chevron,
@@ -127,12 +150,12 @@ impl App {
         let mut trail = Row::new()
             .spacing(metrics::BREADCRUMB_GAP)
             .align_y(Alignment::Center);
-        // « … » opens the deepest folded folder.
-        let deepest = crumbs.get(folded).map(|(_, location)| location.clone());
         for (i, ((label, _), (_, location))) in labels.into_iter().zip(crumbs).enumerate() {
             if (1..=folded).contains(&i) {
                 if i == 1 {
-                    let more = ui::crumb(t::FOLDED.into(), false, deepest.clone().map(Message::Go));
+                    // « … » lists the folded folders, as Finder's path bar does.
+                    let open = !self.folded.open;
+                    let more = ui::crumb(t::FOLDED.into(), false, Some(Message::Folded(open)));
                     trail = trail.push(chevron()).push(more);
                 }
                 continue;
@@ -183,7 +206,10 @@ impl App {
             }
         });
         let shown = (names.len() as f32).min(more::COMPLETION_ROWS);
-        let list = scroll(Column::with_children(rows)).height(shown * metrics::MENU_ITEM_HEIGHT);
+        let list = scroll(Column::with_children(rows))
+            .id(SUGGESTIONS)
+            .on_scroll(|v| Message::PathScrolled(v.absolute_offset().y))
+            .height(shown * metrics::MENU_ITEM_HEIGHT);
         (list.into(), names.len())
     }
 
@@ -227,6 +253,78 @@ impl App {
         Some(pin(menu).x(left).y(top).into())
     }
 
+    /// The folders folded behind « … », in a menu under it, fading in and out.
+    /// The menu of the folders folded behind « … », fading and sliding in and out; its entries
+    /// answer only while it is open.
+    pub(crate) fn folded_panel(&self) -> Element<'_, Message> {
+        let level = self.folded.level(self.now());
+        let live = self.folded.open;
+        let rows = self.folded.items.iter().map(|(label, location)| {
+            let icon = ui::icon(
+                Icon::Folder,
+                metrics::ICON_SIZE_SMALL,
+                color::palette().blue,
+            );
+            let go = live.then(|| Message::Go(location.clone()));
+            ui::menu_item_with(Some(icon.into()), label.as_str(), Trailing::None, go).into()
+        });
+        let menu = ui::floating_menu(rows, metrics::CONTEXT_SUBMENU_WIDTH);
+        let slide = (1.0 - level) * more::COMPLETION_SLIDE;
+        reveal(menu).opacity(level).offset(0.0, -slide).into()
+    }
+
+    /// The menu of « … » under it, in the window: under winit only, on Wayland it is a popup of
+    /// its own (lot E-04d).
+    pub(super) fn folded_layer(&self) -> Option<Element<'_, Message>> {
+        if self.menus_in_popups()
+            || self.folded.level(self.now()) <= 0.0
+            || self.folded.items.is_empty()
+        {
+            return None;
+        }
+        let menu = pin(self.folded_panel())
+            .x(self.folded.x)
+            .y(super::folded_top());
+        if !self.folded.open {
+            return Some(Element::from(menu).map(|_| Message::Inert));
+        }
+        let catcher = mouse_area(space().width(Length::Fill).height(Length::Fill))
+            .on_press(Message::Folded(false));
+        Some(stack![opaque(catcher), menu].into())
+    }
+
+    /// Where « … » starts in the window, and the folders it folds: what its menu lists.
+    pub(crate) fn folded_items(&self) -> (f32, Vec<(String, Location)>) {
+        let (labels, crumbs, folded) = self.trail_parts();
+        let (left, _) = self.path_bar_span();
+        let first = labels.first().map_or(0.0, |(_, w)| *w);
+        let chevron = metrics::ICON_SIZE_TINY + 2.0 * metrics::BREADCRUMB_GAP;
+        let x = left + metrics::BREADCRUMB_PADDING + first + chevron;
+        let items = crumbs.into_iter().skip(1).take(folded).collect();
+        (x, items)
+    }
+
+    /// The last folders typed, under the sheet's field while nothing completes.
+    fn recent_rows(&self, live: bool) -> Option<Element<'_, Message>> {
+        if self.recent.is_empty() {
+            return None;
+        }
+        let rows = self.recent.iter().enumerate().map(|(i, (_, label))| {
+            let icon = ui::icon(
+                Icon::Folder,
+                metrics::ICON_SIZE_SMALL,
+                color::palette().blue,
+            );
+            let go = live.then_some(Message::PathRecent(i));
+            ui::menu_item_with(Some(icon.into()), label.as_str(), Trailing::None, go).into()
+        });
+        let list = column![
+            ui::section_label(t::RECENT_FOLDERS),
+            Column::with_children(rows)
+        ];
+        Some(list.spacing(metrics::GAP_TIGHT).into())
+    }
+
     /// « Aller au dossier »: a sheet that comes down under the toolbar, as on macOS.
     pub(super) fn go_to_sheet(&self) -> Option<Element<'_, Message>> {
         let live = self.path_edit.as_ref().is_some_and(|e| e.sheet);
@@ -249,6 +347,9 @@ impl App {
             if count > 0 {
                 card = card.push(list);
             }
+        } else if let Some(recent) = self.recent_rows(live) {
+            // Nothing completes: the last folders typed, as macOS keeps them.
+            card = card.push(recent);
         }
         card = card.push(
             row![

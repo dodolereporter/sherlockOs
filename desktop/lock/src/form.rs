@@ -11,7 +11,7 @@
 use std::time::Duration;
 
 use sherlock_3d::Mood;
-use sherlock_ui::lock::screen::{FORM_TIMEOUT, SORRY};
+use sherlock_ui::lock::screen::{FORM_TIMEOUT, SORRY, TYPING_GAZE};
 use system_services::secret::Secret;
 
 use crate::app::Phase;
@@ -36,6 +36,11 @@ pub enum Key {
     Space,
     Enter,
     Escape,
+    /// Tab, backward with Shift: once the form shows, it moves the focus between the field and
+    /// the buttons.
+    Tab {
+        back: bool,
+    },
     Other,
 }
 
@@ -147,6 +152,8 @@ pub struct Field {
     pub typed: bool,
     /// The machine goes to sleep.
     pub asleep: bool,
+    /// When the last key came in the field.
+    pub last_key: Option<Duration>,
 }
 
 /// What Sherlock shows at `now`:
@@ -154,7 +161,7 @@ pub struct Field {
 /// - the form just came: he waves (`Wave`), then rests;
 /// - something is typed: eyes closed (`EyesClosed`), as long as the field is not empty;
 /// - the eye shows the password: one eye open (`Peek`);
-/// - the field emptied again: eyes open (`Idle`), and his gaze goes to the field (`gaze`);
+/// - the field emptied again: eyes open (`Idle`);
 /// - PAM checks: `Think`; refused: `Sorry` for `SORRY`; accepted: `Success`;
 /// - the machine goes to sleep: `Sleep`.
 pub fn mood(field: Field, now: Duration) -> Mood {
@@ -170,9 +177,14 @@ pub fn mood(field: Field, now: Duration) -> Mood {
     }
 }
 
-/// Sherlock looks at the field when it is empty again after typing, while he rests.
+/// Sherlock looks down at the field while keys come in it, and until `TYPING_GAZE` after the
+/// last one (lot D-24d): his head bends toward it whatever his eyes do (closed, peeking, open
+/// once the field is emptied). Not while PAM checks, nor when he is sorry, happy or asleep.
 pub fn gaze(field: Field, now: Duration) -> bool {
-    field.empty && field.typed && mood(field, now) == Mood::Idle
+    let typing = field
+        .last_key
+        .is_some_and(|at| now.saturating_sub(at) < TYPING_GAZE);
+    typing && matches!(mood(field, now), Mood::EyesClosed | Mood::Peek | Mood::Idle)
 }
 
 #[cfg(test)]
@@ -263,6 +275,51 @@ mod tests {
             peek: false,
             typed: false,
             asleep: false,
+            last_key: None,
+        }
+    }
+
+    #[test]
+    fn sherlock_looks_down_at_the_field_while_keys_come() {
+        let now = at(10_000);
+        let typing = Field {
+            empty: false,
+            typed: true,
+            last_key: Some(now),
+            ..field(Phase::Typing)
+        };
+        // Eyes closed, he bends toward the field; the gaze goes with every mood of the field.
+        assert_eq!(mood(typing, now), Mood::EyesClosed);
+        assert!(gaze(typing, now));
+        assert!(gaze(
+            Field {
+                peek: true,
+                ..typing
+            },
+            now
+        ));
+        let emptied = Field {
+            empty: true,
+            ..typing
+        };
+        assert!(gaze(emptied, now + at(200)));
+        // About 1.5 s without a key: back to rest.
+        assert!(gaze(typing, now + TYPING_GAZE - at(1)));
+        assert!(!gaze(typing, now + TYPING_GAZE));
+        assert!(!gaze(
+            Field {
+                last_key: None,
+                ..typing
+            },
+            now
+        ));
+        // Not while PAM checks, nor once refused or accepted.
+        for phase in [
+            Phase::Checking(now),
+            Phase::Refused(now, Refusal::Wrong),
+            Phase::Leaving(now),
+        ] {
+            assert!(!gaze(Field { phase, ..typing }, now), "{phase:?}");
         }
     }
 
@@ -292,8 +349,6 @@ mod tests {
             ..typing
         };
         assert_eq!(mood(emptied, now), Mood::Idle);
-        assert!(gaze(emptied, now));
-        assert!(!gaze(typing, now));
         assert_eq!(mood(field(Phase::Checking(now)), now), Mood::Think);
         let refused = field(Phase::Refused(now, Refusal::Wrong));
         assert_eq!(mood(refused, now + at(100)), Mood::Sorry);

@@ -349,8 +349,9 @@ mod tests {
             let event_loop = EventLoop::try_new().unwrap();
             let mut state = State::new(&event_loop).unwrap();
             state.add_output(SCREEN.into(), 1.0);
+            // On the shell socket: its anchored surfaces need layer-shell (lot D-46).
             let (server_side, client_side) = UnixStream::pair().unwrap();
-            state.insert_client(server_side);
+            state.insert_shell_client(server_side);
             let conn = Connection::from_socket(client_side).unwrap();
             let queue = conn.new_event_queue();
             let mut bench = Self {
@@ -728,7 +729,7 @@ mod tests {
             Item::Shadow {
                 key, shadow, alpha, ..
             } => paint(ids, key, shadow.area, alpha),
-            Item::Wallpaper => Vec::new(),
+            Item::Wallpaper(_) => Vec::new(),
             // The window's texture, deformed over the area it sweeps.
             Item::Genie(frame) => paint(ids, frame.key, frame.area, frame.alpha),
             Item::Decoration {
@@ -740,7 +741,16 @@ mod tests {
             | Item::Osd {
                 key, rect, alpha, ..
             }
+            | Item::Picture {
+                key, rect, alpha, ..
+            }
             | Item::Snapshot {
+                key, rect, alpha, ..
+            }
+            | Item::Curtain {
+                key, rect, alpha, ..
+            }
+            | Item::Squashed {
                 key, rect, alpha, ..
             } => paint(ids, key, rect, alpha),
             Item::Thumbnail { .. } | Item::Blur { .. } => Vec::new(),
