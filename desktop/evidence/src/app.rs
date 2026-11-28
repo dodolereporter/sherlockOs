@@ -188,6 +188,11 @@ pub enum Command {
     DeviceOpen,
     DeviceUnmount,
     DeviceEject,
+    /// On the server whose menu is open: open it, connect with a name and a password,
+    /// disconnect (lot Q-56).
+    ServerOpen,
+    ServerLoginAs,
+    ServerEject,
     /// Sort by a column, from the « Trier par » submenu: the same column again reverses.
     SortBy(Column),
     /// Undo the last step done to the disk, or redo the last undone (lot E-10).
@@ -415,6 +420,10 @@ pub enum Message {
     OpenServer(String),
     /// The eject button beside a connected server.
     EjectServer(String),
+    /// A right click on a server (lot Q-56).
+    ServerMenu(String),
+    /// « Se connecter en tant que… » on a server: the sheet, even when the guest gets in.
+    LoginAs(String),
     /// A server connected (its folder), or not; disconnected, or not.
     ServerMounted(String, Result<PathBuf, crate::smb::Error>),
     ServerUnmounted(String, Result<(), crate::smb::Error>),
@@ -572,6 +581,8 @@ pub struct App {
     pub(crate) login_fade: Option<Fade>,
     login_user: String,
     device_menu: Option<String>,
+    /// The server whose menu is open (lot Q-56).
+    server_menu: Option<String>,
     /// Which favourites exist, as last checked off the interface thread.
     pub(crate) available: Vec<bool>,
     /// The trash items shown when the user was asked to empty it: only those are deleted.
@@ -684,6 +695,7 @@ impl App {
             login_fade: None,
             login_user: String::new(),
             device_menu: None,
+            server_menu: None,
             available: Vec::new(),
             empty_ids: Vec::new(),
             catalog: None,
@@ -1034,6 +1046,7 @@ impl App {
         }
         if self.menu.is_none() {
             self.device_menu = None;
+            self.server_menu = None;
             // Closing the menu (or the chooser) forgets the "always" switch.
             if self.chooser.is_none() {
                 self.always = false;
@@ -1396,6 +1409,12 @@ impl App {
             Message::Servers(servers) => self.servers = servers,
             Message::OpenServer(host) => return self.open_server(&host),
             Message::EjectServer(host) => return self.eject_server(&host),
+            Message::ServerMenu(host) => {
+                self.renaming = None;
+                self.server_menu = Some(host);
+                self.open_menu(self.pointer);
+            }
+            Message::LoginAs(host) => self.ask_login(host),
             Message::ServerMounted(host, result) => return self.server_mounted(host, result),
             Message::ServerUnmounted(host, result) => self.server_unmounted(&host, result),
             Message::LoginInput(field, value) => self.login_input(field, value),
@@ -1716,6 +1735,10 @@ impl App {
                     text: texts::UNREADABLE.into(),
                     error: true,
                 });
+                // A share the guest may not read: the sheet asks for a name (lot Q-56).
+                if let Some(host) = self.server_of_location() {
+                    self.ask_login(host);
+                }
             }
         }
         self.apply_repo();
@@ -1926,6 +1949,17 @@ impl App {
     /// Menu entries: on the selection or on the background, in a folder or the trash.
     pub fn menu_items(&self, on_selection: bool) -> Vec<MenuItem> {
         use MenuItem::{Action, Separator, Submenu};
+        if let Some(host) = &self.server_menu {
+            let mut items = vec![
+                MenuItem::action(texts::OPEN, None, Command::ServerOpen),
+                MenuItem::action(texts::LOGIN_AS, None, Command::ServerLoginAs),
+            ];
+            if self.mounted.contains_key(host) {
+                items.push(Separator);
+                items.push(MenuItem::action(texts::EJECT, None, Command::ServerEject));
+            }
+            return items;
+        }
         if let Some(volume) = self.menu_volume() {
             let open = if volume.mount_point.is_some() {
                 texts::OPEN
@@ -2196,7 +2230,8 @@ impl App {
     }
 
     fn open_menu(&mut self, at: Point) {
-        let on_selection = !self.selection.is_empty() && self.device_menu.is_none();
+        let on_selection =
+            !self.selection.is_empty() && self.device_menu.is_none() && self.server_menu.is_none();
         let height = Self::menu_height(&self.menu_items(on_selection));
         // Inside the window; a submenu opens on the left when the right has no room. A popup
         // is placed by the compositor instead, which flips it at the screen's edges.
@@ -2600,6 +2635,19 @@ impl App {
                     _ => DeviceAction::Open,
                 };
                 return self.device(action, id);
+            }
+            Command::ServerOpen | Command::ServerLoginAs | Command::ServerEject => {
+                let Some(host) = self.server_menu.take() else {
+                    return Task::none();
+                };
+                return match command {
+                    Command::ServerOpen => self.open_server(&host),
+                    Command::ServerEject => self.eject_server(&host),
+                    _ => {
+                        self.ask_login(host);
+                        Task::none()
+                    }
+                };
             }
             Command::ChooseApp => {
                 self.chooser = Some(String::new());

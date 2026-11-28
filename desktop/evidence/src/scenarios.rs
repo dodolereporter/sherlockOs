@@ -2203,6 +2203,66 @@ fn the_folded_folders_are_a_popup_on_wayland() {
     assert!(bench.app.popups.folded.is_none());
 }
 
+/// Lot Q-57: the menu's popup is clear around the menu, where its shadow falls; only the menu
+/// is painted. Its surface starts transparent (`shell::surface_style`), so the capture is
+/// made on a transparent background, and its corner must stay so, not black.
+#[test]
+fn the_menu_popup_is_clear_around_the_menu() {
+    use sherlock_ui::surface::Elevation;
+    let mut bench = bench_with_files("popup-clear", 2);
+    bench.app.pretend_wayland();
+    bench.send(Message::Cursor(iced::Point::new(400.0, 300.0)));
+    bench.send(Message::RightClick(None));
+    bench.app.settle();
+    bench.send(Message::Inert);
+    let (popup, _) = bench.app.popups.menu.expect("menu popup");
+    let menu = bench.app.menu.clone().expect("menu open");
+    let margins = Elevation::Menu.margins();
+    let height = App::menu_height(&bench.app.menu_items(menu.on_selection));
+    let size = (
+        (metrics::CONTEXT_MENU_WIDTH + margins.left + margins.right).ceil(),
+        (height + margins.top + margins.bottom).ceil(),
+    );
+    let settings = Settings {
+        fonts: typography::FONTS.map(Cow::Borrowed).to_vec(),
+        default_font: typography::UI,
+        default_text_size: Pixels(typography::UI_SIZE),
+        ..Settings::default()
+    };
+    let view = bench.app.popup_view(popup).expect("the popup's view");
+    let mut ui = simulator::Simulator::with_size(settings, size, view);
+    let shown = theme::window_theme();
+    let clear = iced::Theme::custom(
+        "transparent",
+        iced::theme::Palette {
+            background: iced::Color::TRANSPARENT,
+            ..shown.palette()
+        },
+    );
+    let snapshot = ui.snapshot(&clear).expect("capture");
+    // Outside the worktree: the system's temporary folder.
+    let dir = std::env::temp_dir().join("evidence-captures");
+    fs::create_dir_all(&dir).expect("captures folder");
+    let path = dir.join("menu-popup.png");
+    let renderer = std::env::var("ICED_TEST_BACKEND").unwrap_or_else(|_| "tiny-skia".into());
+    let written = path.with_file_name(format!("menu-popup-{renderer}.png"));
+    let _ = fs::remove_file(&written);
+    assert!(snapshot.matches_image(&path).expect("writing the capture"));
+    println!("capture: {}", written.display());
+    let picture = ::image::open(&written).expect("capture").to_rgba8();
+    let corner = picture.get_pixel(0, 0);
+    assert_eq!(
+        corner.0[3], 0,
+        "the corner is clear, not painted: {corner:?}"
+    );
+    let scale = picture.width() as f32 / size.0;
+    let middle = picture.get_pixel(
+        ((margins.left + 20.0) * scale) as u32,
+        ((margins.top + height / 2.0) * scale) as u32,
+    );
+    assert!(middle.0[3] > 200, "the menu itself is painted: {middle:?}");
+}
+
 /// On Wayland the completion list and the toolbar's tooltips are popups that take no grab
 /// (lot E-02c): the field keeps the keyboard while the list follows what is typed, and a
 /// tooltip shows after a rest on its button, then goes when the pointer leaves.
@@ -2618,4 +2678,43 @@ fn the_gallery_renders_headless() {
         let _ = fs::remove_file(dir.join(format!("gallery-{width}-{renderer}.png")));
         assert!(snapshot.matches_image(&path).expect("writing the capture"));
     }
+}
+
+/// Lot Q-56: « Se connecter en tant que… », from the server's right-click menu or from its
+/// button, opens the sheet even when the guest got in; a share the guest may not read opens it
+/// too.
+#[test]
+fn a_server_offers_to_connect_as_someone() {
+    use crate::app::{Command, MenuItem};
+    use crate::network::Server;
+    use sherlock_ui::texts::evidence as t;
+    let mut bench = Bench::new("login-as");
+    let host = String::from("nas.local");
+    bench.send(Message::Servers(vec![Server {
+        name: "NAS du salon".into(),
+        host: host.clone(),
+    }]));
+    // The guest got in: the server's folder is shown.
+    fs::create_dir_all(bench.path("nas")).expect("folder");
+    bench.send(Message::ServerMounted(host.clone(), Ok(bench.path("nas"))));
+    assert!(bench.app.login.is_none());
+    bench.send(Message::ServerMenu(host.clone()));
+    let items = bench.app.menu_items(false);
+    let has = |label: &str| {
+        items
+            .iter()
+            .any(|i| matches!(i, MenuItem::Action { label: l, .. } if *l == label))
+    };
+    assert!(has(t::LOGIN_AS) && has(t::EJECT));
+    bench.send(Message::Run(Command::ServerLoginAs));
+    let login = bench.app.login.clone().expect("sheet open");
+    assert_eq!(login.server, "NAS du salon");
+    bench.send(Message::LoginCancel);
+    // The button beside the server does the same.
+    bench.send(Message::LoginAs(host.clone()));
+    assert!(bench.app.login.is_some());
+    bench.send(Message::LoginCancel);
+    // A share the guest may not read: the listing fails, the sheet asks.
+    bench.send(Message::Go(Location::Folder(bench.path("nas/private"))));
+    assert!(bench.app.login.as_ref().is_some_and(|l| l.host == host));
 }
