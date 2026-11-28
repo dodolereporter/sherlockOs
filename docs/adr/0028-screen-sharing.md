@@ -41,9 +41,14 @@ Either way the compositor needs a capture protocol: the frames come from it.
    with `ext-foreign-toplevel-list-v1`, `ext-foreign-toplevel-image-capture-source-v1` for a
    window. Frames go into the client's buffers: shared memory first (`xrgb8888`, `argb8888`),
    dmabuf next.
-2. **Only the shell socket sees these globals**, like `sherlock_shell_v1` (ADR 0021): a capture
-   protocol shows every pixel of the session, so an ordinary client, a Flatpak application or
-   XWayland cannot capture anything. Applications go through the portal, which asks the user.
+2. **Only the portal sees these globals**: a capture protocol shows every pixel of the
+   session. They are offered on the shell socket only, like `sherlock_shell_v1` (ADR 0021), so
+   an ordinary client, a Flatpak application or XWayland cannot capture anything; and on that
+   socket only to the program `sherlock-portal`, recognised when it connects by the executable
+   of the process at the other end (`SO_PEERCRED`, `/proc/<pid>/exe`), not to the bar or the
+   dock. Applications go through the portal, which asks the user. (Amended in lot D-28c: a
+   program of the same user can still reach any socket of the session; this check keeps the
+   capture out of the shell programs and out of reach by mistake, it is not a sandbox.)
 3. **The portal backend is ours**: `sherlock-portal`, a Rust program on the session bus
    (`zbus`), client of the shell socket, that implements `ScreenCast` (and later
    `Screenshot`), shows the picker (iced, the shell's glass) and pushes the frames into
