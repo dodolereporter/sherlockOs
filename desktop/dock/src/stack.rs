@@ -18,6 +18,93 @@ pub const MAX_LOOKED_AT: usize = 4096;
 /// Items the grid shows: four rows of four, the newest first.
 pub const MAX_SHOWN: usize = 48;
 
+/// A press on the stack's content, from the popup's events.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Gesture {
+    Pressed,
+    Moved(iced::Point),
+    Released,
+}
+
+/// The press, the moves and the release of the left button on window `id`.
+pub fn gesture(
+    event: iced::Event,
+    _: iced::event::Status,
+    id: iced::window::Id,
+) -> Option<(iced::window::Id, Gesture)> {
+    use iced::mouse::{Button, Event};
+    let gesture = match event {
+        iced::Event::Mouse(Event::ButtonPressed(Button::Left)) => Gesture::Pressed,
+        iced::Event::Mouse(Event::CursorMoved { position }) => Gesture::Moved(position),
+        iced::Event::Mouse(Event::ButtonReleased(Button::Left)) => Gesture::Released,
+        _ => return None,
+    };
+    Some((id, gesture))
+}
+
+/// A file dragged out of the stack's content (lot D-21k2): pressed on an item, the pointer goes
+/// `DRAG_THRESHOLD` away.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct DragOut {
+    hovered: Option<usize>,
+    pointer: Option<iced::Point>,
+    pressed: Option<(usize, iced::Point)>,
+    dragging: bool,
+}
+
+impl DragOut {
+    pub fn hover(&mut self, index: Option<usize>) {
+        self.hovered = index;
+    }
+
+    /// The item to drag, once the pointer pressed on it has gone far enough.
+    pub fn gesture(&mut self, gesture: Gesture) -> Option<usize> {
+        match gesture {
+            Gesture::Pressed => {
+                self.pressed = self.hovered.zip(self.pointer);
+                None
+            }
+            Gesture::Moved(point) => {
+                self.pointer = Some(point);
+                let (index, from) = self.pressed?;
+                if self.dragging || from.distance(point) < sherlock_ui::dock::DRAG_THRESHOLD {
+                    return None;
+                }
+                self.pressed = None;
+                Some(index)
+            }
+            Gesture::Released => {
+                self.pressed = None;
+                None
+            }
+        }
+    }
+
+    pub fn started(&mut self) {
+        self.dragging = true;
+    }
+
+    /// The drag is over: whether it was one of the stack's.
+    pub fn ended(&mut self) -> bool {
+        std::mem::take(&mut self.dragging)
+    }
+}
+
+/// The `file://` address of `path`, its bytes outside the unreserved ones and `/` written
+/// `%XX`, as `text/uri-list` asks.
+pub fn uri(path: &Path) -> String {
+    use std::os::unix::ffi::OsStrExt as _;
+    let mut out = String::from("file://");
+    for &byte in path.as_os_str().as_bytes() {
+        if byte.is_ascii_alphanumeric() || b"-._~/".contains(&byte) {
+            out.push(char::from(byte));
+        } else {
+            out.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    out
+}
+
 /// How the content of the stack opens, from its setting (lot D-21k2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Presentation {
@@ -282,6 +369,30 @@ fn open_file(path: &Path) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_file_goes_out_as_its_address_once_pulled_far_enough() {
+        assert_eq!(
+            super::uri(Path::new("/home/me/Downloads/rapport final \u{e9}.pdf")),
+            "file:///home/me/Downloads/rapport%20final%20%C3%A9.pdf"
+        );
+        let mut drag = super::DragOut::default();
+        let at = |x: f32| super::Gesture::Moved(iced::Point::new(x, 10.0));
+        assert_eq!(drag.gesture(at(10.0)), None);
+        drag.hover(Some(2));
+        assert_eq!(drag.gesture(super::Gesture::Pressed), None);
+        assert_eq!(drag.gesture(at(12.0)), None, "a click, not a drag");
+        assert_eq!(
+            drag.gesture(at(10.0 + sherlock_ui::dock::DRAG_THRESHOLD)),
+            Some(2)
+        );
+        assert_eq!(drag.gesture(at(80.0)), None, "once");
+        drag.started();
+        assert!(drag.ended() && !drag.ended());
+        drag.hover(None);
+        let _ = drag.gesture(super::Gesture::Pressed);
+        assert_eq!(drag.gesture(at(200.0)), None, "pressed beside the items");
+    }
+
     use super::*;
 
     #[test]
