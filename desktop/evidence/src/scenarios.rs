@@ -1849,3 +1849,37 @@ fn undo_and_redo_with_the_keyboard() {
     bench.ctrl("z");
     assert!(bench.app.notice.as_ref().is_some_and(|n| !n.error));
 }
+
+/// On Wayland the menu and its submenu are popups of their own (lot E-02b): they open with
+/// the menu, follow its submenu, and go once it has folded back; a click outside, which the
+/// compositor reports by closing the popup, closes the menu.
+#[test]
+fn the_menu_and_its_submenu_are_popups_on_wayland() {
+    use crate::app::Sub;
+    let mut bench = bench_with_files("popups", 2);
+    let main = bench.app.pretend_wayland();
+    bench.send(Message::Cursor(iced::Point::new(1250.0, 650.0)));
+    bench.send(Message::RightClick(None));
+    let menu = bench.app.menu.clone().expect("menu open");
+    // A popup is not kept inside the window: it opens where the pointer is.
+    assert_eq!(menu.at, iced::Point::new(1250.0, 650.0));
+    let (popup, _) = bench.app.popups.menu.expect("menu popup");
+    assert!(bench.app.popups.submenu.is_none());
+    bench.send(Message::Submenu(Some(Sub::SortBy)));
+    let (sub, which) = bench.app.popups.submenu.expect("submenu popup");
+    assert_eq!(which, Sub::SortBy);
+    // Each popup draws its own menu; the window no longer does.
+    assert_ne!(popup, sub);
+    assert!(bench.app.popup_view(popup).is_some() && bench.app.popup_view(main).is_none());
+    // A click outside: the compositor closes the popup, the menu closes with it.
+    bench.send(Message::WindowClosed(popup));
+    assert!(bench.app.menu.is_none() && bench.app.popups.menu.is_none());
+    // Escape: the popups stay while the menu folds back, then go.
+    bench.send(Message::RightClick(None));
+    assert!(bench.app.popups.menu.is_some());
+    bench.press(Named::Escape);
+    assert!(bench.app.menu.is_none() && bench.app.popups.menu.is_some());
+    bench.app.settle();
+    bench.send(Message::Inert);
+    assert!(bench.app.popups.menu.is_none(), "gone once folded back");
+}
