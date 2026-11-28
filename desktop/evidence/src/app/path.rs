@@ -315,18 +315,11 @@ impl App {
             catalog.default_for(&mime).cloned()
         });
         let command = app.and_then(|app| catalog.as_ref()?.command(&app, &[path.to_path_buf()]));
-        let mut process = match command {
-            Some((program, args)) => {
-                let mut process = std::process::Command::new(program);
-                process.args(args);
-                process
-            }
-            None => {
-                let mut process = std::process::Command::new("xdg-open");
-                process.arg(path);
-                process
-            }
+        let Some((program, args)) = command else {
+            return self.open_blind(path.to_path_buf());
         };
+        let mut process = std::process::Command::new(program);
+        process.args(args);
         process.current_dir(path.parent().unwrap_or(path));
         self.launch(process)
     }
