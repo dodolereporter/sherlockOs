@@ -9,6 +9,7 @@ use iced::Task;
 use iced::keyboard::{Key, Modifiers, key::Named};
 use iced::widget::operation;
 use sherlock_ui::evidence as more;
+use sherlock_ui::metrics;
 use sherlock_ui::motion::Fade;
 use sherlock_ui::texts::evidence as texts;
 
@@ -42,7 +43,95 @@ impl PathEdit {
     }
 }
 
+/// The menu of the folders folded behind « … », and its fade.
+#[derive(Debug, Clone, Default)]
+pub struct FoldedMenu {
+    pub open: bool,
+    /// Kept while it fades out, so that it does not change on its way.
+    pub items: Vec<(String, Location)>,
+    /// Left edge, in the window.
+    pub x: f32,
+    pub fade: Option<Fade>,
+}
+
+impl FoldedMenu {
+    /// How far it has come in, from 0 to 1.
+    pub fn level(&self, now: std::time::Duration) -> f32 {
+        let rest = if self.open { 1.0 } else { 0.0 };
+        self.fade.as_ref().map_or(rest, |f| f.value(now))
+    }
+
+    fn set(&mut self, open: bool, now: std::time::Duration) {
+        let from = self.level(now);
+        self.open = open;
+        self.fade = Some(Fade::new(
+            from,
+            if open { 1.0 } else { 0.0 },
+            now,
+            more::PATH_SWITCH,
+        ));
+    }
+}
+
 impl App {
+    /// Opens or closes the menu of the folded folders.
+    pub(super) fn folded_menu(&mut self, open: bool) {
+        if open == self.folded.open {
+            return;
+        }
+        if open {
+            let (x, items) = self.folded_items();
+            self.folded.items = items;
+            self.folded.x = x;
+        }
+        let now = self.now();
+        self.folded.set(open, now);
+    }
+
+    /// Remembers a folder reached by the field, the last first, at most `RECENT_FOLDERS`.
+    fn remember(&mut self, path: &std::path::Path) {
+        self.recent.retain(|(p, _)| p != path);
+        let label = match path.strip_prefix(&self.config.home) {
+            Ok(rest) if rest.as_os_str().is_empty() => "~".to_owned(),
+            Ok(rest) => format!("~/{}", rest.display()),
+            Err(_) => path.display().to_string(),
+        };
+        let label = pathbar::visible(&label).into_owned();
+        self.recent.insert(0, (path.to_path_buf(), label));
+        self.recent.truncate(more::RECENT_FOLDERS);
+    }
+
+    /// A recent folder clicked in the sheet.
+    pub(super) fn path_recent(&mut self, index: usize) -> Task<Message> {
+        let Some((path, _)) = self.recent.get(index).cloned() else {
+            return Task::none();
+        };
+        self.close_path_edit();
+        self.remember(&path);
+        self.go(Location::Folder(path))
+    }
+
+    /// Keeps the picked suggestion in sight, the list scrolling by whole rows.
+    fn follow_highlight(&self) -> Task<Message> {
+        let Some(index) = self.path_edit.as_ref().and_then(|e| e.highlight) else {
+            return Task::none();
+        };
+        let row = metrics::MENU_ITEM_HEIGHT;
+        let shown = more::COMPLETION_ROWS * row;
+        let (top, bottom) = (index as f32 * row, (index + 1) as f32 * row);
+        let y = if top < self.suggest_offset {
+            top
+        } else if bottom > self.suggest_offset + shown {
+            bottom - shown
+        } else {
+            return Task::none();
+        };
+        operation::scroll_to(
+            super::SUGGESTIONS,
+            iced::widget::scrollable::AbsoluteOffset { x: 0.0, y },
+        )
+    }
+
     /// The folder a relative path starts from.
     fn path_base(&self) -> PathBuf {
         self.current_dir()
@@ -245,6 +334,7 @@ impl App {
         match found {
             Found::Folder => {
                 self.close_path_edit();
+                self.remember(&path);
                 self.go(Location::Folder(path))
             }
             Found::File => {
@@ -298,6 +388,7 @@ impl App {
                 if let Some(edit) = &mut self.path_edit {
                     step(edit, down);
                 }
+                return self.follow_highlight();
             }
             Key::Character(c) if modifiers.command() && c.eq_ignore_ascii_case("l") => {
                 return operation::select_all(PATH);

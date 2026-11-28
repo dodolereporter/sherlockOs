@@ -77,6 +77,14 @@ fn git_badge(status: GitStatus) -> (&'static str, Tone) {
     }
 }
 
+/// Where the menu of « … » starts, in the window: just under the path bar.
+pub(crate) fn folded_top() -> f32 {
+    metrics::TITLE_BAR_HEIGHT
+        + metrics::BORDER_WIDTH
+        + (metrics::TOOLBAR_HEIGHT + metrics::BREADCRUMB_HEIGHT) / 2.0
+        + metrics::MENU_PADDING
+}
+
 impl App {
     pub fn view(&self) -> Element<'_, Message> {
         crate::startup::first(&crate::app::FIRST_VIEW, "first view");
@@ -120,11 +128,17 @@ impl App {
             let (menu, items, sub) = (&closing.menu, &closing.items, &closing.sub);
             layers.push(self.context_menu(menu, items, sub, false));
         }
+        if let Some(folded) = self.folded_layer() {
+            layers.push(folded);
+        }
         if let Some(suggestions) = self.path_suggestions() {
             layers.push(suggestions);
         }
         if let Some(sheet) = self.go_to_sheet() {
             layers.push(sheet);
+        }
+        if let Some(look) = self.quick_look_layer() {
+            layers.push(look);
         }
         if self.confirm_empty {
             layers.push(self.dialog());
@@ -199,13 +213,17 @@ impl App {
         if let Some(branch) = self.repo.as_ref().and_then(|r| r.branch.as_deref()) {
             line = line.push(ui::branch_chip(t::branch(branch)));
         }
-        let search = ui::search_field(
-            &t::search_placeholder(&self.location_name()),
-            &self.search,
-            Some(Message::Search),
-            SEARCH,
-            metrics::SEARCH_WIDTH,
-        );
+        let search: Element<'_, Message> = if self.search_folded() {
+            ui::toolbar_button(Icon::Search, t::SEARCH, Some(Message::OpenSearch)).into()
+        } else {
+            ui::search_field(
+                &t::search_placeholder(&self.location_name()),
+                &self.search,
+                Some(Message::Search),
+                SEARCH,
+                metrics::SEARCH_WIDTH,
+            )
+        };
         // The path bar takes the room left between the buttons and the search.
         let line = line.push(search);
         container(line)
@@ -811,6 +829,61 @@ impl App {
         } else {
             menu.map(|_| Message::Inert)
         }
+    }
+
+    /// The large preview of Space, after the Finder's Quick Look (lot E-12): the item's name,
+    /// its content as large as the window allows, on glass, zooming in and out.
+    fn quick_look_layer(&self) -> Option<Element<'_, Message>> {
+        let level = self.look_level();
+        if level <= 0.0 {
+            return None;
+        }
+        let entry = self.single()?;
+        let width = (self.size.width * more::QUICK_LOOK_SHARE).round();
+        let height = (self.size.height * more::QUICK_LOOK_SHARE).round();
+        let body: Element<'_, Message> = match &self.preview {
+            Preview::Text(lines) => scroll(ui::code_block(lines)).height(Length::Fill).into(),
+            Preview::Image(handle) => container(
+                image(handle.clone())
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .content_fit(iced::ContentFit::Contain),
+            )
+            .center(Length::Fill)
+            .into(),
+            Preview::Info => self.info(entry),
+        };
+        let card = column![
+            ui::body(
+                elide(
+                    &crate::pathbar::visible(&entry.name),
+                    (width / typography::UI_CHAR_WIDTH) as usize
+                )
+                .into_owned()
+            )
+            .font(typography::UI_SEMIBOLD)
+            .size(typography::CARD_TITLE_SIZE)
+            .wrapping(text::Wrapping::None),
+            container(body).height(Length::Fill),
+        ]
+        .spacing(metrics::PREVIEW_GAP)
+        .height(height - 2.0 * metrics::PANEL_PADDING);
+        let panel = ui::floating_panel(card, width);
+        let scale = more::QUICK_LOOK_FROM + (1.0 - more::QUICK_LOOK_FROM) * level;
+        let panel = reveal(panel).opacity(level).scale(scale, (0.5, 0.5));
+        let panel = if self.looking {
+            Element::from(panel)
+        } else {
+            Element::from(panel).map(|_| Message::Inert)
+        };
+        // The window dims behind it, with it; a click outside closes it.
+        let scrim = container(space())
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .style(theme::scrim);
+        let catcher =
+            mouse_area(reveal(scrim).opacity(level)).on_press(Message::Run(Command::QuickLook));
+        Some(stack![opaque(catcher), container(panel).center(Length::Fill)].into())
     }
 
     /// The names a paste would take: replace, keep both, skip, for all of them (lot E-11).

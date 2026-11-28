@@ -35,7 +35,7 @@ use sherlock_ui::motion::{self, Animation, Fade};
 mod network;
 mod path;
 mod popup;
-pub use path::PathEdit;
+pub use path::{FoldedMenu, PathEdit};
 pub use popup::Popups;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -67,6 +67,7 @@ pub const SEARCH: &str = "search";
 pub const RENAME: &str = "rename";
 pub const CHOOSER_SEARCH: &str = "chooser-search";
 pub const PATH: &str = "path";
+pub const SUGGESTIONS: &str = "path-suggestions";
 
 /// What the application receives at startup.
 #[derive(Debug, Clone)]
@@ -172,6 +173,8 @@ pub enum Command {
     DeviceEject,
     /// Sort by a column, from the « Trier par » submenu: the same column again reverses.
     SortBy(Column),
+    /// The large preview of the item under the cursor, opened or closed (lot E-12).
+    QuickLook,
     /// The list view, from the « Vue » submenu: the only view so far.
     ViewList,
     /// The path bar as a field (Ctrl+L), and the « Aller au dossier » sheet (Maj+Ctrl+G).
@@ -376,6 +379,14 @@ pub enum Message {
     WindowClosed(window::Id),
     /// Escape, taken by a focused field: it still closes the path field.
     Escaped,
+    /// The menu of the folders folded behind « … », opened or closed.
+    Folded(bool),
+    /// The completion list scrolled to this offset.
+    PathScrolled(f32),
+    /// A recent folder clicked in the « Aller au dossier » sheet.
+    PathRecent(usize),
+    /// The search, folded to its icon in a narrow window, opens.
+    OpenSearch,
 }
 
 /// What was asked of a device.
@@ -415,6 +426,9 @@ pub struct App {
     pub(crate) sort: Sort,
     pub(crate) show_hidden: bool,
     pub(crate) show_preview: bool,
+    /// The large preview is open, and its zoom in or out (lot E-12).
+    pub(crate) looking: bool,
+    pub(crate) look_fade: Option<Fade>,
     /// The preview was asked for while the width had folded it: it stays, the columns fold.
     pub(crate) preview_pinned: bool,
     pub(crate) search: String,
@@ -494,6 +508,12 @@ pub struct App {
     /// The folder the completion last read, and the number of the last read asked.
     folders: Option<crate::pathbar::Folders>,
     folders_generation: u64,
+    /// The menu of the folded folders, the completion list's scroll, the folders last
+    /// reached by the field (with their labels), and the search opened from its icon.
+    pub(crate) folded: FoldedMenu,
+    suggest_offset: f32,
+    pub(crate) recent: Vec<(PathBuf, String)>,
+    pub(crate) search_open: bool,
 }
 
 impl App {
@@ -517,6 +537,8 @@ impl App {
             sort: Sort::default(),
             show_hidden: false,
             show_preview: true,
+            looking: false,
+            look_fade: None,
             preview_pinned: false,
             search: String::new(),
             repo: None,
@@ -567,6 +589,10 @@ impl App {
             suggest_fade: None,
             folders: None,
             folders_generation: 0,
+            folded: FoldedMenu::default(),
+            suggest_offset: 0.0,
+            recent: Vec::new(),
+            search_open: false,
         };
         app.probe = app.config.measure.clone().map(Probe::new);
         let task = app.load(&[]);
@@ -693,6 +719,26 @@ impl App {
         !self.future.is_empty()
     }
 
+    /// Opens or closes the large preview, zooming in or out. It opens on one item only.
+    fn quick_look(&mut self, open: bool) {
+        if open && self.single().is_none() {
+            return;
+        }
+        let now = self.now();
+        let from = self.look_level();
+        self.looking = open;
+        let to = if open { 1.0 } else { 0.0 };
+        self.look_fade = Some(Fade::new(from, to, now, more::QUICK_LOOK_ZOOM));
+    }
+
+    /// How far the large preview has come in, from 0 to 1.
+    pub(crate) fn look_level(&self) -> f32 {
+        let rest = if self.looking { 1.0 } else { 0.0 };
+        self.look_fade
+            .as_ref()
+            .map_or(rest, |f| f.value(self.now()))
+    }
+
     /// Animation time.
     pub fn now(&self) -> Duration {
         self.origin.elapsed()
@@ -710,10 +756,12 @@ impl App {
             || spring(&self.highlight, motion::GEOMETRY_PRECISION)
             || fade(&self.content_fade)
             || fade(&self.preview_fade)
+            || fade(&self.look_fade)
             || self.progress.is_some()
             || self.dnd_waiting()
             || fade(&self.path_fade)
             || fade(&self.suggest_fade)
+            || fade(&self.folded.fade)
             || self
                 .path_edit
                 .as_ref()
@@ -726,9 +774,11 @@ impl App {
         let now = self.now();
         self.content_fade = None;
         self.preview_fade = None;
+        self.look_fade = None;
         self.path_fade = None;
         self.path_leaving = None;
         self.suggest_fade = None;
+        self.folded.fade = None;
         if let Some(edit) = &mut self.path_edit {
             edit.shake = None;
         }
@@ -762,6 +812,9 @@ impl App {
         );
         if elsewhere && self.path_edit.as_ref().is_some_and(|e| !e.sheet) {
             self.close_path_edit();
+        }
+        if elsewhere {
+            self.folded_menu(false);
         }
         let task = self.handle(message);
         self.sync_menubar();
@@ -1111,7 +1164,17 @@ impl App {
                 return self.path_folders(generation, folders);
             }
             Message::PathResolved(path, found) => return self.path_resolved(path, found),
-            Message::Escaped => self.close_path_edit(),
+            Message::Escaped => {
+                self.close_path_edit();
+                self.folded_menu(false);
+            }
+            Message::Folded(open) => self.folded_menu(open),
+            Message::PathScrolled(offset) => self.suggest_offset = offset,
+            Message::PathRecent(index) => return self.path_recent(index),
+            Message::OpenSearch => {
+                self.search_open = true;
+                return operation::focus(SEARCH);
+            }
             Message::Loaded(generation, result) => {
                 crate::startup::first(&LISTED, "folder listed");
                 if generation == self.generation {
@@ -1184,6 +1247,9 @@ impl App {
         }
         if self.suggest_fade.as_ref().is_some_and(|f| f.is_done(t)) {
             self.suggest_fade = None;
+        }
+        if self.folded.fade.as_ref().is_some_and(|f| f.is_done(t)) {
+            self.folded.fade = None;
         }
         let Some(probe) = &mut self.probe else {
             return scroll;
@@ -1327,6 +1393,7 @@ impl App {
 
     fn reset_and_load(&mut self, select: &[PathBuf]) -> Task<Message> {
         self.search.clear();
+        self.search_open = false;
         self.clear_selection();
         self.repo = None;
         self.notice = None;
@@ -1995,6 +2062,25 @@ impl App {
         if self.menu.is_some() {
             return self.menu_key(&key);
         }
+        // The large preview: Space or Escape close it, the arrows go to the next item and it
+        // follows (lot E-12).
+        if self.looking {
+            match key.as_ref() {
+                Key::Named(Named::Space | Named::Escape) => {
+                    self.quick_look(false);
+                    return Task::none();
+                }
+                Key::Named(Named::ArrowDown | Named::ArrowRight) => {
+                    let to = self.selection.cursor().map_or(0, |c| c + 1);
+                    return self.move_cursor(to.min(self.entries.len().saturating_sub(1)), false);
+                }
+                Key::Named(Named::ArrowUp | Named::ArrowLeft) => {
+                    let to = self.selection.cursor().map_or(0, |c| c.saturating_sub(1));
+                    return self.move_cursor(to, false);
+                }
+                _ => return Task::none(),
+            }
+        }
         if self.path_edit.is_some() {
             return self.path_key(&key, modifiers);
         }
@@ -2029,7 +2115,8 @@ impl App {
             Key::Named(Named::F2) => self.run(Command::Rename),
             Key::Named(Named::F5) => self.run(Command::Refresh),
             Key::Named(Named::Delete) => self.run(Command::Trash),
-            Key::Named(Named::Space) => self.run(Command::TogglePreview),
+            // Space opens the large preview, as Quick Look in the Finder (lot E-12).
+            Key::Named(Named::Space) => self.run(Command::QuickLook),
             Key::Named(Named::ContextMenu) => {
                 self.open_menu_at_cursor();
                 Task::none()
@@ -2039,6 +2126,8 @@ impl App {
                 Task::none()
             }
             Key::Named(Named::Escape) => {
+                self.search_open = false;
+                self.folded_menu(false);
                 self.search.clear();
                 self.notice = None;
                 self.refilter();
@@ -2054,7 +2143,10 @@ impl App {
                 ("n", true) => self.run(Command::NewFolder),
                 ("h", _) => self.run(Command::ToggleHidden),
                 ("a", _) => self.run(Command::SelectAll),
-                ("f", _) => operation::focus(SEARCH),
+                ("f", _) => {
+                    self.search_open = true;
+                    operation::focus(SEARCH)
+                }
                 ("r", _) => self.run(Command::Refresh),
                 ("l", _) => self.run(Command::EditPath),
                 ("g", true) => self.run(Command::GoToFolder),
@@ -2145,6 +2237,7 @@ impl App {
                 self.refilter();
             }
             Command::ViewList => {}
+            Command::QuickLook => self.quick_look(!self.looking),
             Command::EditPath => return self.start_path_edit(false, None),
             Command::GoToFolder => return self.start_path_edit(true, None),
             // Space shows a preview the width had folded, rather than hiding a hidden one.

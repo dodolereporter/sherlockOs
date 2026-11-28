@@ -456,6 +456,42 @@ mod tests {
 
     /// Two screenshots in the CI, whose time is counted: the rest in the dark theme at
     /// 1920 × 1080, the error in the light one at 1366 × 768.
+    /// The line of the bottom corner (D-25i), then « Redémarrer » confirmed: Sherlock waves,
+    /// the screen fades to black, the command runs once. `greeter-status-1366x768`.
+    #[test]
+    fn the_status_line_shows_and_a_restart_waves_goodbye() {
+        use lock::status::{Network, Status};
+        let size = (1366.0, 768.0);
+        let mut s = screen_with(size, true);
+        let _ = s.greeter.update(Message::Status(Status {
+            network: Network::Wired,
+            layout: "FR".into(),
+            battery: None,
+        }));
+        snapshot(&s.greeter, s.primary, size, "greeter-status-1366x768");
+
+        let runner = Arc::new(FakeRunner::default());
+        let mut greeter = Greeter::new(
+            vec![user("alex", Some("Alex"), 1000)],
+            vec![session("sherlockos", "SherlockOS")],
+            Memory::default(),
+            Arc::new(FakeGreetd::default()),
+            Arc::new(FakeMemory::default()),
+            runner.clone(),
+        );
+        let _ = greeter.update(Message::Frame(Instant::now()));
+        let _ = greeter.update(Message::Machine(Machine::Reboot));
+        std::thread::sleep(sherlock_ui::launcher::CONFIRM_DELAY);
+        let _ = greeter.update(Message::Machine(Machine::Reboot));
+        assert!(greeter.departure().is_some());
+        assert_eq!(greeter.mood(), sherlock_3d::Mood::Wave);
+        assert!(runner.0.lock().unwrap().is_empty(), "after the wave only");
+        let black = Instant::now() + Duration::from_secs(5);
+        let _ = greeter.update(Message::Frame(black));
+        let _ = greeter.update(Message::Frame(black + Duration::from_secs(1)));
+        assert_eq!(*runner.0.lock().unwrap(), [Machine::Reboot]);
+    }
+
     #[test]
     fn screenshots_at_rest_and_on_error() {
         let mut s = screen_with((1920.0, 1080.0), true);

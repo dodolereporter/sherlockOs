@@ -50,6 +50,13 @@ pub enum Key {
 #[to_layer_message(multi)]
 #[derive(Debug, Clone)]
 pub enum Message {
+    /// The Wayland handles of the view's surface, to drag an application to the dock (D-41d).
+    DndReady(Option<dock::dnd::Handles>),
+    Dnd(dock::dnd::Event),
+    /// The pointer entered a tile, or left it, by its place.
+    Hover(usize, bool),
+    /// The left button went down, or up.
+    Button(bool),
     Surface(Id),
     Resized(Size),
     Query(String),
@@ -160,6 +167,14 @@ pub struct View {
     /// The dock's configuration file, where pinning writes.
     dock_file: Option<PathBuf>,
     pointer: Point,
+    /// The tile under the pointer, and the press on a tile that may become a drag: its place
+    /// and where the button went down (lot D-41d).
+    hovered: Option<usize>,
+    press: Option<(usize, Point)>,
+    /// An application dragged to the dock: the view stays, faded, until the drag ends.
+    dragging: bool,
+    /// The thread of that drag, on the surface's connection.
+    dnd: Option<dock::dnd::Link>,
     /// The menu of a tile, while it is open.
     pub menu: Option<Menu>,
     /// Asked to close: it fades out, then the surface goes, or the program ends.
@@ -222,6 +237,10 @@ impl View {
             surface: None,
             dock_file: dock_config::path(),
             pointer: Point::ORIGIN,
+            hovered: None,
+            press: None,
+            dragging: false,
+            dnd: None,
             menu: None,
             closing: false,
             service: None,
@@ -433,7 +452,8 @@ impl View {
                 let size = window::size(id).map(Message::Resized);
                 // The wallpaper is blurred once the size is known.
                 self.backdrop_due = true;
-                return Task::batch([operation::focus(QUERY), size, scale]);
+                let dnd = window::run(id, dock::dnd::handles).map(Message::DndReady);
+                return Task::batch([operation::focus(QUERY), size, scale, dnd]);
             }
             Message::Service(Request::Toggle) if self.shown() => return self.close(),
             Message::Service(Request::Toggle) => return self.show(),
@@ -524,8 +544,34 @@ impl View {
             Message::Launch(_) | Message::Dismiss | Message::CloseMenu if self.menu.is_some() => {
                 self.menu = None;
             }
+            Message::Launch(_) if self.dragging => {}
             Message::Launch(place) => return self.launch(place),
-            Message::Pointer(point) => self.pointer = point,
+            Message::Pointer(point) => {
+                self.pointer = point;
+                return self.drag_out();
+            }
+            Message::Hover(place, true) => self.hovered = Some(place),
+            Message::Hover(place, false) if self.hovered == Some(place) => self.hovered = None,
+            Message::Hover(..) => {}
+            Message::Button(true) => self.press = self.hovered.map(|place| (place, self.pointer)),
+            Message::Button(false) => self.press = None,
+            Message::DndReady(handles) => {
+                let Some((link, events)) = handles.and_then(dock::dnd::start) else {
+                    return Task::none();
+                };
+                self.dnd = Some(link);
+                return Task::run(events, Message::Dnd);
+            }
+            Message::Dnd(dock::dnd::Event::DragEnded(taken)) => {
+                tracing::info!(taken, "drag to the dock ended");
+                self.dragging = false;
+                // The pointer reaches the view again at its next opening.
+                if let Some(link) = &self.dnd {
+                    link.send(dock::dnd::Command::Restore);
+                }
+                return self.frame(Instant::now());
+            }
+            Message::Dnd(_) => {}
             // Fading out, the view takes no more input: no menu opens nor runs (lot UI-06).
             Message::Menu(_) | Message::MenuPick(_) if self.closing => {}
             Message::Menu(place) => self.open_menu(place),
@@ -584,7 +630,8 @@ impl View {
         {
             return Task::perform(async move { Arc::new(reload()) }, Message::Reloaded);
         }
-        if !(self.closing && done) {
+        // A drag to the dock still needs the surface: it goes once the drag ends.
+        if !(self.closing && done) || self.dragging {
             return Task::none();
         }
         if !self.is_resident() {
@@ -679,6 +726,39 @@ impl View {
             }
         }
         Task::batch(tasks)
+    }
+
+    /// The pointer pressed on a tile went far enough: the application is dragged out, to the
+    /// dock (lot D-41d), its icon under the pointer, and the view fades away as Launchpad does.
+    fn drag_out(&mut self) -> Task<Message> {
+        let Some((place, from)) = self.press else {
+            return Task::none();
+        };
+        if self.dragging
+            || self.closing
+            || from.distance(self.pointer) < sherlock_ui::dock::DRAG_THRESHOLD
+        {
+            return Task::none();
+        }
+        let (Some(link), Some(tile)) = (
+            &self.dnd,
+            self.shown
+                .get(place)
+                .and_then(|index| self.catalog.tiles().get(*index)),
+        ) else {
+            return Task::none();
+        };
+        self.press = None;
+        self.menu = None;
+        link.send(dock::dnd::Command::Drag {
+            id: tile.id().to_owned(),
+            icon: self.catalog.icon(tile),
+            side: self.icon_side(),
+            scale: self.scale.ceil().max(1.0) as i32,
+        });
+        tracing::info!(id = tile.id(), "dragged to the dock");
+        self.dragging = true;
+        self.close()
     }
 
     /// Side of an icon on the screen, in its pixels.
@@ -1093,7 +1173,10 @@ impl View {
             .height(layout.button.1)
             .padding(look::CELL_PADDING)
             .style(look::cell(chosen));
-        let cell = mouse_area(cell).on_right_press(Message::Menu(place));
+        let cell = mouse_area(cell)
+            .on_right_press(Message::Menu(place))
+            .on_enter(Message::Hover(place, true))
+            .on_exit(Message::Hover(place, false));
         if self.launched != Some(place) {
             return cell.into();
         }
@@ -1197,6 +1280,12 @@ pub fn on_event(event: Event, _: event::Status, _: Id) -> Option<Message> {
         }
         Event::Mouse(mouse::Event::WheelScrolled { delta }) => Some(Message::Scroll(delta)),
         Event::Mouse(mouse::Event::CursorMoved { position }) => Some(Message::Pointer(position)),
+        Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
+            Some(Message::Button(true))
+        }
+        Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
+            Some(Message::Button(false))
+        }
         Event::Window(window::Event::Resized(size)) => Some(Message::Resized(size)),
         _ => None,
     }

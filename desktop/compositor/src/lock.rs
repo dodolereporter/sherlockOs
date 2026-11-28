@@ -1149,6 +1149,7 @@ pub fn items(state: &State, (output, view): (&Output, &View), now: Duration) -> 
                     scale,
                     background: colors.label,
                     color: colors.label_text,
+                    icon: None,
                 },
                 alpha: 1.0,
             });

@@ -693,6 +693,25 @@ compositor receives and the watching connection sees go.
 
 Still missing: **game mode**, a way for the dock to know it, so that it hides (see below).
 
+## Applications dragged from the Applications view (D-41d)
+
+An application dragged from the Applications view is pinned where it is dropped, as from
+Launchpad. iced starts no Wayland drag: the view and the dock speak `wl_data_device` themselves
+(`src/dnd.rs`, as Evidence does in E-03), on their surface's connection, in a thread each. What
+is dragged is the desktop id, in the private type `application/x-sherlockos-desktop-id`: no
+other application is offered anything, and the dock accepts nothing else.
+
+- Over the dock, a hole opens among the pinned icons where it would go (the token `<hole>` in
+  the pinned list, an icon that draws nothing: the icons make room on their own tracks), and
+  follows the pointer; out of the dock's band, or when the drag leaves, it closes.
+- Dropped: the id read from the drop (255 bytes at most, 2 s at most, letters, digits, `.`, `-`
+  and `_` only, off the interface thread) takes the hole's place, moved there if it was already
+  pinned, and the list is written (`save_pinned`, which never writes the hole). An id the dock
+  does not know closes the hole.
+
+![The hole](../desktop/dock/screenshots/hole.png)
+![Dropped](../desktop/dock/screenshots/dropped.png)
+
 ## Menu of an icon
 
 A right click opens the menu of the icon under the pointer, as an `xdg_popup` attached to the

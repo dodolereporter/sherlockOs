@@ -57,6 +57,11 @@ pub enum Pointer {
 #[to_layer_message(multi)]
 #[derive(Debug, Clone)]
 pub enum Message {
+    /// The Wayland handles of the dock's surface, for the applications dragged from the
+    /// Applications view (lot D-41d).
+    DndReady(Option<crate::dnd::Handles>),
+    /// An application dragged over the dock, dropped on it, or gone.
+    Dnd(crate::dnd::Event),
     Surface(Id),
     Pointer(Pointer),
     Frame(Instant),
@@ -192,6 +197,8 @@ pub struct Dock {
     placed: Vec<IconPlace>,
     /// Writes the pinned list on a thread of its own.
     saver: crate::save::Saver,
+    /// The thread of the drags from the Applications view, kept alive with its link.
+    dnd: Option<crate::dnd::Link>,
 }
 
 impl Dock {
@@ -239,6 +246,7 @@ impl Dock {
             sent: Sent::default(),
             placed: Vec::new(),
             saver: crate::save::Saver::default(),
+            dnd: None,
         };
         dock.rebuild(false);
         dock
@@ -694,8 +702,17 @@ impl Dock {
                     zone: Some(self.zone()),
                     hidden: Some(self.hide.hidden()),
                 };
-                return Task::batch([self.input_region(), self.follow_windows()]);
+                let dnd = window::run(id, crate::dnd::handles).map(Message::DndReady);
+                return Task::batch([self.input_region(), self.follow_windows(), dnd]);
             }
+            Message::DndReady(handles) => {
+                let Some((link, events)) = handles.and_then(crate::dnd::start) else {
+                    return Task::none();
+                };
+                self.dnd = Some(link);
+                return Task::run(events, Message::Dnd);
+            }
+            Message::Dnd(event) => return self.incoming(event),
             Message::Screen(id, screen) => {
                 self.outputs.insert(id, screen);
                 self.clock();
@@ -1867,11 +1884,92 @@ impl Dock {
         self.save_pinned()
     }
 
+    /// An application dragged from the Applications view (lot D-41d): over the dock, a hole
+    /// opens among the pinned icons where it would go; dropped, it is pinned there; gone, the
+    /// hole closes. The icons make room and close it on their own tracks.
+    pub fn incoming(&mut self, event: crate::dnd::Event) -> Task<Message> {
+        use crate::dnd::Event;
+        match event {
+            Event::Over(x, y) => self.hole_at(Point::new(x, y)),
+            Event::Left => self.close_hole(),
+            Event::Dropped(id) => self.drop_app(&id),
+            Event::DragEnded(_) => Task::none(),
+        }
+    }
+
+    /// Opens the hole, or moves it, among the pinned icons nearest `point`; out of the dock's
+    /// band, it closes.
+    fn hole_at(&mut self, point: Point) -> Task<Message> {
+        let now = self.clock();
+        let layout = self.layout(now);
+        if layout.depth(point) > self.geometry.bar_thickness() + self.geometry.icon / 2.0 {
+            return self.close_hole();
+        }
+        self.list_sherlock();
+        let along = layout.along(point);
+        let end = self.separator.unwrap_or(self.items.len());
+        let fixed = self
+            .items
+            .iter()
+            .take_while(|i| i.kind == Kind::Applications)
+            .count();
+        let before: Option<String> = (fixed..end.min(self.items.len()))
+            .filter(|&i| self.items[i].kind != Kind::Hole)
+            .find(|&i| layout.middle(i).is_some_and(|middle| middle > along))
+            .and_then(|i| self.items[i].pin_id().map(String::from));
+        let changed = if self.pinned.iter().any(|p| p == items::HOLE) {
+            dock_config::move_pinned(&mut self.pinned, items::HOLE, before.as_deref())
+        } else {
+            let at = before
+                .and_then(|b| self.pinned.iter().position(|p| *p == b))
+                .unwrap_or(self.pinned.len());
+            self.pinned.insert(at, String::from(items::HOLE));
+            true
+        };
+        if changed {
+            return self.refresh(self.geometry);
+        }
+        Task::none()
+    }
+
+    /// The application went elsewhere: the hole closes.
+    fn close_hole(&mut self) -> Task<Message> {
+        let before = self.pinned.len();
+        self.pinned.retain(|p| p != items::HOLE);
+        if self.pinned.len() != before {
+            return self.refresh(self.geometry);
+        }
+        Task::none()
+    }
+
+    /// The application `id` dropped: pinned in the hole, moved there if it already was, and
+    /// the list written. An application the dock does not know closes the hole.
+    fn drop_app(&mut self, id: &str) -> Task<Message> {
+        if self.sources.catalog.get(id).is_none() {
+            tracing::warn!(id, "dropped application not installed");
+            return self.close_hole();
+        }
+        let Some(at) = self.pinned.iter().position(|p| p == items::HOLE) else {
+            return Task::none();
+        };
+        // Where the hole is: before the next pin that is not this application.
+        let before = self.pinned[at + 1..].iter().find(|p| *p != id).cloned();
+        self.pinned.retain(|p| p != items::HOLE && p != id);
+        let to = before
+            .and_then(|b| self.pinned.iter().position(|p| *p == b))
+            .unwrap_or(self.pinned.len());
+        self.pinned.insert(to, id.to_owned());
+        tracing::info!(id, "pinned from the Applications view");
+        self.save_pinned()
+    }
+
     /// Writes the pinned list to the configuration and rebuilds the dock. The writing is done
     /// off the interface thread (`save::Saver`); the file is read again first and only its list
     /// and Sherlock's key change (`pins::write`): the dock never writes what it has in memory,
     /// so a file it could not read at startup is not replaced by one with the pinned list alone.
     fn save_pinned(&mut self) -> Task<Message> {
+        // The hole of a drag in progress is never written.
+        self.pinned.retain(|p| p != items::HOLE);
         self.sources.config.pinned = Some(self.pinned.clone());
         self.sources.config.sherlock = self.sherlock;
         if let Some(path) = &self.sources.config_path {

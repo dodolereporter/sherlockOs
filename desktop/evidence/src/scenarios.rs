@@ -1805,6 +1805,31 @@ fn path_bar_captures() {
     }
 }
 
+/// Space opens the large preview of the item, the arrows go to the next one, Space or Escape
+/// close it (lot E-12); the panel of the preview stays where it was.
+#[test]
+fn space_opens_the_large_preview() {
+    let mut bench = Bench::new("quick-look");
+    let shown = bench.app.show_preview;
+    bench.press(Named::Space);
+    assert!(!bench.app.looking, "nothing selected: nothing to look at");
+    bench.select("src");
+    bench.press(Named::Space);
+    assert!(bench.app.looking);
+    assert_eq!(bench.app.show_preview, shown);
+    bench.press(Named::ArrowDown);
+    assert!(bench.app.looking);
+    assert_eq!(bench.selected(), ["a.txt"]);
+    bench.app.settle();
+    capture(&bench.app, "evidence-quick-look");
+    bench.press(Named::Escape);
+    assert!(!bench.app.looking);
+    assert!(bench.app.look_level() > 0.0, "it zooms out");
+    bench.press(Named::Space);
+    bench.press(Named::Space);
+    assert!(!bench.app.looking);
+}
+
 /// A paste onto names already taken asks first: replace (the old one to the trash), keep both,
 /// skip, or call it off (lot E-11).
 #[test]
@@ -1864,12 +1889,63 @@ fn the_names_stay_at_every_width() {
             (width, height),
         );
     }
-    // Space brings back a preview the width had folded; again, it goes.
+    // « Aperçu » brings back a preview the width had folded; again, it goes. (Space opens the
+    // large preview since E-12.)
     bench.send(Message::Resized(iced::Size::new(944.0, 1048.0)));
-    bench.press(Named::Space);
+    bench.send(Message::Run(crate::app::Command::TogglePreview));
     assert!(bench.app.panes().preview);
-    bench.press(Named::Space);
+    bench.send(Message::Run(crate::app::Command::TogglePreview));
     assert!(!bench.app.panes().preview);
+}
+
+/// The rest of the path bar (lot E-04c): « … » lists the folded folders, the sheet remembers
+/// the last folders typed, the search folds to its icon in a narrow window.
+#[test]
+fn folded_folders_recent_folders_and_a_folded_search() {
+    let mut bench = Bench::new("path-rest");
+    let deep = "projet/un-dossier-au-nom-assez-long/deuxieme-niveau/troisieme/quatrieme/fin";
+    fs::create_dir_all(bench.path(deep)).expect("folders");
+    bench.send(Message::Resized(iced::Size::new(720.0, 460.0)));
+    bench.send(Message::Go(Location::Folder(bench.path(deep))));
+    bench.send(Message::Folded(true));
+    let items: Vec<String> = bench
+        .app
+        .folded
+        .items
+        .iter()
+        .map(|(l, _)| l.clone())
+        .collect();
+    assert!(items.contains(&"projet".to_owned()), "{items:?}");
+    let target = bench.app.folded.items[0].1.clone();
+    bench.send(Message::Go(target.clone()));
+    assert_eq!(bench.app.location, target);
+    assert!(!bench.app.folded.open);
+
+    // A folder reached by the field is remembered, the last first, and the sheet opens it.
+    bench.ctrl("l");
+    bench.send(Message::PathInput("~/projet".into()));
+    bench.send(Message::PathSubmit);
+    bench.ctrl("l");
+    bench.send(Message::PathInput(format!("~/{deep}")));
+    bench.send(Message::PathSubmit);
+    let labels: Vec<&str> = bench.app.recent.iter().map(|(_, l)| l.as_str()).collect();
+    assert_eq!(labels, [format!("~/{deep}").as_str(), "~/projet"]);
+    bench.key(
+        Key::Character("g".into()),
+        Modifiers::CTRL | Modifiers::SHIFT,
+    );
+    bench.send(Message::PathRecent(1));
+    assert_eq!(bench.app.location, Location::Folder(bench.path("projet")));
+    assert!(bench.app.path_edit.is_none());
+
+    // At 720, the search is its icon until it is used; Escape folds it back.
+    assert!(bench.app.search_folded());
+    bench.send(Message::OpenSearch);
+    assert!(!bench.app.search_folded());
+    bench.press(Named::Escape);
+    assert!(bench.app.search_folded());
+    bench.send(Message::Resized(iced::Size::new(1366.0, 768.0)));
+    assert!(!bench.app.search_folded());
 }
 
 /// On Wayland the menu and its submenu are popups of their own (lot E-02b): they open with
@@ -1904,4 +1980,30 @@ fn the_menu_and_its_submenu_are_popups_on_wayland() {
     bench.app.settle();
     bench.send(Message::Inert);
     assert!(bench.app.popups.menu.is_none(), "gone once folded back");
+}
+
+/// On Wayland the menu of « … » is a popup of its own, under « … » (lot E-04d): it opens with
+/// the menu, goes once it has faded out, and a click outside closes it at once.
+#[test]
+fn the_folded_folders_are_a_popup_on_wayland() {
+    let mut bench = Bench::new("folded-popup");
+    let deep = "projet/un-dossier-au-nom-assez-long/deuxieme-niveau/troisieme/quatrieme/fin";
+    fs::create_dir_all(bench.path(deep)).expect("folders");
+    bench.app.pretend_wayland();
+    bench.send(Message::Resized(iced::Size::new(720.0, 460.0)));
+    bench.send(Message::Go(Location::Folder(bench.path(deep))));
+    bench.send(Message::Folded(true));
+    let popup = bench.app.popups.folded.expect("a popup");
+    assert!(bench.app.popup_view(popup).is_some());
+    // The compositor closes it on a click outside: the menu goes at once.
+    bench.send(Message::WindowClosed(popup));
+    assert!(!bench.app.folded.open && bench.app.popups.folded.is_none());
+    // Closed from the keyboard: the popup stays while it fades, then goes.
+    bench.send(Message::Folded(true));
+    assert!(bench.app.popups.folded.is_some());
+    bench.press(Named::Escape);
+    assert!(bench.app.popups.folded.is_some(), "fading out");
+    bench.app.settle();
+    bench.send(Message::Inert);
+    assert!(bench.app.popups.folded.is_none());
 }
