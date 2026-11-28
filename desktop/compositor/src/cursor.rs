@@ -191,9 +191,29 @@ fn pick_size(sizes: impl Iterator<Item = u32> + Clone, target: u32) -> Option<u3
     sizes.clone().filter(|&s| s >= target).min().or(sizes.max())
 }
 
+/// The largest cursor file read: a theme's biggest, every size of an animated cursor, holds a
+/// few megabytes.
+const MAX_CURSOR_FILE: u64 = 16 * 1024 * 1024;
+
+/// The bytes of the cursor file at `path`: only a regular file of `MAX_CURSOR_FILE` at most. A
+/// link to `/dev/zero` in a cursor theme would otherwise take all the compositor's memory.
+fn read_bounded(path: &Path) -> Option<Vec<u8>> {
+    use std::io::Read;
+    if !std::fs::metadata(path).ok()?.is_file() {
+        return None;
+    }
+    let mut bytes = Vec::new();
+    std::fs::File::open(path)
+        .ok()?
+        .take(MAX_CURSOR_FILE + 1)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    (bytes.len() as u64 <= MAX_CURSOR_FILE).then_some(bytes)
+}
+
 /// Reads the images of the file at `path` at the size nearest above `target`.
 fn read(path: &Path, target: u32) -> Option<Image> {
-    let bytes = std::fs::read(path).ok()?;
+    let bytes = read_bounded(path)?;
     let images = xcursor::parser::parse_xcursor(&bytes)?;
     let nominal = pick_size(images.iter().map(|i| i.size), target)?;
     let frames: Vec<Frame> = images

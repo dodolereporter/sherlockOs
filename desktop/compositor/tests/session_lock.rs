@@ -231,6 +231,8 @@ mod tests {
         registry: wl_registry::WlRegistry,
         /// Keeps the buffers' memory alive.
         files: Vec<File>,
+        /// Hung: reads and answers nothing any more.
+        frozen: bool,
     }
 
     impl Peer {
@@ -339,6 +341,7 @@ mod tests {
                 seen: Seen::default(),
                 registry,
                 files: Vec::new(),
+                frozen: false,
             });
             let i = self.peers.len() - 1;
             self.run_until("the globals", |h| !h.peers[i].seen.globals.is_empty());
@@ -355,7 +358,7 @@ mod tests {
                     .dispatch(Some(Duration::from_millis(5)), &mut self.state)
                     .unwrap();
                 self.state.refresh();
-                for peer in &mut self.peers {
+                for peer in self.peers.iter_mut().filter(|p| !p.frozen) {
                     if let Some(guard) = peer.queue.prepare_read() {
                         // Nothing to read is not an error, nor a connection that ended.
                         let _ = guard.read();
@@ -398,6 +401,8 @@ mod tests {
             let _keyboard = seat.get_keyboard(&qh, ());
             let _pointer = seat.get_pointer(&qh, ());
             let output: WlOutput = peer.bind();
+            // What the compositor pings; the client answers from its loop (`Seen`).
+            let _wm_base: XdgWmBase = peer.bind();
             let manager: ExtSessionLockManagerV1 = peer.bind();
             let lock = manager.lock(&qh, ());
             let surface = peer.bind::<WlCompositor>().create_surface(&qh, ());
@@ -1071,6 +1076,7 @@ mod tests {
             seen,
             registry,
             files: Vec::new(),
+            frozen: false,
         };
         let qh = peer.qh();
         let output: WlOutput = peer.bind();
@@ -1163,5 +1169,86 @@ mod tests {
             .args(["-KILL", second.as_str()])
             .status();
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Runs the loop for `duration`.
+    fn wait(h: &mut Harness, duration: Duration) {
+        let start = std::time::Instant::now();
+        h.run_until("a while", |_| start.elapsed() > duration);
+    }
+
+    #[test]
+    fn a_lock_program_that_hangs_is_killed_and_started_again_the_session_staying_locked() {
+        let mut h = Harness::start(&["sleep", "5"], &["false"]);
+        let app = h.connect();
+        h.show_window(app);
+        let locker = h.connect_program();
+        let _locking = h.lock(locker).unwrap();
+        h.show_frame();
+        h.run_until("locked", |h| h.peers[locker].seen.locked);
+        let syncs = h.state.log_sync_requests();
+        assert!(syncs >= 1, "the log is written to disk at the lock");
+        h.state.set_lock_ping_timeout(Duration::from_millis(300));
+
+        // A lock program that answers stays, key after key.
+        h.key(KEY_A);
+        wait(&mut h, Duration::from_millis(1100));
+        h.key(KEY_A);
+        wait(&mut h, Duration::from_millis(600));
+        assert!(h.state.lock_program_connected());
+        assert_eq!(h.state.lock_attempts(), 0, "nothing started again");
+
+        // It hangs: the next input pings it, and nothing answers.
+        h.peers[locker].frozen = true;
+        wait(&mut h, Duration::from_millis(1100));
+        h.click(400.0, 300.0);
+        h.run_until("the hung lock program replaced", |h| {
+            h.state.lock_attempts() == 1
+        });
+        assert!(h.state.is_locked(), "the session stays locked");
+        assert!(!h.lock_surface_drawn());
+        assert_eq!(h.window_items(), 0, "nothing of the session shows");
+        assert_eq!(h.state.lock_stage(), compositor::lock::Stage::Client);
+        // While locked, the log goes on being written to disk.
+        wait(
+            &mut h,
+            compositor::lock::LOG_SYNC + Duration::from_millis(200),
+        );
+        assert!(h.state.log_sync_requests() > syncs + 1);
+    }
+
+    #[test]
+    fn the_console_switch_works_while_locked() {
+        let mut h = Harness::start(&["sleep", "5"], &["false"]);
+        let switched = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let seen = switched.clone();
+        h.state
+            .set_switch_vt(Box::new(move |vt| seen.borrow_mut().push(vt)));
+        let locker = h.connect_program();
+        let _locking = h.lock(locker).unwrap();
+        h.show_frame();
+        h.run_until("locked", |h| h.peers[locker].seen.locked);
+        h.settle();
+        h.peers[locker].seen.keys.clear();
+        // Ctrl + Alt + F2.
+        const KEY_LEFTCTRL: u32 = 29 + 8;
+        const KEY_LEFTALT: u32 = 56 + 8;
+        const KEY_F2: u32 = 60 + 8;
+        for code in [KEY_LEFTCTRL, KEY_LEFTALT] {
+            h.state
+                .keyboard_key(Keycode::new(code), KeyState::Pressed, 10);
+        }
+        h.key(KEY_F2);
+        for code in [KEY_LEFTALT, KEY_LEFTCTRL] {
+            h.state
+                .keyboard_key(Keycode::new(code), KeyState::Released, 11);
+        }
+        h.settle();
+        assert_eq!(*switched.borrow(), [2]);
+        assert!(h.state.is_locked(), "the session stays locked");
+        assert!(
+            !h.peers[locker].seen.keys.contains(&evdev(KEY_F2)),
+            "the switch goes to no client"
+        );
     }
 }
