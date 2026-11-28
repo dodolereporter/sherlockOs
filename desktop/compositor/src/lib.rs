@@ -52,6 +52,7 @@ pub mod perf;
 pub mod picture;
 pub mod popup_anim;
 pub mod power;
+pub mod projection;
 pub mod render;
 pub mod screencast;
 mod screensaver;
@@ -307,6 +308,8 @@ pub struct State {
     triggers: triggers::Triggers,
     /// Sherlock's consent window, its socket and the requests waiting (lot A-11b).
     consent: consent::Consents,
+    /// Super + P, the projection chooser (lot D-39).
+    projection: projection::Chooser,
     /// The windows socket of Sherlock's windows server (lot A-12).
     sherlock_api: sherlock_api::SherlockApi,
     /// Applications that bring their window forward, and the windows that ask for attention
@@ -489,6 +492,7 @@ impl State {
             curtain: curtain::Curtain::default(),
             triggers: triggers::Triggers::default(),
             consent: consent::Consents::default(),
+            projection: projection::Chooser::default(),
             sherlock_api: sherlock_api::SherlockApi::default(),
             activation: activation::Activation::new(
                 smithay::wayland::xdg_activation::XdgActivationState::new::<Self>(&dh),

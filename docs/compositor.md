@@ -772,6 +772,40 @@ mode, rotation, scale and place are taken again; a screen saved off is lit anywa
 machine never starts black. The file keeps the 32 screens met last; it is bounded (64 KiB, names
 of 64 characters, sizes, refresh, scale and places checked) and a wrong line is left aside.
 
+### Projecting: Super + P (lot D-39)
+
+A projection chooser, as on Windows and macOS (`src/projection.rs`, drawn by the compositor in
+front of the desktop, on every screen): **Super + P** opens a small panel in the middle with four
+choices, « Écran du portable seul », « Dupliquer », « Étendre », « Second écran seul », the one
+after the current configuration under the highlight. Super + P again, or the arrows, move it
+(the highlight slides, `projection::SLIDE`; the panel fades and grows in, `APPEAR`); Enter or a
+click on a choice applies it; Escape or a click outside closes. With a single screen, Super + P
+does nothing.
+
+- **The screens.** The laptop's is the internal one (`eDP`, `LVDS`, `DSI`), else the first; the
+  second is the first other one. A choice is a whole configuration of the screens, checked and
+  applied as one (`apply_screens`, "Changing the screens" above): the laptop's at the origin;
+  « Étendre » puts the second to its right; « Second écran seul » and « Écran du portable seul »
+  switch the other off. **« Dupliquer »** puts both over the same place: when the sizes differ,
+  the second is scaled (in quarters, from 0.5) so that its size in points covers the whole of the
+  laptop's screen, and centred on it (a 1920 × 1080 projector beside a 1920 × 1200 screen: 0.75,
+  2560 × 1440 points, from (−320, −120)).
+- **Remembered per screen.** The choice is saved with the second screen (its EDID names) in
+  `displays.conf` (`projection = duplicate`), with its mode, scale and place; when it is plugged
+  in again, it is projected on the same way without a key.
+- **Never black.** When the last screen lit is unplugged while the laptop's is off (« Second écran
+  seul »), the laptop's lights again.
+- **Do not disturb.** Proposed for the time of a projection (the line under the choices, Space or
+  a click switches it): applied with any choice but the laptop's screen alone, through
+  `notifications.conf` as the bar's quick settings do, and switched off again when the projection
+  ends, if it was the projection that switched it on.
+
+Tests (`tests/projection.rs`, two virtual screens): Super + P opens on the next choice, again and
+the arrows move it, the four names drawn, Enter applies « Dupliquer » with the projector scaled
+and centred, Escape changes nothing; each choice gives its screens; unplugged while the laptop's
+is off, the laptop's lights again; one screen, no panel; the choice saved and taken again when
+the projector is plugged in again; Do not disturb on during the projection, off after.
+
 ## XWayland
 
 XWayland is an X11 server that is also a Wayland client of the compositor. Each X11 window has
