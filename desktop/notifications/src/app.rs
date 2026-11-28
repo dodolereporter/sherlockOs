@@ -15,7 +15,7 @@ use iced::widget::{
 };
 use iced::{Alignment, Element, Font, Length, Padding, Subscription, Task, Vector, mouse, window};
 use iced_exwlshell::actions::RegionActionCB;
-use iced_exwlshell::reexport::{Anchor, LayerSize};
+use iced_exwlshell::reexport::{ActivationTokenSink, Anchor, LayerSize, XdgActivationTokenV1State};
 use iced_exwlshell::to_layer_message;
 use sherlock_ui::motion::{Animation, GEOMETRY_PRECISION};
 use sherlock_ui::notifications::{self as ui, SPRING};
@@ -264,20 +264,41 @@ impl Notifications {
                     self.core.hold(id, held);
                 }
             }
+            // The application gets the activation token of the click first (lot Q-52).
             Message::Click(serial) => {
                 if let Some(id) = self.live(serial) {
-                    self.core.click(id);
+                    let core = Arc::clone(&self.core);
+                    return self
+                        .after_token(move |token| core.click_activated(id, token.as_deref()));
                 }
             }
             Message::Action(serial, key) => {
                 if let Some(id) = self.live(serial) {
-                    self.core.invoke(id, &key);
+                    let core = Arc::clone(&self.core);
+                    return self.after_token(move |token| {
+                        core.invoke_activated(id, &key, token.as_deref());
+                    });
                 }
             }
             Message::Theme(theme) => color::set_active(theme),
             _ => {}
         }
         Task::none()
+    }
+
+    /// Runs `then` with the activation token the compositor gives for the click on the bubbles'
+    /// surface, or without one.
+    fn after_token(&self, then: impl FnOnce(Option<String>) + Send + 'static) -> Task<Message> {
+        match self.surface {
+            Some(id) => Task::done(Message::RequestActivationToken {
+                id,
+                sink: after_token(then),
+            }),
+            None => {
+                then(None);
+                Task::none()
+            }
+        }
     }
 
     /// The notification id of the bubble `serial`, unless it is leaving.
@@ -524,4 +545,33 @@ fn appearance() -> impl Stream<Item = color::Theme> {
         }
     }
     receiver
+}
+
+/// A sink for the activation token the compositor gives on behalf of the surface where the user
+/// clicked (lot Q-52): `then` runs once with it, or without one when none comes (no
+/// `xdg-activation-v1`, the surface gone, the request dropped).
+fn after_token(then: impl FnOnce(Option<String>) + Send + 'static) -> ActivationTokenSink {
+    type Then = Box<dyn FnOnce(Option<String>) + Send>;
+    struct Once(Mutex<Option<Then>>);
+    impl Once {
+        fn run(&self, token: Option<String>) {
+            let then = self.0.lock().ok().and_then(|mut then| then.take());
+            if let Some(then) = then {
+                then(token);
+            }
+        }
+    }
+    impl Drop for Once {
+        fn drop(&mut self) {
+            self.run(None);
+        }
+    }
+    let once = Once(Mutex::new(Some(Box::new(then))));
+    ActivationTokenSink::callback(move |state| {
+        let token = match state {
+            XdgActivationTokenV1State::Ready(token) => Some(token.token().to_owned()),
+            XdgActivationTokenV1State::Unsupported | XdgActivationTokenV1State::NoSurface => None,
+        };
+        once.run(token);
+    })
 }
