@@ -322,8 +322,8 @@ mod tests {
         let dir = folder("sysfs");
         let light = dir.join("amdgpu_bl1");
         std::fs::create_dir_all(&light).unwrap();
-        std::fs::write(light.join("brightness"), "51").unwrap();
-        std::fs::write(light.join("actual_brightness"), "51").unwrap();
+        std::fs::write(light.join("brightness"), "051").unwrap();
+        std::fs::write(light.join("actual_brightness"), "051").unwrap();
         std::fs::write(light.join("max_brightness"), "255").unwrap();
         let count = Arc::new(AtomicUsize::new(0));
         let wanted = Arc::new(AtomicBool::new(true));
