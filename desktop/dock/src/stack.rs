@@ -16,7 +16,27 @@ use sherlock_ui::icon::Icon;
 /// Entries of the folder looked at, at most, to find the newest ones.
 pub const MAX_LOOKED_AT: usize = 4096;
 /// Items the grid shows: four rows of four, the newest first.
-pub const MAX_SHOWN: usize = 16;
+pub const MAX_SHOWN: usize = 48;
+
+/// How the content of the stack opens, from its setting (lot D-21k2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Presentation {
+    Fan,
+    Grid,
+    List,
+}
+
+/// The presentation of `count` items for `view`: « Automatique » is the fan for a few items,
+/// else the grid. The fan rises over a dock at the bottom of the screen only, as on macOS.
+pub fn presentation(view: dock_config::stack::View, count: usize, bottom: bool) -> Presentation {
+    use dock_config::stack::View;
+    let fits = count <= sherlock_ui::dock::FAN_MAX;
+    match view {
+        View::Fan | View::Automatic if bottom && (fits || view == View::Fan) => Presentation::Fan,
+        View::List => Presentation::List,
+        _ => Presentation::Grid,
+    }
+}
 /// Largest `user-dirs.dirs` read.
 const MAX_USER_DIRS: u64 = 64 * 1024;
 
