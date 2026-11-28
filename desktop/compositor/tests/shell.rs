@@ -130,6 +130,8 @@ mod tests {
         /// Serial of the last button press it got, and the last activation token it got.
         pressed: Option<u32>,
         token: Option<String>,
+        /// Popups the compositor closed (`popup_done`), by protocol id.
+        popups_done: Vec<u32>,
     }
 
     fn values(bytes: &[u8]) -> Vec<u32> {
@@ -413,7 +415,20 @@ mod tests {
     delegate_noop!(Client: WlShmPool);
     delegate_noop!(Client: ignore WlBuffer);
     delegate_noop!(Client: ZwlrLayerShellV1);
-    delegate_noop!(Client: ignore XdgPopup);
+    impl Dispatch<XdgPopup, ()> for Client {
+        fn event(
+            client: &mut Self,
+            popup: &XdgPopup,
+            event: wayland_protocols::xdg::shell::client::xdg_popup::Event,
+            _: &(),
+            _: &Connection,
+            _: &QueueHandle<Self>,
+        ) {
+            if let wayland_protocols::xdg::shell::client::xdg_popup::Event::PopupDone = event {
+                client.popups_done.push(popup.id().protocol_id());
+            }
+        }
+    }
     delegate_noop!(Client: XdgPositioner);
     delegate_noop!(Client: OrgKdeKwinAppmenuManager);
     delegate_noop!(Client: OrgKdeKwinAppmenu);
@@ -972,6 +987,52 @@ mod tests {
         h.run_until("the window behind active", |h| {
             h.shell.client.has(behind, Flag::Activated)
                 && h.shell.client.has(front, Flag::Minimized)
+        });
+    }
+
+    /// Lot Q-58: the menu of an application's window, a popup with a grab, closes on a click
+    /// on the dock, a surface of the shell client, and the click still reaches the dock.
+    #[test]
+    fn a_menu_of_a_window_closes_on_a_click_on_the_dock() {
+        let mut h = Harness::start();
+        let qh = h.app.queue.handle();
+        let compositor: WlCompositor = h.app.bind();
+        let wm_base: XdgWmBase = h.app.bind();
+        let seat: WlSeat = h.app.bind();
+        let surface = compositor.create_surface(&qh, ());
+        let xdg_surface = wm_base.get_xdg_surface(&surface, &qh, ());
+        let _toplevel = xdg_surface.get_toplevel(&qh, ());
+        h.app.client.configured = false;
+        surface.commit();
+        h.run_until("the first configure", |h| h.app.client.configured);
+        h.app.draw(&surface, 100, 80);
+        h.run_until("the window shown", |h| h.state.focused_window().is_some());
+        let positioner = wm_base.create_positioner(&qh, ());
+        positioner.set_size(60, 40);
+        positioner.set_anchor_rect(30, 20, 1, 1);
+        let menu = compositor.create_surface(&qh, ());
+        let popup = wm_base.get_xdg_surface(&menu, &qh, ()).get_popup(
+            Some(&xdg_surface),
+            &positioner,
+            &qh,
+            (),
+        );
+        popup.grab(&seat, 0);
+        menu.commit();
+        for _ in 0..5 {
+            h.turn();
+        }
+        h.app.draw(&menu, 60, 40);
+        let (_dock, _layer) = h.dock();
+        for _ in 0..5 {
+            h.turn();
+        }
+        h.state.pointer_motion((400.0, 560.0).into(), 1);
+        h.state.pointer_button(BTN_LEFT, ButtonState::Pressed, 2);
+        h.state.pointer_button(BTN_LEFT, ButtonState::Released, 3);
+        let id = popup.id().protocol_id();
+        h.run_until("the menu closed by a click on the dock", |h| {
+            h.app.client.popups_done.contains(&id)
         });
     }
 

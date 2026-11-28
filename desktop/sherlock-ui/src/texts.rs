@@ -130,6 +130,9 @@ pub mod evidence {
     pub const LOGIN_PASSWORD: &str = "Mot de passe";
     pub const LOGIN_REMEMBER: &str = "Retenir dans le trousseau";
     pub const LOGIN_CONNECT: &str = "Se connecter";
+    /// On a server of the « Réseau » section: choose the name and the password, even when
+    /// the guest gets in (lot Q-56).
+    pub const LOGIN_AS: &str = "Se connecter en tant que…";
     pub const SYSTEM_DISK: &str = "Disque système";
     pub const MOUNT: &str = "Monter";
     pub const UNMOUNT: &str = "Démonter";
