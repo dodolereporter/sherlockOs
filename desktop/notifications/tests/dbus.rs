@@ -533,6 +533,40 @@ mod tests {
         assert!(invoke(second, "logs").is_err());
         assert!(invoke(first, "nothing").is_err());
 
+        // From the centre with the click's activation token (lot Q-52d): `ActivationToken`
+        // first. A token too long is not passed on, the action still runs.
+        let actions = ["open", "Ouvrir"];
+        let invoke_activated = |id: u32, key: &str, token: &str| {
+            client.call_method(
+                Some(NAME),
+                history::PATH,
+                Some(history::INTERFACE),
+                "InvokeActivated",
+                &(id, key, token),
+            )
+        };
+        for token in [String::from("centre-token"), "x".repeat(257)] {
+            let id = notify(&client, 0, "Rapport", &actions, HashMap::new(), 0);
+            changed.recv_timeout(Duration::from_secs(5)).unwrap();
+            invoke_activated(id, "open", &token).unwrap();
+            if token.len() <= 256 {
+                assert_eq!(
+                    next(&signals),
+                    (String::from("ActivationToken"), id, token.clone())
+                );
+            }
+            assert_eq!(
+                next(&signals),
+                (String::from("ActionInvoked"), id, String::from("open"))
+            );
+            assert_eq!(
+                next(&signals),
+                (String::from("NotificationClosed"), id, String::from("2"))
+            );
+            changed.recv_timeout(Duration::from_secs(5)).unwrap();
+            assert!(invoke_activated(id, "open", "late").is_err());
+        }
+
         // « Tout effacer »: the history goes, the open notification stays on screen.
         client
             .call_method(

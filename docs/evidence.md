@@ -227,6 +227,13 @@ are built once (`sherlock_ui::component::icon` caches the SVG handles).
 - Preview: header with tile, size and git state; first lines of a text file in JetBrains Mono
   with keywords and comments coloured (Dockerfile, Rust, TOML, shell, Python); PNG and JPEG
   images; date, kind and place for the rest. Buttons: Open, Copy path (Restore in the trash).
+- Activation token (lot Q-52d): everything Evidence starts (opening a file, « Ouvrir avec », the
+  terminal, xdg-open) gets the `xdg-activation-v1` token of the click, in
+  `XDG_ACTIVATION_TOKEN` and `DESKTOP_STARTUP_ID`, so that an application already open brings
+  its window forward. On Wayland Evidence runs on `iced_exwlshell`, whose runtime asks for one on
+  any of its surfaces, the window included (`RequestActivationToken`, with the serial of the
+  last press). Under X11 there is no surface to ask on: the program starts at once, without
+  one. Without a token (no protocol, the window gone) it starts all the same.
 - Context menu as on the design board. « Ouvrir avec » lists the installed applications that open the
   file's type (from their `.desktop` files, with their icon, the default first and checked),
   then « Terminal, dans ce dossier », « Autre application… » (a chooser of every application, with

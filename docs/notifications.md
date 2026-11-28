@@ -47,7 +47,7 @@ and write the same file without pulling iced or zbus.
 | `GetServerInformation` | `notifications`, `SherlockOS` (the OS has no name yet), the crate version, `1.2` |
 | `NotificationClosed` | Reason 1 when it expires, 2 when the user closes it (click, action), 3 on `CloseNotification`, 4 when the daemon closes it itself (too many waiting, hidden by Do not disturb) |
 | `ActionInvoked` | A button, or `default` for a click on the bubble |
-| `ActivationToken` | Just before `ActionInvoked` for a click on a bubble: the `xdg-activation-v1` token the compositor gave for that click (lot Q-52), with which the application brings its window forward. None from the bar's notification centre (`InvokeAction`) |
+| `ActivationToken` | Just before `ActionInvoked` for a click on a bubble: the `xdg-activation-v1` token the compositor gave for that click (lot Q-52), with which the application brings its window forward. From the bar's notification centre too, through `InvokeActivated` (lot Q-52d), with the token of the click in the centre |
 
 **Timeout.** The application's (`expire_timeout` > 0, in ms); 0 means never; -1 takes
 `notifications::DEFAULT_TIMEOUT` of sherlock-ui (6 s, a choice of this batch). A critical
@@ -249,6 +249,7 @@ same well-known name, `org.freedesktop.Notifications`, at `/org/sherlockos/Notif
 | `Clear()` | Empties the history (« Tout effacer »). Open notifications stay on screen |
 | `Remove(au ids)` | Takes these notifications out of the history (« × » in the centre, D-23d); those still on screen close, dismissed (reason 2). 100 ids read at most |
 | `InvokeAction(u id, s key)` | Runs the action of a notification still open, as its button would: `ActionInvoked`, then it closes (reason 2) unless it is resident. An id no longer open, or a key it does not have, gets `org.freedesktop.DBus.Error.Failed` |
+| `InvokeActivated(u id, s key, s token)` | `InvokeAction`, preceded by `ActivationToken` with `token`, the `xdg-activation-v1` token the bar asked for the click in the centre (lot Q-52d). An empty token, or one longer than `MAX_TOKEN_BYTES` (256), is not passed on: the action still runs |
 | `Changed` (signal) | The history changed: a notification came or was replaced, closed, or the history was emptied. A listener reads `List` again |
 
 `Changed` is sent by the expiry thread, like the signals of the notifications the daemon closes
