@@ -9,6 +9,7 @@ pub mod background;
 pub mod form;
 pub mod machine;
 pub mod pam;
+pub mod throttle;
 pub mod view;
 
 use std::sync::{Arc, Mutex};
@@ -113,7 +114,12 @@ pub fn run(rescue: bool) -> Result<(), Error> {
     // single connection (`WAYLAND_SOCKET`), the only one allowed to lock.
     iced_exwlshell::disable_clipboard();
     let make = move |user: String| {
-        let lock = Lock::new(user, Arc::new(pam::Pam), Arc::new(machine::Systemctl));
+        let lock = Lock::new(
+            user,
+            // Wrong passwords counted and slowed (lot D-25n): pam_faillock cannot here.
+            Arc::new(throttle::Throttled::new(pam::Pam)),
+            Arc::new(machine::Systemctl),
+        );
         if rescue { lock.rescue() } else { lock }
     };
     let first = Mutex::new(Some(make(user.clone())));

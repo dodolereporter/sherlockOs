@@ -119,11 +119,22 @@ Every color, size, duration and text is in `sherlock_ui::lock::screen`.
   characters typed, one by one, in the `String` that `on_input` hands over (wrapped in a
   `Secret` at once, so wiped), and, while the eye shows the password, the password itself, as on
   the screen. The memory of the program is closed to the user's other processes (lot D-25k).
-- **Tries.** The lock screen runs as the user, so it cannot write the counters of
-  pam_faillock: failures are not counted, as with swaylock. Each wrong password waits for the
-  delay of pam_faildelay (3 s, in our service) before PAM answers, and only one check
-  runs at a time: that is what slows the tries. The check runs on its own thread, the screen
-  keeps drawing.
+- **Tries** (lot D-25n, `src/throttle.rs`). pam_faillock does not count them for the lock
+  screen, for two reasons:
+  - it is not in the stack: our service includes Debian's `common-auth`, which does not call
+    it;
+  - it could not count them if it were: the lock screen runs as the user, and pam_faillock keeps
+    its counters in `/var/run/faillock`, which only root may write.
+  So the lock counts the wrong passwords itself. The first 5 in a row are free; then each new
+  one makes the next try wait, 30 s, then twice as long each time, 5 minutes at most: the user
+  is never shut out of their session for good. While it waits, a try is answered
+  « Trop d'essais. Patiente un peu avant de réessayer. » at once, without reaching PAM, the
+  password wiped. The right password starts the count again; PAM unavailable or busy counts
+  nothing. It is a delay, not a check: PAM alone says whether a password is right (ADR 0023),
+  and nothing is stored: the count lasts as long as the lock program (a lock program started
+  again by the compositor starts from zero). On top of it, each wrong password waits for the
+  delay of pam_faildelay (3 s, in our service) before PAM answers, and only one check runs at a
+  time. The check runs on its own thread, the screen keeps drawing.
 - **A PAM that hangs** (lot D-25f). The interface never waits for PAM: the check runs on a
   thread of its own, and after 20 s (`pam::TIMEOUT`) without an answer it counts as PAM
   unavailable: the spinner stops, the field comes back with « Vérification impossible. Réessaie. ».
@@ -152,6 +163,9 @@ Every color, size, duration and text is in `sherlock_ui::lock::screen`.
 - `src/pam.rs`: the conversation, driven like PAM drives it with fake messages (the hidden
   prompt gets the password once, the visible one the user, the others nothing); never the
   system's PAM, never a real password.
+- `src/throttle.rs`, with a fake PAM and a clock moved by hand: 5 free wrong passwords, then
+  the waits (the right password itself not handed to PAM while it waits), doubling up to 5
+  minutes and never more, and the right password starting the count again.
 - `src/machine.rs`: the second click and its delay.
 - `src/form.rs`: the form on demand (a letter goes into the field, Space and Enter do not,
   Escape and 20 s without input send it away, not while PAM checks) and Sherlock's mood.
