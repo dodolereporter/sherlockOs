@@ -5,6 +5,7 @@
 pub mod anim;
 pub mod app;
 pub mod config;
+pub mod dnd;
 pub mod drag;
 pub mod entry;
 pub mod hide;
