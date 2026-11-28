@@ -33,6 +33,7 @@ pub mod trash;
 pub mod udisks;
 pub mod undo;
 mod view;
+pub mod views;
 pub mod watch;
 
 #[cfg(test)]

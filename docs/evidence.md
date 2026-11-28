@@ -305,6 +305,20 @@ are built once (`sherlock_ui::component::icon` caches the SVG handles).
   done and an « Arrêter » button: the size is counted first (200 000 entries at most), the
   files are copied by chunks of 1 MB that count and check for a stop, and a copy stopped or
   failed leaves nothing half-written behind.
+- Views (lot E-13a), as in the Finder: four buttons of icons in the toolbar, after back and
+  forward (« Icônes », « Liste », « Colonnes », « Galerie », a thumb sliding to the one
+  shown), the « Vue » submenu, and Ctrl+1 to Ctrl+4 choose how the folder shows. The grid of
+  icons lays out tiles (the icon over its name, cut with « … ») as many on a line as the
+  listing's width holds, at the size of the slider above it (« Taille des icônes », 32 to 128
+  pixels), where the list has its column headers; only the lines in sight are built. In the
+  grid the arrows go from tile to tile and a line up or down, the lasso selects the tiles it
+  crosses, a right click or a drop hits the tile under the pointer. A new view fades in. The
+  view is remembered for each folder, the most recent 512, and the icons' size once, in
+  `$XDG_CONFIG_HOME/evidence/views` (`views`): read with a bound before the first frame,
+  written atomically off the interface thread; a folder whose name holds a tab or a line break
+  is not remembered. The trash always shows the list. The columns and the gallery come with
+  lots E-13b and E-13c: their buttons and entries are greyed until then. Captures:
+  `the_grid_renders_headless`, at 1366 × 768 and 720 × 460.
 - Network (lot E-07): a « Réseau » section of the sidebar lists the file servers of the local
   network, found without any tool installed (`network`): a multicast DNS question for
   `_smb._tcp.local` (Samba, macOS and NAS boxes, announced by Avahi or mDNSResponder) and a
