@@ -26,5 +26,23 @@ D-28d4.
   holds every buffer. The library is loaded with `dlopen` (ADR 0028, amended): nothing to build
   against, no headers, no `bindgen`; without PipeWire, `Start` fails and nothing else does.
 
+## Capture (lot D-28d2)
+
+`capture.rs` is the capture client on the compositor's shell socket: it lists the screens
+(`wl_output` names) and the windows (`ext_foreign_toplevel_list_v1`), takes one picture of a
+source (for the picker's thumbnails), or shares a source into PipeWire.
+
+- **Access.** The compositor offers the capture protocols to the program `sherlock-portal` alone
+  (ADR 0028, `docs/compositor.md`, "Screen capture"); the picker is the same program.
+- **Frames.** Each share has a thread and a connection of its own: a capture session on its
+  source (`paint_cursors` if the cursor is wanted), a `xrgb8888` buffer in a memfd, then one
+  frame after another, each copied into a PipeWire buffer. The compositor gives a frame when the
+  source shows a new picture, at most once per vertical blank: a still screen sends nothing. The
+  thread waits 100 ms at most at a time, so a stop is seen at once. A source that changes size
+  gives new constraints: a new buffer, and the format is offered again to PipeWire. A source
+  gone (`stopped`), or PipeWire that stops reading, ends the share; within a second the session
+  ends (`reap`), the frontend tells the application, and the bar's indicator goes.
+- **Bounds.** Sizes beyond 16384 pixels a side are refused.
+
 Tests: `pod.rs`, the format laid out word by word as SPA writes it, and the buffers padded to 8
 bytes. PipeWire itself is not run in CI (no daemon there).
