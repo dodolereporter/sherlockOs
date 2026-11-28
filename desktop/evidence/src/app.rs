@@ -10,6 +10,7 @@ use iced::futures::channel::mpsc::UnboundedReceiver;
 use iced::keyboard::{self, Key, Modifiers, key::Named};
 use iced::widget::{operation, scrollable};
 use iced::{Event, Point, Size, Subscription, Task, event, mouse, window};
+use iced_exwlshell::to_layer_message;
 use sherlock_ui::click::DoubleClick;
 use sherlock_ui::color::{Theme, ThemeFade};
 use sherlock_ui::evidence as more;
@@ -32,7 +33,9 @@ use crate::udisks::UDisks;
 use sherlock_ui::motion::{self, Animation, Fade};
 
 mod path;
+mod popup;
 pub use path::PathEdit;
+pub use popup::Popups;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -258,6 +261,9 @@ impl std::hash::Hash for MenubarStart {
     }
 }
 
+/// On Wayland, the messages also carry the surface requests of `iced_exwlshell` (ADR 0029):
+/// the window, and later the menus as popups.
+#[to_layer_message(multi)]
 #[derive(Debug, Clone)]
 pub enum Message {
     /// The menus in the bar: served, or an entry clicked there (lot D-36c).
@@ -347,6 +353,8 @@ pub enum Message {
     PathFolders(u64, Option<crate::pathbar::Folders>),
     /// What the typed path leads to: a folder, something else, nothing.
     PathResolved(PathBuf, crate::pathbar::Found),
+    /// A window closed: the main one, or a menu's popup (`popup_done`).
+    WindowClosed(window::Id),
     /// Escape, taken by a focused field: it still closes the path field.
     Escaped,
 }
@@ -367,6 +375,10 @@ enum Clip {
 
 /// The Evidence application.
 pub struct App {
+    /// The `xdg_toplevel` opened by the Wayland daemon (`shell`); none under winit.
+    main: Option<window::Id>,
+    /// The popups of the menu and its submenu, on Wayland (`popup`).
+    pub(crate) popups: Popups,
     /// The menus exported to the bar, once served (lot D-36c).
     menubar: Option<crate::menubar::MenuBar>,
     pub(crate) config: Config,
@@ -463,6 +475,8 @@ impl App {
         let start = Location::Folder(config.start.clone());
         let (width, height) = metrics::REFERENCE_WINDOW;
         let mut app = Self {
+            main: None,
+            popups: Popups::default(),
             menubar: None,
             config,
             location: start,
@@ -558,8 +572,11 @@ impl App {
             }
             Event::Window(window::Event::Resized(size)) => Some(Message::Resized(size)),
             Event::Window(window::Event::Opened { .. }) => Some(Message::Opened),
+            // The compositor closed the window (Wayland daemon): the program ends with it.
             _ => None,
         });
+        // A window closed: the main one ends the program, a menu's popup closes its menu.
+        let closed = window::close_events().map(Message::WindowClosed);
         let devices = if self.config.watch_devices && self.config.devices.is_some() {
             Subscription::run(crate::udisks::stream).map(Message::Devices)
         } else {
@@ -578,7 +595,33 @@ impl App {
         } else {
             Subscription::none()
         };
-        Subscription::batch([events, frames, devices, appearance, menubar])
+        Subscription::batch([closed, events, frames, devices, appearance, menubar])
+    }
+
+    /// Asks the Wayland daemon for the window (`shell`), and keeps its id.
+    pub fn open_window(
+        &mut self,
+        settings: iced_exwlshell::actions::IcedXdgWindowSettings,
+    ) -> Task<Message> {
+        let (id, open) = Message::base_window_open(settings);
+        self.main = Some(id);
+        open
+    }
+
+    /// `act` on the main window: the one opened on Wayland (`shell`), else iced's only window.
+    fn on_window(
+        &self,
+        act: impl Fn(window::Id) -> Task<Message> + Send + 'static,
+    ) -> Task<Message> {
+        match self.main {
+            Some(id) => act(id),
+            None => window::latest().and_then(act),
+        }
+    }
+
+    /// The view of a window of the Wayland daemon: Evidence has only its main window.
+    pub fn view_window(&self, window: window::Id) -> iced::Element<'_, Message> {
+        self.popup_view(window).unwrap_or_else(|| self.view())
     }
 
     /// Window title: the application name only. The folder is shown in the drawn title bar.
@@ -684,7 +727,8 @@ impl App {
         let now = self.now();
         if self.menu.is_some() {
             self.closing = None;
-        } else if shown.is_some() {
+        } else if shown.is_some() && !std::mem::take(&mut self.popups.dismissed) {
+            // Folds back, unless the compositor already took its popup away.
             self.closing = shown;
             self.menu_motion.close(now);
         } else if self.closing.is_some() && self.menu_motion.gone(now) {
@@ -711,7 +755,8 @@ impl App {
                 self.always = false;
             }
         }
-        Task::batch([task, self.preview_task()])
+        let popups = self.sync_popups();
+        Task::batch([task, self.preview_task(), popups])
     }
 
     /// Requests the preview of the selected item, if it changed.
@@ -1000,14 +1045,25 @@ impl App {
                     self.preview_fade = Some(Fade::new(0.0, 1.0, self.now(), motion::FADE));
                 }
             }
+            // Closing the window ends the program, whichever runtime holds it: the Wayland
+            // daemon would otherwise go on with no window.
+            Message::Window(WindowAction::Close) => return iced::exit(),
             Message::Window(action) => {
-                return window::latest().and_then(move |id| match action {
+                return self.on_window(move |id| match action {
                     WindowAction::Drag => window::drag(id),
                     WindowAction::Minimize => window::minimize(id, true),
                     WindowAction::Maximize => window::toggle_maximize(id),
                     WindowAction::Close => window::close(id),
                 });
             }
+            Message::WindowClosed(id) => {
+                if self.main.is_none_or(|main| main == id) {
+                    return iced::exit();
+                }
+                self.popup_closed(id);
+            }
+            // The surface requests of `iced_exwlshell`, which its runtime takes before `update`.
+            _ => {}
         }
         Task::none()
     }
@@ -1057,7 +1113,7 @@ impl App {
         match probe.frame(now, loaded) {
             Step::Open if self.config.maximized => Task::batch([
                 self.go(target),
-                window::latest().and_then(|id| window::maximize(id, true)),
+                self.on_window(|id| window::maximize(id, true)),
             ]),
             Step::Open => self.go(target),
             Step::Scroll => operation::scroll_by(
@@ -1703,12 +1759,17 @@ impl App {
     fn open_menu(&mut self, at: Point) {
         let on_selection = !self.selection.is_empty() && self.device_menu.is_none();
         let height = Self::menu_height(&self.menu_items(on_selection));
-        // Inside the window; a submenu opens on the left when the right has no room.
-        let at = Point::new(
-            at.x.min(self.size.width - metrics::CONTEXT_MENU_WIDTH)
-                .max(0.0),
-            at.y.min(self.size.height - height).max(0.0),
-        );
+        // Inside the window; a submenu opens on the left when the right has no room. A popup
+        // is placed by the compositor instead, which flips it at the screen's edges.
+        let at = if self.menus_in_popups() {
+            at
+        } else {
+            Point::new(
+                at.x.min(self.size.width - metrics::CONTEXT_MENU_WIDTH)
+                    .max(0.0),
+                at.y.min(self.size.height - height).max(0.0),
+            )
+        };
         self.menu = Some(Menu {
             at,
             on_selection,
