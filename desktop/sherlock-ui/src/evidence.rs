@@ -124,6 +124,14 @@ pub const GRID_TILE_EXTRA: f32 = 40.0;
 pub const GRID_LABEL_HEIGHT: f32 = 36.0;
 pub const GRID_GAP: f32 = 8.0;
 pub const GRID_TILE_PADDING: f32 = 6.0;
+/// The gallery (lot E-13c): the strip under the item shown large, its tiles and their icons,
+/// the icon shown large when there is no picture, and the widest a text is shown.
+pub const GALLERY_STRIP: f32 = 104.0;
+pub const GALLERY_STRIP_PADDING: f32 = 10.0;
+pub const GALLERY_TILE: f32 = 84.0;
+pub const GALLERY_STRIP_ICON: f32 = 48.0;
+pub const GALLERY_ICON: f32 = 160.0;
+pub const GALLERY_TEXT_WIDTH: f32 = 720.0;
 /// A column of the columns view (lot E-13b), its rule included.
 pub const COLUMN_WIDTH: f32 = 240.0;
 /// The view's slider, as wide as a short field.

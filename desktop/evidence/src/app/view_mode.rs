@@ -8,13 +8,14 @@ use sherlock_ui::evidence as more;
 use sherlock_ui::metrics;
 use sherlock_ui::motion::Fade;
 
-use super::{App, LIST, Location, Message};
+use super::{App, LIST, Location, Message, STRIP};
 use crate::views::{ViewMode, clamp_icon};
 
 impl App {
-    /// The views the window can show now: the gallery comes with lot E-13c.
+    /// The views the window can show now: all of them since lot E-13c.
     pub fn view_available(&self, mode: ViewMode) -> bool {
-        matches!(mode, ViewMode::List | ViewMode::Icons | ViewMode::Columns)
+        let _ = mode;
+        true
     }
 
     /// Shows the folder as `mode`, fading in, and remembers it for this folder.
@@ -35,6 +36,10 @@ impl App {
             self.view_memory.set(dir, mode);
         }
         self.scroll.0 = 0.0;
+        // The gallery always shows an item large: the first, when none is selected.
+        if mode == ViewMode::Gallery && self.selection.is_empty() && !self.entries.is_empty() {
+            self.select_only(0);
+        }
         Task::batch([
             operation::scroll_to(LIST, scrollable::AbsoluteOffset { x: 0.0, y: 0.0 }),
             self.save_views(),
@@ -164,6 +169,19 @@ impl App {
     pub fn item_at(&self, x: f32, y: f32) -> Option<usize> {
         match self.view_mode {
             ViewMode::Icons => self.tile_at(x, y),
+            // In the gallery, the tiles of the strip at the bottom of the listing.
+            ViewMode::Gallery => {
+                let top = self.list_height() - more::GALLERY_STRIP + more::GALLERY_STRIP_PADDING;
+                let step = more::GALLERY_TILE + more::GRID_GAP;
+                // Each tile comes after a gap, the first one too.
+                let x = x + self.strip_offset - more::GRID_GAP;
+                let index = (x.max(0.0) / step) as usize;
+                let inside = x >= 0.0
+                    && y >= top
+                    && y < top + more::GALLERY_TILE
+                    && x - index as f32 * step < more::GALLERY_TILE;
+                (inside && index < self.entries.len()).then_some(index)
+            }
             // Only the column of the folder shown holds the items.
             ViewMode::Columns
                 if x < self.shown_column_left()
@@ -176,6 +194,30 @@ impl App {
                 (row >= 0.0 && (row as usize) < self.entries.len()).then_some(row as usize)
             }
         }
+    }
+
+    /// The tiles of the gallery's strip in sight, with a margin: first and past the last.
+    pub fn strip_range(&self) -> (usize, usize) {
+        let step = more::GALLERY_TILE + more::GRID_GAP;
+        let total = self.entries.len();
+        let first = ((self.strip_offset / step).floor().max(0.0) as usize).saturating_sub(2);
+        let last = ((self.strip_offset + self.content_width()) / step).ceil() as usize + 2;
+        (first.min(total), last.min(total))
+    }
+
+    /// Scrolls the gallery's strip so that tile `index` is in sight.
+    pub(super) fn reveal_in_strip(&mut self, index: usize) -> Task<Message> {
+        let step = more::GALLERY_TILE + more::GRID_GAP;
+        let (left, width) = (index as f32 * step, self.content_width());
+        let x = if left < self.strip_offset {
+            left
+        } else if left + step > self.strip_offset + width {
+            left + step - width
+        } else {
+            return Task::none();
+        };
+        self.strip_offset = x;
+        operation::scroll_to(STRIP, scrollable::AbsoluteOffset { x, y: 0.0 })
     }
 
     /// Items from one line to the next: a line of tiles in the grid, else one row.

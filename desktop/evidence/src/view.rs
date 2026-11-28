@@ -30,6 +30,7 @@ use crate::pathbar::visible;
 use crate::preview::{Preview, Real};
 
 mod columns;
+mod gallery;
 mod grid;
 mod path;
 
@@ -486,6 +487,8 @@ impl App {
         let headers: Element<'_, Message> = match self.view_mode {
             ViewMode::Icons => self.grid_header(),
             ViewMode::Columns => self.columns_header(),
+            // The gallery names its item under it: nothing above, at the headers' height.
+            ViewMode::Gallery => space().height(metrics::LIST_HEADER_HEIGHT).into(),
             _ => container(headers)
                 .height(metrics::LIST_HEADER_HEIGHT)
                 .padding([0.0, metrics::LIST_ROW_PADDING])
@@ -497,7 +500,9 @@ impl App {
         // group opacity in iced, the fade is a veil of the window background laid on top,
         // which fades away.
         let reveal = self.content_fade.as_ref().map_or(1.0, |f| f.value(now));
-        let content: Element<'_, Message> = if self.view_mode == ViewMode::Columns {
+        let content: Element<'_, Message> = if self.view_mode == ViewMode::Gallery {
+            self.gallery_view()
+        } else if self.view_mode == ViewMode::Columns {
             // The columns keep the folders above an empty one (lot E-13b).
             self.columns_view(now, (1.0 - reveal) * metrics::LIST_SLIDE)
         } else if self.entries.is_empty() {

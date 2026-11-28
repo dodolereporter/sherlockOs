@@ -72,6 +72,8 @@ pub(crate) static FIRST_VIEW: AtomicBool = AtomicBool::new(false);
 
 /// Identifiers of the widgets the application drives.
 pub const LIST: &str = "list";
+/// The gallery's strip (lot E-13c).
+pub const STRIP: &str = "gallery-strip";
 pub const SEARCH: &str = "search";
 pub const RENAME: &str = "rename";
 pub const CHOOSER_SEARCH: &str = "chooser-search";
@@ -330,6 +332,8 @@ pub enum Message {
     Peeked(DirColumn),
     ColumnClick(usize, usize),
     PeekClick(usize),
+    /// The gallery's strip scrolled sideways (lot E-13c).
+    StripScrolled(f32),
     Key(keyboard::Event),
     Modifiers(Modifiers),
     /// The pointer, in the window, read by the view itself: it arrives before a press in the
@@ -501,6 +505,8 @@ pub struct App {
     /// The columns above the folder shown, and the one on its right (lot E-13b).
     pub(crate) column_dirs: Vec<DirColumn>,
     pub(crate) peek: Option<DirColumn>,
+    /// How far the gallery's strip is scrolled (lot E-13c).
+    strip_offset: f32,
     /// The large preview is open, and its zoom in or out (lot E-12).
     pub(crate) looking: bool,
     pub(crate) look_fade: Option<Fade>,
@@ -635,6 +641,7 @@ impl App {
             views_file: None,
             column_dirs: Vec::new(),
             peek: None,
+            strip_offset: 0.0,
             looking: false,
             look_fade: None,
             preview_pinned: false,
@@ -849,7 +856,8 @@ impl App {
     /// The panes and columns the window's width leaves room for (lot E-05).
     pub fn panes(&self) -> crate::layout::Panes {
         // The columns show the preview in their last column (lot E-13b): no pane beside.
-        let preview = self.show_preview && self.view_mode != ViewMode::Columns;
+        let preview =
+            self.show_preview && !matches!(self.view_mode, ViewMode::Columns | ViewMode::Gallery);
         crate::layout::Panes::at(self.size.width, preview, self.preview_pinned)
     }
 
@@ -1116,6 +1124,7 @@ impl App {
             Message::Peeked(column) => self.peeked(column),
             Message::ColumnClick(depth, index) => return self.column_click(depth, index),
             Message::PeekClick(index) => return self.peek_click(index),
+            Message::StripScrolled(x) => self.strip_offset = x,
             Message::Back => {
                 if let Some(previous) = self.history.pop() {
                     let current = std::mem::replace(&mut self.location, previous);
@@ -1713,6 +1722,13 @@ impl App {
         self.refilter();
         let pending = std::mem::take(&mut self.pending);
         self.select_paths(&pending);
+        // The gallery always shows an item large (lot E-13c).
+        if self.view_mode == ViewMode::Gallery
+            && self.selection.is_empty()
+            && !self.entries.is_empty()
+        {
+            self.select_only(0);
+        }
         if std::mem::take(&mut self.fresh) {
             self.highlight = None;
             self.content_fade = Some(Fade::new(0.0, 1.0, self.now(), motion::FADE));
@@ -1787,6 +1803,9 @@ impl App {
         } else {
             self.select_only(index);
         }
+        if self.view_mode == ViewMode::Gallery {
+            return self.reveal_in_strip(index);
+        }
         let (top, row) = self.item_span(index);
         let (offset, height) = self.scroll;
         let y = if top < offset {
@@ -1819,7 +1838,7 @@ impl App {
     }
 
     /// Height of the visible part of the listing.
-    fn list_height(&self) -> f32 {
+    pub(crate) fn list_height(&self) -> f32 {
         let below = metrics::BORDER_WIDTH + metrics::STATUS_BAR_HEIGHT;
         self.size.height - self.list_origin().y - below
     }
@@ -1866,6 +1885,8 @@ impl App {
         if lasso.dragging {
             let (top, row) = (metrics::LIST_TOP_GAP, metrics::LIST_ROW_HEIGHT);
             self.selection = match self.view_mode {
+                // The gallery has no lasso: its strip is a single line.
+                ViewMode::Gallery => lasso.base.clone(),
                 ViewMode::Icons => {
                     let rect = lasso.rect();
                     let lasso = lasso.clone();
@@ -2424,11 +2445,15 @@ impl App {
                 self.update(Message::Up)
             }
             // In the grid, the arrows go from tile to tile, a line up or down.
-            Key::Named(Named::ArrowRight) if self.view_mode == ViewMode::Icons => {
+            Key::Named(Named::ArrowRight)
+                if matches!(self.view_mode, ViewMode::Icons | ViewMode::Gallery) =>
+            {
                 let to = self.selection.cursor().map_or(0, |c| c + 1);
                 self.move_cursor(to, shift)
             }
-            Key::Named(Named::ArrowLeft) if self.view_mode == ViewMode::Icons => {
+            Key::Named(Named::ArrowLeft)
+                if matches!(self.view_mode, ViewMode::Icons | ViewMode::Gallery) =>
+            {
                 let to = self.selection.cursor().map_or(0, |c| c.saturating_sub(1));
                 self.move_cursor(to, shift)
             }
