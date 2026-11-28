@@ -156,8 +156,8 @@ mod tests {
             let mut renderer = renderer;
             let scene = Scene::new(&mut renderer).unwrap();
             let mut textures = wallpaper::Textures::default();
-            state.set_capturer(Box::new(move |state, target| {
-                capture::image(&scene, &mut renderer, &mut textures, state, target)
+            state.set_capturer(Box::new(move |state, target, _| {
+                capture::image(&scene, &mut renderer, &mut textures, state, target, None)
             }));
             state.enable_screenshots(Settings {
                 pictures: Some(dir.join("pictures")),
@@ -319,7 +319,7 @@ mod tests {
         let mut textures = wallpaper::Textures::default();
         let target = Target::Screen(output);
         let mut draw = |state: &mut State| {
-            let shot = capture::image(&scene, &mut renderer, &mut textures, state, &target)?;
+            let shot = capture::image(&scene, &mut renderer, &mut textures, state, &target, None)?;
             image::RgbaImage::from_raw(shot.width, shot.height, shot.rgba)
         };
         let before = draw(&mut state)?;
