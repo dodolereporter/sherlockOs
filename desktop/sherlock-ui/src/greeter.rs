@@ -52,6 +52,17 @@ pub const ARRIVAL_SPRING: Spring = motion::OPEN_SPRING;
 pub const ARRIVAL_STAGGER: Duration = Duration::from_millis(60);
 pub const ARRIVAL_WINDOW: Duration = Duration::from_secs(15);
 
+/// The desktop revealed, at the opening of the session and at the unlock (lot D-24g): the
+/// wallpaper comes from `ARRIVAL_ZOOM_FROM` back to its size over `ARRIVAL_ZOOM`, while the
+/// blurred picture of the curtain leaves it; the windows reappear one after another, the front
+/// one first, each fading in and growing as it opens, over `REAPPEAR`, `REAPPEAR_STAGGER`
+/// apart, the last one starting `REAPPEAR_LAST` at the latest: all done within 800 ms.
+pub const ARRIVAL_ZOOM_FROM: f64 = 1.05;
+pub const ARRIVAL_ZOOM: Duration = Duration::from_millis(700);
+pub const REAPPEAR: Duration = Duration::from_millis(250);
+pub const REAPPEAR_STAGGER: Duration = Duration::from_millis(40);
+pub const REAPPEAR_LAST: Duration = Duration::from_millis(500);
+
 /// The texts of the screen.
 pub const OTHER: &str = "Autre…";
 pub const USER_NAME: &str = "Nom d'utilisateur";
