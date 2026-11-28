@@ -252,6 +252,13 @@ are built once (`sherlock_ui::component::icon` caches the SVG handles).
   | ![Menu on the background, Trier par open](evidence/menu-background-dark.png) | ![Menu on the background, light](evidence/menu-background-light.png) |
 
   Halfway through unfolding, software renderer: ![Menu unfolding](evidence/menu-opening.png)
+- Undo and redo (lot E-10, `undo`): Ctrl+Z undoes the last rename, move, move to the trash,
+  new folder, copy or duplicate; Ctrl+Maj+Z (or Ctrl+Y) redoes it; both are in the bar's
+  « Édition » menu, greyed when there is nothing to do. Each step undone gives the step that
+  redoes it: a rename or a move goes back, an item from the trash comes back to its place, and
+  what Evidence made goes to the trash, never deleted for good (without a trash it is not
+  undone). A new step forgets what was undone. Each list keeps 50 steps, for the session; the
+  work runs off the interface thread, and the items concerned are selected afterwards.
 - The folder shown is watched (lot E-09, `watch`): inotify on the folder, on a thread of its
   own, so that a file downloaded, made in a terminal or removed by another program shows or goes
   without F5. Changes closer than 100 ms are one, and the folder is read again at most every
