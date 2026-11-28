@@ -171,6 +171,9 @@ pub mod text {
     pub const TRASH: &str = "Corbeille";
     pub const EMPTY_TRASH: &str = "Vider la corbeille";
     pub const EMPTY_TRASH_CONFIRM: &str = "Reclique pour vider";
+    // The downloads stack (D-21k).
+    pub const OPEN_IN_EVIDENCE: &str = "Ouvrir dans Evidence";
+    pub const STACK_EMPTY: &str = "Aucun fichier";
     pub const QUIT: &str = "Quitter";
     // The options of an icon and the end of its menu (D-21i).
     pub const OPTIONS: &str = "Options";
@@ -225,26 +228,99 @@ pub fn applications_icon() -> String {
 /// The trash of the dock (lot D-21j): a bin on the dock's tile, drawn with `Icon::Trash`'s
 /// strokes in cream, and when it is full, sheets of paper in it.
 pub fn trash_icon(full: bool) -> String {
-    let accent = hex(crate::color::ACCENT);
     let papers = if full {
         format!(
-            "<path d=\"M9.5 9.5l1 7M14.5 9.5l-1 7M12 9v7.5\" stroke=\"{accent}\" stroke-width=\"1.3\" \
-         stroke-linecap=\"round\"/>"
+            "<path d=\"M9.5 9.5l1 7M14.5 9.5l-1 7M12 9v7.5\" stroke=\"{}\" stroke-width=\"1.3\" \
+             stroke-linecap=\"round\"/>",
+            hex(crate::color::ACCENT)
         )
     } else {
         String::new()
     };
+    stroked_tile(crate::icon::Icon::Trash.path(), &papers)
+}
+
+/// The downloads stack of the dock (lot D-21k): `Icon::Download`'s arrow over a folder.
+pub fn stack_icon() -> String {
+    let folder = crate::icon::Icon::Folder.path();
+    let arrow = format!(
+        "<g transform=\"translate(7.2 7.8) scale(.4)\" fill=\"none\" stroke=\"{}\" \
+         stroke-width=\"3\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"{}\"/></g>",
+        hex(crate::color::ACCENT),
+        crate::icon::Icon::Download.path()
+    );
+    stroked_tile(folder, &arrow)
+}
+
+/// A dock tile with `path` stroked in cream over it, then `extra` (lots D-21j, D-21k).
+fn stroked_tile(path: &str, extra: &str) -> String {
     format!(
         "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\"><rect width=\"24\" \
          height=\"24\" rx=\"5.28\" fill=\"{tile}\"/><g transform=\"translate(2.4 2.4) scale(.8)\" \
          fill=\"none\" stroke=\"{ink}\" stroke-width=\"1.6\" stroke-linecap=\"round\" \
-         stroke-linejoin=\"round\"><path d=\"{bin}\"/></g>{papers}<rect x=\".09\" y=\".09\" \
+         stroke-linejoin=\"round\"><path d=\"{path}\"/></g>{extra}<rect x=\".09\" y=\".09\" \
          width=\"23.82\" height=\"23.82\" rx=\"5.19\" fill=\"none\" stroke=\"white\" \
          stroke-opacity=\".1\" stroke-width=\".18\"/></svg>",
         tile = hex(crate::color::TILE_APPLICATIONS),
         ink = hex(crate::color::CREAM),
-        bin = crate::icon::Icon::Trash.path(),
     )
+}
+
+// The grid of a stack (lot D-21k), opened over the dock: columns, a cell and its icon, the gap
+// between cells, the padding around them, the height of the button below.
+pub const STACK_COLUMNS: usize = 4;
+pub const STACK_CELL: (f32, f32) = (96.0, 88.0);
+pub const STACK_ICON: f32 = 44.0;
+pub const STACK_GAP: f32 = 4.0;
+pub const STACK_PADDING: f32 = 12.0;
+pub const STACK_FOOTER: f32 = 40.0;
+
+/// Size of the grid of a stack of `count` items: width, then height.
+pub fn stack_size(count: usize) -> (f32, f32) {
+    let columns = count.clamp(1, STACK_COLUMNS);
+    let rows = count.div_ceil(STACK_COLUMNS).max(1);
+    let width =
+        2.0 * STACK_PADDING + columns as f32 * STACK_CELL.0 + (columns - 1) as f32 * STACK_GAP;
+    let height = 2.0 * STACK_PADDING
+        + MENU_HEADER_HEIGHT
+        + rows as f32 * STACK_CELL.1
+        + (rows - 1) as f32 * STACK_GAP
+        + STACK_FOOTER;
+    // Wide enough for its header and its button.
+    (width.max(MENU_WIDTH), height)
+}
+
+/// A cell of a stack's grid: `picture` over `name`, which ends with « … » when too long; a
+/// hover veil and a press, as a menu entry.
+#[cfg(feature = "iced")]
+pub fn stack_cell<'a, Message: Clone + 'a>(
+    picture: impl Into<iced::Element<'a, Message>>,
+    name: &'a str,
+    on_press: Message,
+) -> iced::Element<'a, Message> {
+    use iced::widget::column;
+    // As wide as the name, at most the cell: centered, or ended with « … ».
+    let name = crate::ellipsis::ellipsis(name).size(crate::typography::SMALL_SIZE);
+    let name = iced::widget::container(name)
+        .width(iced::Length::Fill)
+        .align_x(iced::alignment::Horizontal::Center);
+    let content = column![picture.into(), name]
+        .spacing(crate::metrics::GAP_INLINE)
+        .align_x(iced::Alignment::Center)
+        .width(iced::Length::Fill);
+    let mut cell = crate::component::Control::new(
+        content,
+        crate::theme::menu_item,
+        Some(on_press),
+        crate::metrics::MENU_ITEM_RADIUS,
+    );
+    cell.press_scale = crate::decorations::PRESS_SCALE;
+    cell.button = cell
+        .button
+        .width(STACK_CELL.0)
+        .height(STACK_CELL.1)
+        .padding([10.0, 6.0]);
+    cell.into()
 }
 
 fn hex(c: Color) -> String {

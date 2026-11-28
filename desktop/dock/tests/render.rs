@@ -631,6 +631,80 @@ fn the_trash_ends_the_dock_and_empties_on_a_second_click() {
     assert!(!dock.menu_lines(last)[1].enabled);
 }
 
+/// A downloads stack of `count` items, one with a long name.
+fn downloads(count: usize) -> dock::stack::Stack {
+    use sherlock_ui::icon::Icon;
+    let names = [
+        "rapport-trimestriel-version-finale-relue.pdf",
+        "photo.png",
+        "archive.zip",
+        "Projets",
+        "notes.txt",
+        "capture.jpg",
+    ];
+    let items = (0..count)
+        .map(|n| {
+            let name = names[n % names.len()];
+            let folder = name == "Projets";
+            let icon = match name.rsplit('.').next() {
+                _ if folder => Icon::Folder,
+                Some("png" | "jpg") => Icon::Image,
+                _ => Icon::Document,
+            };
+            dock::stack::Shown {
+                path: PathBuf::from("/home/me/Downloads").join(name),
+                name: name.to_owned(),
+                folder,
+                icon,
+            }
+        })
+        .collect();
+    dock::stack::Stack {
+        folder: PathBuf::from("/home/me/Downloads"),
+        name: String::from("Downloads"),
+        items,
+    }
+}
+
+/// Lot D-21k: the downloads stack stands before the trash; a click opens its grid over it, the
+/// newest first, a long name ending with « … », then « Ouvrir dans Evidence ». A right click
+/// gives its menu. `dock-stack`, `dock-stack-grid`, `dock-stack-grid-full`.
+#[test]
+fn the_downloads_stack_opens_its_grid() {
+    let _theme = in_theme(Theme::Dark);
+    let mut dock = sample();
+    let _ = dock.update(Message::Surface(Id::unique()));
+    let _ = dock.update(Message::Trash(false));
+    let _ = dock.update(Message::Stack(Some(downloads(6))));
+    let _ = dock.tick(Duration::from_secs(5));
+    let names: Vec<&str> = dock.items.iter().map(|i| i.name.as_str()).collect();
+    assert_eq!(names[names.len() - 2..], ["Downloads", "Corbeille"]);
+    let ui = Simulator::with_size(dock::settings(), size(&dock), on_desktop(dock.view_dock()));
+    assert!(capture(ui, "dock-stack").expect("screenshot") > 2_000);
+
+    let index = dock.items.len() - 2;
+    assert_eq!(dock.menu_lines(index)[0].label, "Ouvrir dans Evidence");
+    for (count, name) in [(6, "dock-stack-grid"), (16, "dock-stack-grid-full")] {
+        let _ = dock.update(Message::Stack(Some(downloads(count))));
+        let _ = dock.press_icon(index);
+        assert!(dock.menu_open(), "the grid opens");
+        unfolded(&mut dock);
+        let (width, height) = sherlock_ui::dock::stack_size(count);
+        let mut ui = Simulator::with_size(
+            dock::settings(),
+            (width, height),
+            on_desktop(dock.view_menu()),
+        );
+        assert!(ui.find("photo.png").is_ok());
+        assert!(ui.find("Ouvrir dans Evidence").is_ok());
+        assert!(capture(ui, name).expect("screenshot") > 2_000);
+        // An item picked: the grid closes.
+        let _ = dock.update(Message::StackOpen(usize::MAX));
+        let _ = dock.tick(dock.now() + Duration::from_secs(1));
+        assert!(!dock.menu_open());
+    }
+}
+
 /// Lot D-21l: on a screen too narrow for its icons, the dock shrinks them and its surface stays
 /// inside the screen, 8 from each end; on 1920 it keeps its size. `dock-fitted-1920`,
 /// `dock-fitted-520`.

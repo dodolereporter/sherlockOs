@@ -185,6 +185,11 @@ pub fn trash_entries(full: bool, armed: bool) -> Vec<Line> {
     ]
 }
 
+/// The menu of a stack (lot D-21k): its folder opened in Evidence.
+pub fn stack_entries() -> Vec<Line> {
+    vec![Line::new(Entry::Open, text::OPEN_IN_EVIDENCE, true)]
+}
+
 /// Size of the menu surface for `lines`: width, then height.
 pub fn surface_size(lines: &[Line]) -> (u32, u32) {
     let separator = metrics::BORDER_WIDTH + 2.0 * metrics::MENU_SEPARATOR_MARGIN.0;
