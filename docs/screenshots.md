@@ -90,7 +90,10 @@ measures of `sherlock_ui::screenshot_tool` are choices of the lot, to review wit
   being chosen when the console is left (`forget_intercepted_keys`, which `pause` calls): back
   on it, the screen is not dimmed any more.
 - **Never in the loop.** Encoding the PNG, writing it and sending the notification run on a
-  thread of their own (`screenshots`). The PNG comes back to the loop, which makes it the
+  thread of their own (`screenshots`). The notification goes through one more thread
+  (`screenshot-notify`, Q-42), each call limited to 5 s: a notifications daemon that no longer
+  answers never holds the next screenshots back. Past 4 confirmations waiting, the next ones
+  are left out (logged), and the connection is made again after an error. The PNG comes back to the loop, which makes it the
   selection of the seat. A client that pastes it gets it written by the loop, into its pipe made
   non-blocking, as the pipe takes it: no thread per paste, and at most 8 pastes under way
   (`MAX_PASTES`); past them a paste is refused, so that a client that asks without reading

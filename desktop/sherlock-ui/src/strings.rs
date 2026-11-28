@@ -47,6 +47,9 @@ pub mod top_bar {
     pub const LOCK: &str = "Verrouiller";
     pub const LOG_OUT: &str = "Fermer la session";
     pub const POWER_OFF: &str = "Éteindre";
+    /// The shortcuts the compositor binds, shown beside their entry (lot Q-31).
+    pub const SETTINGS_KEYS: &str = "Super+,";
+    pub const LOCK_KEYS: &str = "Super+L";
 
     /// The button that holds the menus of the application that do not fit in the bar (lot
     /// D-36).

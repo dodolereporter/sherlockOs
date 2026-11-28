@@ -30,6 +30,7 @@ pub mod launcher;
 mod layer;
 pub mod layout;
 pub mod lock;
+pub mod log_sync;
 pub mod media_keys;
 pub mod mesa;
 pub mod mission_control;
@@ -42,6 +43,7 @@ pub mod perf;
 pub mod picture;
 pub mod popup_anim;
 pub mod render;
+pub mod screencast;
 pub mod screenshot_thumbnail;
 pub mod screenshot_tool;
 mod shell;
@@ -179,6 +181,9 @@ pub struct State {
     popups: PopupManager,
     /// Menu that a click elsewhere closes.
     popup_grab: Option<layer::PopupGrab>,
+    /// Screen capture sessions, for screen sharing (lot D-28b).
+    screencast: screencast::Screencast,
+
     /// The edges of fullscreen screens where the pointer brings the bar or the dock back
     /// (lot D-21e).
     reveals: fullscreen::Reveals,
@@ -196,6 +201,8 @@ pub struct State {
     gestures: gestures::Gestures,
     /// Touchpad setting and the touchpads it applies to (lot D-31).
     touchpad: touchpad::Touchpad,
+    /// Keyboard layout and repeat of `keyboard.conf` (lot D-26c).
+    keyboard_setting: keyboard::KeyboardSetting,
     /// Show the clicks: the setting and the rings of the last clicks (lot C-01).
     clicks: clicks::Clicks,
     /// Drag and drop: the icon, Escape, the bridge to X11 (lot D-29c).
@@ -208,6 +215,8 @@ pub struct State {
     nested: bool,
     /// Switches to another console (Ctrl + Alt + Fn), in a real session.
     switch_vt: Option<Box<dyn FnMut(i32)>>,
+    /// Writes the session's log to disk, while locked (lot D-25f).
+    log_sync: log_sync::LogSync,
     /// Frame statistics, with `--measure`.
     pub frame_stats: Option<stats::FrameStats>,
     /// Wallpaper setting and the images decoded for it.
@@ -220,6 +229,8 @@ pub struct State {
     socket_name: Option<OsString>,
     /// The program of Super + Space, if not the usual launcher (`launcher.rs`).
     launcher_program: Option<PathBuf>,
+    /// The program of Super + comma, if not Control Room (`launcher.rs`).
+    settings_program: Option<PathBuf>,
     /// The program of F4 and of the four finger pinch, if not the usual one (`launcher.rs`).
     applications_program: Option<PathBuf>,
     /// XWayland source in the loop, to stop it.
@@ -264,10 +275,11 @@ pub struct State {
     clipboard: clipboard_history::ClipboardHistory,
 }
 
-/// Delay before a held key repeats, in milliseconds, and repeats per second: given to the
-/// clients with the keyboard, and followed by the media keys.
-pub const KEY_REPEAT_DELAY: i32 = 200;
-pub const KEY_REPEAT_RATE: i32 = 25;
+/// Delay before a held key repeats, in milliseconds, and repeats per second, until the keyboard
+/// setting says otherwise (`keyboard.conf`, lot D-26c): given to the clients with the keyboard,
+/// and followed by the media keys.
+pub const KEY_REPEAT_DELAY: i32 = desktop_config::keyboard::DEFAULT_REPEAT_DELAY as i32;
+pub const KEY_REPEAT_RATE: i32 = desktop_config::keyboard::DEFAULT_REPEAT_RATE as i32;
 
 /// Data attached to each window.
 #[derive(Default)]
@@ -368,6 +380,8 @@ impl State {
             space: Space::default(),
             popups: PopupManager::default(),
             popup_grab: None,
+            screencast: screencast::Screencast::default(),
+
             reveals: fullscreen::Reveals::default(),
             unmapped_layers: Vec::new(),
             screens: Vec::new(),
@@ -379,22 +393,30 @@ impl State {
             gesture: None,
             gestures: gestures::Gestures::new(&dh),
             touchpad: touchpad::Touchpad::default(),
+            keyboard_setting: keyboard::KeyboardSetting::default(),
             clicks: clicks::Clicks::default(),
             dnd: dnd::Dnd::default(),
             cursor_status: CursorImageStatus::default_named(),
             intercepted_keys: Vec::new(),
             nested: false,
             switch_vt: None,
+            log_sync: log_sync::LogSync::new(
+                std::env::var_os(log_sync::LOG_VAR).map(std::path::PathBuf::from),
+            ),
             frame_stats: None,
             wallpaper: wallpaper::Wallpaper::default(),
             xwm: None,
             x_display: None,
             socket_name: None,
             launcher_program: None,
+            settings_program: None,
             applications_program: None,
             xwayland: None,
             listener: None,
-            shell: shell::Shell::new(&dh),
+            shell: {
+                screencast::create_globals(&dh);
+                shell::Shell::new(&dh)
+            },
             snap_gap: sherlock_ui::window::SNAP_GAP,
             minimize_effect: genie::Effect::default(),
             redraw_epoch: 0,
@@ -709,6 +731,7 @@ impl State {
         self.end_closings();
         self.end_popup_closings();
         self.end_clicks();
+        self.refresh_screencast();
         self.end_drag_return();
         self.refresh_reveals();
         self.unmapped_layers.retain(|(layer, _)| layer.alive());

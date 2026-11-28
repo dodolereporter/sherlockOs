@@ -127,6 +127,8 @@ enum Shortcut {
     ToggleOverview,
     /// Space: starts the launcher, or closes it (lot C-01).
     Launcher,
+    /// Comma: opens Control Room, as Cmd + , opens the settings on macOS (lot Q-31).
+    Settings,
     /// Super + V: the clipboard history (lot D-42).
     ClipboardHistory,
     /// F4 alone: opens or closes the applications view (lot D-41), as on macOS.
@@ -202,6 +204,7 @@ impl Shortcut {
             Keysym::Down => Some(Self::Restore),
             Keysym::Tab => Some(Self::ToggleOverview),
             Keysym::space => Some(Self::Launcher),
+            Keysym::comma => Some(Self::Settings),
             Keysym::v => Some(Self::ClipboardHistory),
             Keysym::l => Some(Self::Lock),
             _ => None,
@@ -753,6 +756,8 @@ impl State {
     pub fn keyboard_key(&mut self, key: Keycode, key_state: KeyState, time: u32) {
         self.queue_redraw();
         self.note_input();
+        // Locked: the lock program must answer (lot D-25f).
+        self.ping_lock_program();
         // A media key held repeats until its release, or until another key (lot D-35).
         self.stop_media_repeat((key_state == KeyState::Released).then_some(key));
         let Some(keyboard) = self.seat.get_keyboard() else {
@@ -877,6 +882,10 @@ impl State {
             }
             Shortcut::Applications => {
                 self.start_applications();
+                return;
+            }
+            Shortcut::Settings => {
+                self.start_settings();
                 return;
             }
             Shortcut::ClipboardHistory => {
@@ -1081,6 +1090,7 @@ impl State {
             return;
         }
         if self.is_locked() {
+            self.ping_lock_program();
             // Locked: the button goes to the lock surface under the pointer, which takes the
             // keyboard on a press (lot D-25a).
             if state == ButtonState::Pressed {
@@ -1160,8 +1170,8 @@ impl State {
                 Some(
                     Hit::Surface(window, ..) | Hit::Border(window, _) | Hit::Decoration(window, _),
                 ) => Some(window.clone()),
-                Some(Hit::Layer(layer, ..)) => {
-                    self.click_layer(layer);
+                Some(Hit::Layer(layer, surface, _)) => {
+                    self.click_layer(layer, surface);
                     pointer.button(self, &event);
                     pointer.frame(self);
                     return;

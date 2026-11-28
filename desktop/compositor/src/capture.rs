@@ -16,6 +16,7 @@ use std::{
     path::{Path, PathBuf},
     rc::Rc,
     sync::{Arc, mpsc},
+    time::Duration,
 };
 
 use sherlock_ui::{
@@ -247,7 +248,7 @@ fn encode(image: &Image) -> Result<Vec<u8>, image::ImageError> {
 
 /// The worker: each image written, put in the clipboard by the loop, then confirmed.
 fn work(settings: Settings, jobs: mpsc::Receiver<Job>, saved: channel::Sender<Taken>) {
-    let mut bus: Option<zbus::Connection> = None;
+    let notifier = notifier(settings.session_bus.clone());
     while let Ok(mut job) = jobs.recv() {
         if let Some(scale) = job.shadow {
             let shadow = sherlock_ui::color::palette().shadow;
@@ -299,23 +300,61 @@ fn work(settings: Settings, jobs: mpsc::Receiver<Job>, saved: channel::Sender<Ta
         if saved.send(taken).is_err() {
             return;
         }
-        let sent = zbus::block_on(async {
-            if bus.is_none() {
-                let builder = match &settings.session_bus {
-                    Some(address) => zbus::connection::Builder::address(address.as_str())?,
-                    None => zbus::connection::Builder::session()?,
-                };
-                bus = Some(builder.build().await?);
-            }
-            match &bus {
-                Some(bus) => system_services::notify::send(bus, ui::APP, title, &body)
-                    .await
-                    .map_err(|p| zbus::Error::Failure(p.to_string())),
-                None => Ok(0),
+        // Handed to the notifier: a notifications daemon that no longer answers never holds
+        // the next screenshots back. Past a few waiting, the confirmation is left out.
+        if let Some(notifier) = &notifier
+            && notifier.try_send((title, body)).is_err()
+        {
+            tracing::warn!("screenshot notification left out: the notifier is behind");
+        }
+    }
+}
+
+/// Longest wait for the notifications daemon, to connect or to answer.
+const NOTIFY_LIMIT: Duration = Duration::from_secs(5);
+
+/// Confirmations waiting for the notifier, at most.
+const NOTIFY_QUEUE: usize = 4;
+
+/// A confirmation: its title and its text.
+type Confirmation = (&'static str, String);
+
+/// A thread of its own that sends the confirmations of the screenshots on the session bus at
+/// `address` (the session's without one), each call limited to `NOTIFY_LIMIT`. Its connection
+/// is made again after an error: a bus or a daemon that restarted is found again.
+fn notifier(address: Option<String>) -> Option<mpsc::SyncSender<Confirmation>> {
+    let (sender, confirmations) = mpsc::sync_channel::<Confirmation>(NOTIFY_QUEUE);
+    let spawned = std::thread::Builder::new()
+        .name(String::from("screenshot-notify"))
+        .spawn(move || {
+            let mut bus: Option<zbus::Connection> = None;
+            while let Ok((title, body)) = confirmations.recv() {
+                let sent = zbus::block_on(async {
+                    if bus.is_none() {
+                        let builder = match &address {
+                            Some(address) => zbus::connection::Builder::address(address.as_str())?,
+                            None => zbus::connection::Builder::session()?,
+                        };
+                        bus = Some(builder.method_timeout(NOTIFY_LIMIT).build().await?);
+                    }
+                    match &bus {
+                        Some(bus) => system_services::notify::send(bus, ui::APP, title, &body)
+                            .await
+                            .map_err(|p| zbus::Error::Failure(p.to_string())),
+                        None => Ok(0),
+                    }
+                });
+                if let Err(err) = sent {
+                    tracing::warn!("screenshot notification: {err}");
+                    bus = None;
+                }
             }
         });
-        if let Err(err) = sent {
-            tracing::warn!("screenshot notification: {err}");
+    match spawned {
+        Ok(_) => Some(sender),
+        Err(err) => {
+            tracing::warn!("cannot start the screenshot notifier: {err}");
+            None
         }
     }
 }
@@ -367,6 +406,15 @@ impl State {
     /// How the backend draws a screenshot.
     pub fn set_capturer(&mut self, capturer: Capturer) {
         self.capture.capturer = Some(capturer);
+    }
+
+    /// Draws `target` with the backend's capturer, for screen sharing (lot D-28b). `None`
+    /// without a renderer.
+    pub(crate) fn draw_capture(&mut self, target: &Target) -> Option<Image> {
+        let mut capturer = self.capture.capturer.take()?;
+        let image = capturer(self, target);
+        self.capture.capturer = Some(capturer);
+        image
     }
 
     pub(crate) fn takes_screenshots(&self) -> bool {
@@ -602,6 +650,33 @@ pub fn image(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_daemon_that_never_answers_holds_no_screenshot_back() {
+        // A bus that takes the connection and never says a word: the notifier waits there,
+        // the screenshots go on, and past a few waiting the confirmations are left out.
+        let dir = std::env::temp_dir().join(format!("capture-notify-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let socket = dir.join("bus");
+        let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+        let notifier = notifier(Some(format!("unix:path={}", socket.display()))).unwrap();
+        notifier
+            .try_send((ui::SAVED, String::from("first")))
+            .unwrap();
+        // The notifier took the first one and waits on the silent bus.
+        let _held = listener.accept().unwrap();
+        let start = std::time::Instant::now();
+        let taken = (0..20)
+            .filter(|n| notifier.try_send((ui::SAVED, format!("shot {n}"))).is_ok())
+            .count();
+        assert!(start.elapsed() < Duration::from_millis(500));
+        assert!(
+            (NOTIFY_QUEUE - 1..=NOTIFY_QUEUE).contains(&taken),
+            "{taken}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn the_keys_choose_what_is_taken() {
