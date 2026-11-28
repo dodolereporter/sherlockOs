@@ -3489,6 +3489,7 @@ version = "0.0.0"
 dependencies = [
  "appearance-config",
  "iced",
+ "iced_exwlshell",
  "iced_renderer",
  "iced_runtime",
  "iced_test",
@@ -3886,6 +3887,8 @@ dependencies = [
 name = "system-services"
 version = "0.0.0"
 dependencies = [
+ "async-io",
+ "futures-lite",
  "libc",
  "thiserror 2.0.21",
  "tracing",

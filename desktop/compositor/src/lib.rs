@@ -4,6 +4,8 @@
 //! Architecture and tests: `docs/compositor.md`.
 
 pub mod anim;
+pub mod background_effect;
+pub mod blur;
 pub mod capture;
 pub mod card;
 pub mod clicks;
@@ -352,6 +354,8 @@ impl State {
                 },
             )
             .map_err(|err| err.error)?;
+        // The blur behind glass, asked for by any client (lot D-37, ADR 0027).
+        background_effect::create_global(&dh);
 
         Ok(Self {
             compositor_state: CompositorState::new::<Self>(&dh),
