@@ -29,6 +29,8 @@ impl Dock {
             .width(bar.width)
             .height(bar.height)
             .style(dock::bar);
+        // The blur behind the glass, over its rounded shape (lot D-37).
+        let glass = sherlock_ui::glass::glass(glass, metrics::DOCK_RADIUS);
         let mut layers = vec![place(glass, bar.x, bar.y)];
         if let Some(separator) = layout.separator {
             let line = container(space())
@@ -217,7 +219,9 @@ impl Dock {
                 }
                 entries.push(mouse_area(item).on_enter(Message::MenuHover(index)).into());
             }
-            ui::menu(entries, crate::menu::width(&menu.entries)).height(Length::Fill)
+            let menu = ui::menu(entries, crate::menu::width(&menu.entries)).height(Length::Fill);
+            // The blur behind its glass (lot D-37b).
+            sherlock_ui::glass::glass(menu, metrics::MENU_RADIUS)
         });
         // It unfolds from its icon: from the side facing the dock.
         let origin = match self.geometry.position {
@@ -263,8 +267,10 @@ fn glyph(glyph: &Glyph, side: f32, opacity: f32) -> Element<'static, Message> {
             .opacity(opacity)
             .into(),
         Glyph::Letter(letter) => {
+            // At least a pixel: an icon that appears from nothing has no side yet, and text of
+            // size 0 makes the text engine panic.
             let letter = text(letter.to_string())
-                .size(side * dock::LETTER_RATIO)
+                .size((side * dock::LETTER_RATIO).max(1.0))
                 .font(typography::TITLE)
                 .color(faded(dock::FALLBACK_LETTER));
             tile(letter, faded(dock::FALLBACK_TILE), side)

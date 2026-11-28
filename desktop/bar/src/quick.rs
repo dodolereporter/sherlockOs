@@ -330,6 +330,8 @@ pub enum Message {
     ToggleWifi,
     ShowNetworks(bool),
     Join(Network),
+    /// « Ouvrir les Réglages » under a network joined from Control Room only (lot D-26n).
+    OpenNetworkSettings,
     Password(Secret),
     SubmitPassword,
     /// The join of a network ended: joined, its password refused, failed or too long.
@@ -652,6 +654,8 @@ impl Quick {
                 }
             }
             Message::Join(chosen) => return self.join(chosen),
+            // Started by the bar, which has the programs (`app.rs`).
+            Message::OpenNetworkSettings => {}
             Message::Password(typed) => self.password = typed,
             Message::SubmitPassword => return self.submit(),
             Message::Joined(network, result) => return self.joined(network, result),
@@ -1536,7 +1540,10 @@ impl Quick {
             return item;
         }
         if network.security == Security::Other {
-            let line = ui::description(words::ENTERPRISE);
+            let open =
+                ui::secondary_button(words::OPEN_SETTINGS, Some(Message::OpenNetworkSettings));
+            let line =
+                column![ui::description(words::ENTERPRISE), open].spacing(metrics::GAP_TIGHT);
             return column![item, container(line).padding(inset)].into();
         }
         column![item, self.password_row()].into()

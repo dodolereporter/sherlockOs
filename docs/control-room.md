@@ -2,7 +2,8 @@
 
 Control Room is the settings application of the desktop (lot D-26a). Each setting is written to
 the file that its program already reads and follows live: nothing has to be restarted, and every
-setting survives a restart. The look follows the « Réglages » board
+setting survives a restart. It opens from « Réglages » in the bar's Sherlock menu, or with
+Super + comma (lot Q-31). The look follows the « Réglages » board
 (`docs/design/planches/Reglages.dc.html`): a sidebar of 240 with the search on top, the page on
 the right in cards. Its sizes, motions and French texts are in `sherlock_ui::control_room`.
 
@@ -54,6 +55,23 @@ and flushing the files to the disk never happen on the interface thread: a batch
 goes to a task (`Writes::run`), one batch at a time, in the order of the changes; the changes
 made meanwhile wait for the next batch and stay shown. The wallpapers installed are found by
 the same task that reduces their thumbnails, once: drawing the page never looks at the disk.
+
+**Network (lot D-26n).** The « Réseau » page switches the Wi-Fi on or off, lists the networks
+around (read again every 5 seconds while the page is open, « Rechercher » asks for a new scan),
+and joins one: an open network at once; a protected one through its saved connection, else
+with the password asked under it; a network flagged WEP or 802.1X (WPA2 or WPA3 Enterprise, as
+eduroam) with a form: WEP and its key, or « Entreprise » with PEAP or TTLS (MSCHAPv2 inside),
+the identity, the password and the domain the server's certificate must name. « Autre
+réseau… » joins a hidden network by its name. « Oublier » deletes the saved connection of the
+network in use, with its secrets. Every call goes to NetworkManager on the system bus, off the
+interface thread (`system_services::network`, shared with the bar), and polkit asks where its
+policy wants it; the secrets are bounded (256 bytes, 32 for a name) and never logged.
+
+**One window (lot D-26n).** `control-room --page <id>` opens a page: `network`, `sound`,
+`appearance`, `keyboard`, `touchpad`, `lock`, `clipboard`, `apps`. The first Control Room listens on
+`$XDG_RUNTIME_DIR/sherlockos-control-room.sock`; a second one hands it its page (one line of at
+most 64 bytes) and leaves, and the window shows that page and takes the focus. The bar's
+« Ouvrir les Réglages », under a network it cannot join, runs `control-room --page network`.
 
 **Sound.** The page reads the outputs and the microphones with `pactl list sinks` and
 `list sources` (the monitors of the outputs left out), their defaults and volumes, off the
