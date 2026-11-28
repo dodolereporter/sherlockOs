@@ -151,6 +151,10 @@ impl App {
         if self.confirm_empty {
             layers.push(self.dialog());
         }
+        if let Some(login) = &self.login {
+            layers.push(self.login_sheet(login));
+        }
+
         if let Some((_, _, _, names)) = &self.pending_paste {
             layers.push(self.taken_dialog(names));
         }
@@ -897,6 +901,48 @@ impl App {
             .padding([more::TAB_PADDING, metrics::TOOLBAR_PADDING])
             .clip(true);
         column![reveal(bar).opacity(level), ui::divider()].into()
+    }
+
+    /// The sheet that asks a server's name and password (lot E-07b), fading in.
+    fn login_sheet<'a>(&'a self, login: &'a crate::app::Login) -> Element<'a, Message> {
+        use crate::app::Field;
+        let field = |placeholder: &str, value: &'a str, which: Field| {
+            ui::text_field(placeholder, value, None)
+                .on_input(move |text| Message::LoginInput(which, text))
+                .on_submit(Message::LoginSubmit)
+        };
+        let remember = row![
+            ui::toggle(login.remember, Some(Message::LoginRemember)),
+            ui::description(t::LOGIN_REMEMBER),
+        ]
+        .spacing(metrics::GAP_ICON)
+        .align_y(Alignment::Center);
+        let card = column![
+            ui::body(t::login_title(&login.server))
+                .font(typography::UI_SEMIBOLD)
+                .size(typography::CARD_TITLE_SIZE),
+            ui::description(t::NETWORK_CREDENTIALS),
+            field(t::LOGIN_USER, &login.user, Field::User),
+            field(t::LOGIN_DOMAIN, &login.domain, Field::Domain),
+            field(t::LOGIN_PASSWORD, &login.password, Field::Password).secure(true),
+            remember,
+            row![
+                space::horizontal(),
+                ui::secondary_button(t::CANCEL, Some(Message::LoginCancel)),
+                ui::primary_button(t::LOGIN_CONNECT, Some(Message::LoginSubmit)),
+            ]
+            .spacing(metrics::BUTTON_STACK_GAP),
+        ]
+        .spacing(metrics::PREVIEW_GAP);
+        let panel = ui::floating_panel(card, metrics::DIALOG_WIDTH);
+        let level = self
+            .login_fade
+            .as_ref()
+            .map_or(1.0, |f| f.value(self.now()));
+        let panel = reveal(panel)
+            .opacity(level)
+            .offset(0.0, (1.0 - level) * metrics::LIST_SLIDE);
+        opaque(container(panel).center(Length::Fill).style(theme::scrim))
     }
 
     /// The large preview of Space, after the Finder's Quick Look (lot E-12): the item's name,

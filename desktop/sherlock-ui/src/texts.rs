@@ -121,6 +121,15 @@ pub mod evidence {
         format!("Connexion à {server}…")
     }
     pub const DISCONNECTED: &str = "Le serveur est déconnecté.";
+    /// The sheet that asks a server's name and password (lot E-07b).
+    pub fn login_title(server: &str) -> String {
+        format!("Se connecter à {server}")
+    }
+    pub const LOGIN_USER: &str = "Nom d'utilisateur";
+    pub const LOGIN_DOMAIN: &str = "Domaine (facultatif)";
+    pub const LOGIN_PASSWORD: &str = "Mot de passe";
+    pub const LOGIN_REMEMBER: &str = "Retenir dans le trousseau";
+    pub const LOGIN_CONNECT: &str = "Se connecter";
     pub const SYSTEM_DISK: &str = "Disque système";
     pub const MOUNT: &str = "Monter";
     pub const UNMOUNT: &str = "Démonter";

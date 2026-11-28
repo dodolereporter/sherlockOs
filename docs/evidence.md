@@ -285,8 +285,14 @@ are built once (`sherlock_ui::component::icon` caches the SVG handles).
   click mounts the server as a guest through gvfs (`gio mount --anonymous smb://host/`, `smb`),
   without root, off the interface thread with a 30 s limit, then opens the folder gvfs shows it
   in (`gio info`, « local path »); an eject button beside it unmounts it. Without gvfs, the
-  status bar says so. Servers that want a name and a password say so for now: the sheet that
-  asks for them, and the Secret Service keyring, come in E-07b.
+  status bar says so. A server that wants a name and a password opens a sheet that asks for them
+  (name, optional domain, hidden password, Enter sends, Escape closes); with « Retenir dans le
+  trousseau » on, a connection that works keeps them in the Secret Service keyring (GNOME
+  Keyring, KWallet, KeePassXC), under the schema gvfs and Nautilus use
+  (`org.gnome.keyring.NetworkPassword`, protocol `smb`, the server), so that they share them;
+  the next connection reads them first (lot E-07b, `keyring`). Without a keyring, or with a
+  locked one, nothing is kept and the sheet asks again; every call to the keyring has a 5 s
+  limit and runs off the interface thread. The password never reaches a log.
 - Trash: deleting moves to the freedesktop trash (shared with Plasma, GNOME, `gio trash`).
   The trash view lists the original name, the deletion date read from the record, and the
   origin. Emptying asks first and deletes only what was listed when the question was asked.
