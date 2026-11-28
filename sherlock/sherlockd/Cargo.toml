@@ -33,6 +33,9 @@ libc = "=0.2.191"
 # The files server (A-13): openat2 with RESOLVE_BENEATH, and the *at calls on a held folder,
 # without unsafe; the peer of the Docker socket (A-14). The version the compositor already pins.
 rustix = { version = "=1.1.6", default-features = false, features = ["std", "fs", "net", "process"] }
+# The services server (A-16): systemd over D-Bus, blocking, on zbus's own executor; the version
+# and features the desktop already pins (system-services, Control Room).
+zbus = { version = "=5.19.0", default-features = false, features = ["async-io", "blocking-api"] }
 # Prints logs on standard error, level set by RUST_LOG.
 tracing-subscriber = { version = "=0.3.23", default-features = false, features = [
     "env-filter",
