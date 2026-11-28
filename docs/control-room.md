@@ -99,6 +99,28 @@ the wallpaper folders (`desktop_config::wallpaper::dirs`), from the smallest var
 reduced off the interface thread. An image of the user's (`path`) is named above the picker;
 choosing a wallpaper replaces it.
 
+### Bluetooth (D-26o)
+
+« Bluetooth » goes through BlueZ on the system bus with the code of the bar's quick settings
+(`system_services::bluetooth`, `src/bluetooth.rs`): a connection for reads (5 s at most per
+call) and one for actions (60 s, for polkit to ask), each call in a task, never on the
+interface thread. The page has:
+
+- the switch of the adapter; a refusal or a failure says so in its help line;
+- « Mes appareils », the paired devices, each with the glyph of its kind (headphones, mouse,
+  keyboard, phone, computer, gamepad), its name with « … » when too long, « Connecté · 80 % »
+  when BlueZ gives the battery, and « Connecter » or « Déconnecter », « Renommer » (a field,
+  64 characters at most, BlueZ's `Alias`) and « Oublier » (asked again under the device);
+- « Appareils à proximité », found by a scan that runs while the page is open and stops when
+  it is left (« Recherche… » beside its title), each with « Appairer »;
+- while a device pairs, the agent's question in a card: the code, « Confirmer » and
+  « Annuler ». Leaving the page cancels the pairing.
+
+One device at a time: its line says « Connexion… » or « Appairage… » and the other buttons wait.
+The page follows what BlueZ announces (`bluetooth::changes`): another program connecting a
+device, a battery level, a device found. `control-room --page bluetooth` and the bar's
+« Réglages Bluetooth… » open it once `--page` (#200, D-26n2) is there.
+
 ## Search
 
 The field on top of the sidebar finds a setting by its name, its page or the words people use
@@ -201,6 +223,13 @@ Sound, lock and default applications:
 ![Lock, light](control-room/lock-wide-light.png)
 ![Default applications](control-room/default-apps-wide-dark.png)
 ![Default applications, narrow, light](control-room/default-apps-narrow-light.png)
+
+Bluetooth (D-26o), a headset connected, a mouse paired, a speaker found; the question of a
+pairing; and the narrow window, light:
+
+![Bluetooth](control-room/bluetooth-wide-dark.png)
+![Bluetooth, pairing](control-room/bluetooth-pairing-wide-dark.png)
+![Bluetooth, narrow, light](control-room/bluetooth-narrow-light.png)
 
 Search: the part of each name that matched, in green:
 

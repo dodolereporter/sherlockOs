@@ -683,6 +683,7 @@ dependencies = [
  "tracing-subscriber",
  "wayland-client",
  "wayland-protocols-wlr",
+ "zbus",
 ]
 
 [[package]]

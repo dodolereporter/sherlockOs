@@ -2,6 +2,7 @@
 
 mod appearance;
 mod apps;
+mod bluetooth;
 mod clipboard;
 mod keyboard;
 mod lock;
