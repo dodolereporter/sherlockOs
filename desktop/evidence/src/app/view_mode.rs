@@ -12,10 +12,9 @@ use super::{App, LIST, Location, Message};
 use crate::views::{ViewMode, clamp_icon};
 
 impl App {
-    /// The views the window can show now: the columns and the gallery come with lots E-13b
-    /// and E-13c.
+    /// The views the window can show now: the gallery comes with lot E-13c.
     pub fn view_available(&self, mode: ViewMode) -> bool {
-        matches!(mode, ViewMode::List | ViewMode::Icons)
+        matches!(mode, ViewMode::List | ViewMode::Icons | ViewMode::Columns)
     }
 
     /// Shows the folder as `mode`, fading in, and remembers it for this folder.
@@ -23,8 +22,14 @@ impl App {
         if !self.view_available(mode) || mode == self.view_mode {
             return Task::none();
         }
+        let from = self.preview_level();
         self.view_mode = mode;
         self.highlight = None;
+        // The preview's pane slides away into the columns, and back (lot E-13b).
+        let to = if self.panes().preview { 1.0 } else { 0.0 };
+        if (to - from).abs() > f32::EPSILON {
+            self.preview_slide = Some(Fade::new(from, to, self.now(), more::PREVIEW_SLIDE));
+        }
         self.content_fade = Some(Fade::new(0.0, 1.0, self.now(), more::VIEW_SWITCH));
         if let Location::Folder(dir) = &self.location {
             self.view_memory.set(dir, mode);
@@ -33,13 +38,22 @@ impl App {
         Task::batch([
             operation::scroll_to(LIST, scrollable::AbsoluteOffset { x: 0.0, y: 0.0 }),
             self.save_views(),
+            self.load_columns(),
         ])
     }
 
-    /// The view remembered for the folder just opened, else the list.
+    /// The view remembered for the folder just opened, else the list (the columns while
+    /// browsing in them).
     pub(super) fn recall_view(&mut self) {
+        // The columns are a way of browsing: they stay while one goes down and up in them,
+        // unless the folder has its own view (lot E-13b).
+        let browsing = self.view_mode == ViewMode::Columns;
         let mode = match &self.location {
-            Location::Folder(dir) => self.view_memory.get(dir).unwrap_or_default(),
+            Location::Folder(dir) => match self.view_memory.get(dir) {
+                Some(mode) => mode,
+                None if browsing => ViewMode::Columns,
+                None => ViewMode::List,
+            },
             Location::Trash => ViewMode::List,
         };
         self.view_mode = if self.view_available(mode) {
@@ -89,7 +103,7 @@ impl App {
     }
 
     /// Width of the listing's content.
-    fn content_width(&self) -> f32 {
+    pub fn content_width(&self) -> f32 {
         let panes = self.panes();
         (self.size.width
             - panes.sidebar_width()
@@ -150,6 +164,13 @@ impl App {
     pub fn item_at(&self, x: f32, y: f32) -> Option<usize> {
         match self.view_mode {
             ViewMode::Icons => self.tile_at(x, y),
+            // Only the column of the folder shown holds the items.
+            ViewMode::Columns
+                if x < self.shown_column_left()
+                    || x >= self.shown_column_left() + more::COLUMN_WIDTH =>
+            {
+                None
+            }
             _ => {
                 let row = ((y - metrics::LIST_TOP_GAP) / metrics::LIST_ROW_HEIGHT).floor();
                 (row >= 0.0 && (row as usize) < self.entries.len()).then_some(row as usize)

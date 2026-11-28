@@ -29,6 +29,7 @@ use crate::listing::{Column as SortColumn, Entry, Kind};
 use crate::pathbar::visible;
 use crate::preview::{Preview, Real};
 
+mod columns;
 mod grid;
 mod path;
 
@@ -484,6 +485,7 @@ impl App {
             .align_y(Alignment::Center);
         let headers: Element<'_, Message> = match self.view_mode {
             ViewMode::Icons => self.grid_header(),
+            ViewMode::Columns => self.columns_header(),
             _ => container(headers)
                 .height(metrics::LIST_HEADER_HEIGHT)
                 .padding([0.0, metrics::LIST_ROW_PADDING])
@@ -495,7 +497,10 @@ impl App {
         // group opacity in iced, the fade is a veil of the window background laid on top,
         // which fades away.
         let reveal = self.content_fade.as_ref().map_or(1.0, |f| f.value(now));
-        let content: Element<'_, Message> = if self.entries.is_empty() {
+        let content: Element<'_, Message> = if self.view_mode == ViewMode::Columns {
+            // The columns keep the folders above an empty one (lot E-13b).
+            self.columns_view(now, (1.0 - reveal) * metrics::LIST_SLIDE)
+        } else if self.entries.is_empty() {
             let empty = match (in_trash, self.search.is_empty()) {
                 (_, false) => t::NO_MATCH,
                 (true, true) => t::EMPTY_TRASH_VIEW,

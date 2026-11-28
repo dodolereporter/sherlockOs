@@ -124,6 +124,8 @@ pub const GRID_TILE_EXTRA: f32 = 40.0;
 pub const GRID_LABEL_HEIGHT: f32 = 36.0;
 pub const GRID_GAP: f32 = 8.0;
 pub const GRID_TILE_PADDING: f32 = 6.0;
+/// A column of the columns view (lot E-13b), its rule included.
+pub const COLUMN_WIDTH: f32 = 240.0;
 /// The view's slider, as wide as a short field.
 pub const ICON_SLIDER_WIDTH: f32 = 140.0;
 /// Changing the view fades the new one in.

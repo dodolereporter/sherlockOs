@@ -1226,13 +1226,12 @@ fn the_background_menu_sorts_and_shows_the_views() {
     assert_eq!(checked(&bench), Some(2));
     // Folders first, then the smallest file first.
     assert_eq!(bench.names(), ["src", "f01.txt", "a.txt", "f00.txt"]);
-    // The views (lot E-13), as the toolbar's buttons: the icons and the list; the columns
-    // and the gallery come next.
+    // The views (lot E-13), as the toolbar's buttons: the gallery comes next.
     bench.send(Message::RightClick(None));
     bench.send(Message::Submenu(Some(Sub::View)));
     assert_eq!(
         open_menu(&bench),
-        ["Icônes", "Liste", "-Colonnes", "-Galerie"]
+        ["Icônes", "Liste", "Colonnes", "-Galerie"]
     );
 }
 
@@ -2399,6 +2398,126 @@ fn the_grid_renders_headless() {
         let path = dir.join(format!("grid-{width}.png"));
         let renderer = std::env::var("ICED_TEST_BACKEND").unwrap_or_else(|_| "tiny-skia".into());
         let _ = fs::remove_file(dir.join(format!("grid-{width}-{renderer}.png")));
+        assert!(snapshot.matches_image(&path).expect("writing the capture"));
+    }
+}
+
+/// Lot E-13b: the columns view shows the folders above, lit on the way down, and the content
+/// of the folder selected on the right; a click in a column above opens there; left goes up,
+/// right opens the folder selected.
+#[test]
+fn the_columns_show_the_way_down_and_what_is_selected() {
+    use crate::app::ViewMode;
+    let mut bench = views_bench("columns", 3);
+    fs::create_dir_all(bench.path("projet/dossier/sous/fond")).expect("folders");
+    fs::write(bench.path("projet/dossier/sous/note.txt"), "x").expect("write");
+    bench.send(Message::Resized(iced::Size::new(1920.0, 1080.0)));
+    bench.send(Message::Go(Location::Folder(bench.path("projet/dossier"))));
+    bench.ctrl("3");
+    assert_eq!(bench.app.view_mode, ViewMode::Columns);
+    let above: Vec<PathBuf> = bench
+        .app
+        .column_dirs
+        .iter()
+        .map(|c| c.dir.clone())
+        .collect();
+    assert_eq!(above.last(), Some(&bench.path("projet")));
+    assert!(above.len() <= bench.app.ancestor_room());
+    // The folder selected: its content on the right.
+    bench.press(Named::ArrowDown);
+    assert_eq!(bench.selected(), ["sous"]);
+    let peek = bench.app.peek.clone().expect("the column on the right");
+    let names: Vec<&str> = peek.entries.iter().map(|e| e.name.as_str()).collect();
+    assert_eq!(names, ["fond", "note.txt"]);
+    let _ = bench.app.view();
+    // Only the column of the folder shown holds its items.
+    let left = bench.app.shown_column_left();
+    let y = metrics::LIST_TOP_GAP + 1.0;
+    assert_eq!(bench.app.item_at(left + 10.0, y), Some(0));
+    assert_eq!(bench.app.item_at(left - 10.0, y), None);
+    // Right opens it, left goes back up with it selected.
+    bench.press(Named::ArrowRight);
+    assert_eq!(
+        bench.app.location,
+        Location::Folder(bench.path("projet/dossier/sous"))
+    );
+    bench.press(Named::ArrowLeft);
+    assert_eq!(
+        bench.app.location,
+        Location::Folder(bench.path("projet/dossier"))
+    );
+    assert_eq!(bench.selected(), ["sous"]);
+    // A click on a file in the column on the right shows it in its folder.
+    bench.send(Message::PeekClick(1));
+    assert_eq!(
+        bench.app.location,
+        Location::Folder(bench.path("projet/dossier/sous"))
+    );
+    assert_eq!(bench.selected(), ["note.txt"]);
+    // A click on a folder of a column above opens it.
+    let projet = bench.path("projet");
+    let depth = bench
+        .app
+        .column_dirs
+        .iter()
+        .position(|c| c.dir == projet)
+        .expect("projet above");
+    let index = bench.app.column_dirs[depth]
+        .entries
+        .iter()
+        .position(|e| e.name == "dossier")
+        .expect("dossier listed");
+    bench.send(Message::ColumnClick(depth, index));
+    assert_eq!(
+        bench.app.location,
+        Location::Folder(bench.path("projet/dossier"))
+    );
+}
+
+/// Lot E-13b: captures of the columns at two sizes of window (`evidence-captures/columns-*`).
+#[test]
+fn the_columns_render_headless() {
+    let _theme = crate::testing::in_theme(Theme::Dark);
+    let (tmp, dir) = mockup_folder();
+    let (app, task) = App::new(Config {
+        home: tmp.path().to_path_buf(),
+        start: dir.join("src"),
+        start_trash: false,
+        favorites: places::favorites(tmp.path(), None),
+        trash: None,
+        measure: None,
+        maximized: false,
+        devices: None,
+        watch_devices: false,
+        xdg: None,
+        desktops: Vec::new(),
+        locales: Vec::new(),
+    });
+    let mut bench = Bench { tmp, app };
+    drain(&mut bench.app, task);
+    let settings = Settings {
+        fonts: typography::FONTS.map(Cow::Borrowed).to_vec(),
+        default_font: typography::UI,
+        default_text_size: Pixels(typography::UI_SIZE),
+        ..Settings::default()
+    };
+    let dir = std::env::temp_dir().join("evidence-captures");
+    fs::create_dir_all(&dir).expect("captures folder");
+    let renderer = std::env::var("ICED_TEST_BACKEND").unwrap_or_else(|_| "tiny-skia".into());
+    for (width, height) in [(1366.0, 768.0), (720.0, 460.0)] {
+        bench.send(Message::Resized(iced::Size::new(width, height)));
+        // From the list each time: the folders above are read for this width.
+        bench.ctrl("2");
+        bench.ctrl("3");
+        if bench.app.selection.is_empty() {
+            bench.send(Message::Click(0));
+        }
+        bench.app.settle();
+        let mut ui =
+            simulator::Simulator::with_size(settings.clone(), (width, height), bench.app.view());
+        let snapshot = ui.snapshot(&theme::window_theme()).expect("capture");
+        let path = dir.join(format!("columns-{width}.png"));
+        let _ = fs::remove_file(dir.join(format!("columns-{width}-{renderer}.png")));
         assert!(snapshot.matches_image(&path).expect("writing the capture"));
     }
 }

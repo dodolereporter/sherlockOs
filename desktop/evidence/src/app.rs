@@ -39,9 +39,11 @@ mod hint;
 mod path;
 mod popup;
 pub use hint::HintTarget;
+mod columns;
 mod tabs;
 mod view_mode;
 pub use crate::views::ViewMode;
+pub use columns::DirColumn;
 pub use path::{FoldedMenu, PathEdit};
 pub use popup::Popups;
 use std::collections::HashMap;
@@ -322,6 +324,12 @@ pub enum Message {
     /// The slider of the icons' size, moved, then let go (it is remembered then).
     IconSize(u8),
     IconSizeDone,
+    /// The columns view (lot E-13b): the folders above the one shown, read for the listing of
+    /// this generation; the content of the folder selected; a click in either.
+    Columns(u64, Vec<DirColumn>),
+    Peeked(DirColumn),
+    ColumnClick(usize, usize),
+    PeekClick(usize),
     Key(keyboard::Event),
     Modifiers(Modifiers),
     /// The pointer, in the window, read by the view itself: it arrives before a press in the
@@ -490,6 +498,9 @@ pub struct App {
     pub(crate) view_mode: ViewMode,
     pub(crate) view_memory: crate::views::Memory,
     views_file: Option<PathBuf>,
+    /// The columns above the folder shown, and the one on its right (lot E-13b).
+    pub(crate) column_dirs: Vec<DirColumn>,
+    pub(crate) peek: Option<DirColumn>,
     /// The large preview is open, and its zoom in or out (lot E-12).
     pub(crate) looking: bool,
     pub(crate) look_fade: Option<Fade>,
@@ -622,6 +633,8 @@ impl App {
             view_mode: ViewMode::List,
             view_memory: crate::views::Memory::default(),
             views_file: None,
+            column_dirs: Vec::new(),
+            peek: None,
             looking: false,
             look_fade: None,
             preview_pinned: false,
@@ -835,7 +848,9 @@ impl App {
 
     /// The panes and columns the window's width leaves room for (lot E-05).
     pub fn panes(&self) -> crate::layout::Panes {
-        crate::layout::Panes::at(self.size.width, self.show_preview, self.preview_pinned)
+        // The columns show the preview in their last column (lot E-13b): no pane beside.
+        let preview = self.show_preview && self.view_mode != ViewMode::Columns;
+        crate::layout::Panes::at(self.size.width, preview, self.preview_pinned)
     }
 
     pub fn can_go_back(&self) -> bool {
@@ -1027,7 +1042,8 @@ impl App {
             Task::none()
         };
         let popups = self.sync_popups();
-        Task::batch([task, self.preview_task(), reread, popups])
+        let peek = self.peek_task();
+        Task::batch([task, self.preview_task(), reread, popups, peek])
     }
 
     /// Requests the preview of the selected item, if it changed.
@@ -1096,6 +1112,10 @@ impl App {
             Message::SetView(mode) => return self.set_view(mode),
             Message::IconSize(value) => self.set_icon_slider(value),
             Message::IconSizeDone => return self.save_views(),
+            Message::Columns(generation, columns) => self.columns_read(generation, columns),
+            Message::Peeked(column) => self.peeked(column),
+            Message::ColumnClick(depth, index) => return self.column_click(depth, index),
+            Message::PeekClick(index) => return self.peek_click(index),
             Message::Back => {
                 if let Some(previous) = self.history.pop() {
                     let current = std::mem::replace(&mut self.location, previous);
@@ -1672,7 +1692,9 @@ impl App {
             async move { places.iter().map(|p| p.is_dir()).collect() },
             Message::Places,
         );
-        Task::batch([listing, git, check])
+        // The folders above it, in the columns view (lot E-13b).
+        let columns = self.load_columns();
+        Task::batch([listing, git, check, columns])
     }
 
     /// The content of the location has arrived.
@@ -2390,6 +2412,16 @@ impl App {
             // As Cmd+1 to Cmd+4 in the Finder (lot E-13).
             Key::Character(c) if ctrl && let Some(mode) = ViewMode::from_digit(c) => {
                 self.set_view(mode)
+            }
+            // In the columns, right opens the folder selected and left goes up (lot E-13b).
+            Key::Named(Named::ArrowRight)
+                if self.view_mode == ViewMode::Columns
+                    && self.single().is_some_and(|e| e.kind == Kind::Folder) =>
+            {
+                self.run(Command::Open)
+            }
+            Key::Named(Named::ArrowLeft) if self.view_mode == ViewMode::Columns => {
+                self.update(Message::Up)
             }
             // In the grid, the arrows go from tile to tile, a line up or down.
             Key::Named(Named::ArrowRight) if self.view_mode == ViewMode::Icons => {

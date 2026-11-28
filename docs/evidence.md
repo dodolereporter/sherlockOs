@@ -312,9 +312,16 @@ are built once (`sherlock_ui::component::icon` caches the SVG handles).
   view is remembered for each folder, the most recent 512, and the icons' size once, in
   `$XDG_CONFIG_HOME/evidence/views` (`views`): read with a bound before the first frame,
   written atomically off the interface thread; a folder whose name holds a tab or a line break
-  is not remembered. The trash always shows the list. The columns and the gallery come with
-  lots E-13b and E-13c: their buttons and entries are greyed until then. Captures:
-  `the_grid_renders_headless`, at 1366 × 768 and 720 × 460.
+  is not remembered. The trash always shows the list. The gallery comes with lot E-13c: its
+  button and entry are greyed until then.
+  The columns (lot E-13b) show, from the left, the folders above the one shown, as many as
+  fit, each with the way down lit, then the folder shown, then what its item selected alone
+  holds: a folder's content, or the file's preview (the preview's pane slides away, its
+  content is in the last column). A click in a column above opens a folder there, or shows a
+  file selected in its folder; Right opens the folder selected, Left goes up. Every column but
+  the folder shown is read off the interface thread, its first 500 items. While browsing in
+  the columns, a folder without a view of its own keeps them. Captures:
+  `the_grid_renders_headless` and `the_columns_render_headless`, at 1366 × 768 and 720 × 460.
 - Network (lot E-07): a « Réseau » section of the sidebar lists the file servers of the local
   network, found without any tool installed (`network`): a multicast DNS question for
   `_smb._tcp.local` (Samba, macOS and NAS boxes, announced by Avahi or mDNSResponder) and a
