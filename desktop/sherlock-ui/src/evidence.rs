@@ -130,6 +130,8 @@ pub const GALLERY_STRIP: f32 = 104.0;
 pub const GALLERY_STRIP_PADDING: f32 = 10.0;
 pub const GALLERY_TILE: f32 = 84.0;
 pub const GALLERY_STRIP_ICON: f32 = 48.0;
+/// A thumbnail in the strip (lot E-14), larger than an icon: it fills more of its tile.
+pub const GALLERY_STRIP_PICTURE: f32 = 72.0;
 pub const GALLERY_ICON: f32 = 160.0;
 pub const GALLERY_TEXT_WIDTH: f32 = 720.0;
 /// The list's triangles (lot E-13d): their side, and the step to the right of each level.

@@ -45,7 +45,7 @@ fn with_timeout<T: Send + 'static>(work: impl FnOnce() -> Option<T> + Send + 'st
 
 /// Opens a file for the preview only if it is a regular file. `O_NONBLOCK`: even if it was
 /// swapped for a named pipe since it was listed, opening it does not wait for a writer.
-fn open_regular(path: &Path) -> Option<File> {
+pub(crate) fn open_regular(path: &Path) -> Option<File> {
     if !std::fs::metadata(path).ok()?.is_file() {
         return None;
     }
@@ -125,11 +125,7 @@ fn decode_image(path: PathBuf) -> Option<Handle> {
             return None;
         }
         let mut reader = reader(open_regular(&path)?)?;
-        let mut limits = image::Limits::default();
-        limits.max_image_width = Some(MAX_IMAGE_SIDE);
-        limits.max_image_height = Some(MAX_IMAGE_SIDE);
-        limits.max_alloc = Some(MAX_IMAGE_ALLOC);
-        reader.limits(limits);
+        reader.limits(image_limits());
         let side = metrics::PREVIEW_IMAGE_PIXELS;
         let picture = reader.decode().ok()?.thumbnail(side, side).to_rgba8();
         let (width, height) = picture.dimensions();
@@ -140,8 +136,17 @@ fn decode_image(path: PathBuf) -> Option<Handle> {
     handle
 }
 
+/// The bounds of every decoding: its sides, and what it may allocate.
+pub(crate) fn image_limits() -> image::Limits {
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(MAX_IMAGE_SIDE);
+    limits.max_image_height = Some(MAX_IMAGE_SIDE);
+    limits.max_alloc = Some(MAX_IMAGE_ALLOC);
+    limits
+}
+
 /// Whether a picture of this size may be decoded.
-fn image_fits(width: u32, height: u32) -> bool {
+pub(crate) fn image_fits(width: u32, height: u32) -> bool {
     width <= MAX_IMAGE_SIDE
         && height <= MAX_IMAGE_SIDE
         && u64::from(width) * u64::from(height) <= MAX_IMAGE_PIXELS

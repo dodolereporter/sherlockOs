@@ -336,6 +336,20 @@ are built once (`sherlock_ui::component::icon` caches the SVG handles).
   `the_grid_renders_headless`, `the_columns_render_headless`,
   `the_gallery_renders_headless` and `the_unfolded_list_renders_headless`, at 1366 × 768 and
   720 × 460.
+- Thumbnails (lot E-14, `thumbs`, `app/thumbnails`): the grid's tiles and the gallery's
+  strip show a picture of what a file holds instead of its icon. Pictures (PNG, JPEG, WebP,
+  GIF) are decoded with the bounds of the preview (lot E-06: size read from the header first,
+  sides, pixels and allocation limited); a PDF's first page comes from `pdftoppm` (Poppler) and
+  a video's frame from `ffmpegthumbnailer`, when they are installed, else the icon stays;
+  each outside tool gets 5 s, writes into a folder of its own that is removed after, and its
+  picture is decoded with the same bounds. Thumbnails are kept in the freedesktop cache shared
+  with Nautilus, Dolphin and the others, `$XDG_CACHE_HOME/thumbnails/large/<MD5 of the
+  URI>.png` (256 pixels), with `Thumb::URI` and `Thumb::MTime`: a kept one is used while the
+  file's date is the same, a new one is written beside then renamed, readable by its owner
+  only (0600, folders 0700). Files of the cache itself are never kept again. They are made off
+  the interface thread, three at a time, for the items in sight first (the grid's lines and
+  the strip's tiles in sight, nearest first); what scrolled away is not asked. The last 600
+  stay in memory; a file whose date changes gets a new one.
 - Network (lot E-07): a « Réseau » section of the sidebar lists the file servers of the local
   network, found without any tool installed (`network`): a multicast DNS question for
   `_smb._tcp.local` (Samba, macOS and NAS boxes, announced by Avahi or mDNSResponder) and a

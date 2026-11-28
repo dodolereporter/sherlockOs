@@ -58,7 +58,15 @@ impl App {
                 Kind::Folder => color::palette().blue_light,
                 _ => color::palette().text_secondary,
             };
-            let tile = container(ui::icon(entry.icon(), more::GALLERY_STRIP_ICON, tint))
+            let picture: Element<'_, Message> = match self.thumbnails.get(entry) {
+                Some(handle) => image(handle.clone())
+                    .width(more::GALLERY_STRIP_PICTURE)
+                    .height(more::GALLERY_STRIP_PICTURE)
+                    .content_fit(iced::ContentFit::Contain)
+                    .into(),
+                None => ui::icon(entry.icon(), more::GALLERY_STRIP_ICON, tint).into(),
+            };
+            let tile = container(picture)
                 .center(more::GALLERY_TILE)
                 .style(theme::list_row(self.selection.contains(i)));
             let tile =

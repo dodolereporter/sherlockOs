@@ -42,6 +42,7 @@ pub use hint::HintTarget;
 mod columns;
 mod disclose;
 mod tabs;
+mod thumbnails;
 mod view_mode;
 pub use crate::views::ViewMode;
 pub use columns::DirColumn;
@@ -105,6 +106,9 @@ pub struct Config {
     /// application names.
     pub desktops: Vec<String>,
     pub locales: Vec<String>,
+    /// The freedesktop cache of thumbnails, `$XDG_CACHE_HOME/thumbnails` (lot E-14); none
+    /// keeps them in memory only (tests).
+    pub thumbnails: Option<PathBuf>,
 }
 
 impl Config {
@@ -132,6 +136,7 @@ impl Config {
         };
         let favorites = places::favorites(&home, places::read_user_dirs(&home).as_deref());
         let home_for_xdg = home.clone();
+        let home_for_cache = home.clone();
         Self {
             home,
             start,
@@ -151,6 +156,13 @@ impl Config {
                 .map(str::to_lowercase)
                 .collect(),
             locales: locales(),
+            thumbnails: Some(
+                std::env::var_os("XDG_CACHE_HOME")
+                    .map(PathBuf::from)
+                    .filter(|p| p.is_absolute())
+                    .unwrap_or_else(|| home_for_cache.join(".cache"))
+                    .join("thumbnails"),
+            ),
         }
     }
 }
@@ -337,6 +349,12 @@ pub enum Message {
     /// read.
     Disclose(PathBuf),
     Unfolded(PathBuf, Vec<Entry>),
+    /// A thumbnail made, or that cannot be, for a file as it was (lot E-14).
+    Thumbnail(
+        PathBuf,
+        Option<std::time::SystemTime>,
+        Option<iced::widget::image::Handle>,
+    ),
     /// The gallery's strip scrolled sideways (lot E-13c).
     StripScrolled(f32),
     Key(keyboard::Event),
@@ -514,6 +532,8 @@ pub struct App {
     strip_offset: f32,
     /// The folders unfolded in the list (lot E-13d).
     unfolded: disclose::Unfolded,
+    /// The thumbnails of the grid and of the gallery (lot E-14).
+    pub(crate) thumbnails: thumbnails::Thumbnails,
     /// The large preview is open, and its zoom in or out (lot E-12).
     pub(crate) looking: bool,
     pub(crate) look_fade: Option<Fade>,
@@ -650,6 +670,7 @@ impl App {
             peek: None,
             strip_offset: 0.0,
             unfolded: disclose::Unfolded::new(),
+            thumbnails: thumbnails::Thumbnails::default(),
             looking: false,
             look_fade: None,
             preview_pinned: false,
@@ -1059,7 +1080,8 @@ impl App {
         };
         let popups = self.sync_popups();
         let peek = self.peek_task();
-        Task::batch([task, self.preview_task(), reread, popups, peek])
+        let thumbnails = self.thumbnail_tasks();
+        Task::batch([task, self.preview_task(), reread, popups, peek, thumbnails])
     }
 
     /// Requests the preview of the selected item, if it changed.
@@ -1138,6 +1160,9 @@ impl App {
                 return self.disclose(path, open);
             }
             Message::Unfolded(dir, children) => self.unfolded_read(dir, children),
+            Message::Thumbnail(path, modified, handle) => {
+                self.thumbnail_made(path, modified, handle);
+            }
             Message::Back => {
                 if let Some(previous) = self.history.pop() {
                     let current = std::mem::replace(&mut self.location, previous);

@@ -46,6 +46,7 @@ impl Bench {
             xdg: None,
             desktops: Vec::new(),
             locales: Vec::new(),
+            thumbnails: None,
         };
         let (mut app, task) = App::new(config);
         drain(&mut app, task);
@@ -429,6 +430,7 @@ fn window_renders_headless() {
         xdg: None,
         desktops: Vec::new(),
         locales: Vec::new(),
+        thumbnails: None,
     };
     let (mut app, task) = App::new(config);
     drain(&mut app, task);
@@ -642,6 +644,7 @@ fn frame_cost() {
         xdg: None,
         desktops: Vec::new(),
         locales: Vec::new(),
+        thumbnails: None,
     };
     let (mut app, task) = App::new(config);
     drain(&mut app, task);
@@ -728,6 +731,7 @@ fn devices_mount_open_unmount_and_eject_through_their_source() {
         xdg: None,
         desktops: Vec::new(),
         locales: Vec::new(),
+        thumbnails: None,
     };
     let (app, task) = App::new(config);
     let mut bench = Bench { tmp, app };
@@ -819,6 +823,7 @@ fn open_with_lists_installed_applications_and_remembers_a_default() {
         xdg: Some(xdg.clone()),
         desktops: Vec::new(),
         locales: Vec::new(),
+        thumbnails: None,
     };
     let (app, task) = App::new(config);
     let mut bench = Bench { tmp, app };
@@ -1464,6 +1469,7 @@ fn a_silent_bus_never_delays_the_first_view() {
         xdg: None,
         desktops: Vec::new(),
         locales: Vec::new(),
+        thumbnails: None,
     };
     let start = Instant::now();
     let (mut app, task) = App::new(config);
@@ -1529,6 +1535,7 @@ fn bench_with_apps(name: &str, names: &[String]) -> Bench {
         }),
         desktops: Vec::new(),
         locales: Vec::new(),
+        thumbnails: None,
     };
     let (app, task) = App::new(config);
     let mut bench = Bench { tmp, app };
@@ -2280,6 +2287,7 @@ fn views_bench(name: &str, count: usize) -> Bench {
         }),
         desktops: Vec::new(),
         locales: Vec::new(),
+        thumbnails: None,
     };
     let (app, task) = App::new(config);
     let mut bench = Bench { tmp, app };
@@ -2376,6 +2384,7 @@ fn the_grid_renders_headless() {
         xdg: None,
         desktops: Vec::new(),
         locales: Vec::new(),
+        thumbnails: None,
     });
     let mut bench = Bench { tmp, app };
     drain(&mut bench.app, task);
@@ -2492,6 +2501,7 @@ fn the_columns_render_headless() {
         xdg: None,
         desktops: Vec::new(),
         locales: Vec::new(),
+        thumbnails: None,
     });
     let mut bench = Bench { tmp, app };
     drain(&mut bench.app, task);
@@ -2588,6 +2598,7 @@ fn the_gallery_renders_headless() {
         xdg: None,
         desktops: Vec::new(),
         locales: Vec::new(),
+        thumbnails: None,
     });
     let mut bench = Bench { tmp, app };
     drain(&mut bench.app, task);
@@ -2698,6 +2709,7 @@ fn the_unfolded_list_renders_headless() {
         xdg: None,
         desktops: Vec::new(),
         locales: Vec::new(),
+        thumbnails: None,
     });
     let mut bench = Bench { tmp, app };
     drain(&mut bench.app, task);
@@ -2720,6 +2732,77 @@ fn the_unfolded_list_renders_headless() {
         let snapshot = ui.snapshot(&theme::window_theme()).expect("capture");
         let path = out.join(format!("unfolded-{width}.png"));
         let _ = fs::remove_file(out.join(format!("unfolded-{width}-{renderer}.png")));
+        assert!(snapshot.matches_image(&path).expect("writing the capture"));
+    }
+}
+
+/// Lot E-14: the grid shows the thumbnails of the pictures in sight, made off the interface
+/// thread and kept in the freedesktop cache; those out of sight are not made.
+#[test]
+fn the_grid_shows_the_thumbnails_of_what_is_in_sight() {
+    let _theme = crate::testing::in_theme(Theme::Dark);
+    let tmp = TempDir::new("thumbnails");
+    let photos = tmp.path().join("Photos");
+    fs::create_dir_all(&photos).expect("folder");
+    for i in 0..60u8 {
+        let color = image::Rgba([i.wrapping_mul(40), 120, 255 - i.wrapping_mul(4), 255]);
+        image::RgbaImage::from_pixel(320, 200, color)
+            .save(photos.join(format!("photo-{i:02}.png")))
+            .expect("write");
+    }
+    let cache = tmp.path().join("cache/thumbnails");
+    let (app, task) = App::new(Config {
+        home: tmp.path().to_path_buf(),
+        start: photos.clone(),
+        start_trash: false,
+        favorites: places::favorites(tmp.path(), None),
+        trash: None,
+        measure: None,
+        maximized: false,
+        devices: None,
+        watch_devices: false,
+        xdg: None,
+        desktops: Vec::new(),
+        locales: Vec::new(),
+        thumbnails: Some(cache.clone()),
+    });
+    let mut bench = Bench { tmp, app };
+    drain(&mut bench.app, task);
+    bench.send(Message::Resized(iced::Size::new(1366.0, 768.0)));
+    bench.ctrl("1");
+    let ready = |b: &Bench| {
+        b.app
+            .entries
+            .iter()
+            .filter(|e| b.app.thumbnails.get(e).is_some())
+            .count()
+    };
+    let shown = ready(&bench);
+    assert!(shown > 0, "the pictures in sight have their thumbnails");
+    assert!(shown < 60, "not those out of sight: {shown}");
+    assert!(bench.app.thumbnails.get(&bench.app.entries[0]).is_some());
+    // Kept in the cache, under the MD5 of their URI.
+    let first = photos.join("photo-00.png");
+    let kept = crate::thumbs::cached_path(&cache, &crate::thumbs::uri(&first));
+    assert!(kept.exists());
+    // Captures at two sizes (`evidence-captures/thumbnails-*`).
+    let settings = Settings {
+        fonts: typography::FONTS.map(Cow::Borrowed).to_vec(),
+        default_font: typography::UI,
+        default_text_size: Pixels(typography::UI_SIZE),
+        ..Settings::default()
+    };
+    let out = std::env::temp_dir().join("evidence-captures");
+    fs::create_dir_all(&out).expect("captures folder");
+    let renderer = std::env::var("ICED_TEST_BACKEND").unwrap_or_else(|_| "tiny-skia".into());
+    for (width, height) in [(1366.0, 768.0), (720.0, 460.0)] {
+        bench.send(Message::Resized(iced::Size::new(width, height)));
+        bench.app.settle();
+        let mut ui =
+            simulator::Simulator::with_size(settings.clone(), (width, height), bench.app.view());
+        let snapshot = ui.snapshot(&theme::window_theme()).expect("capture");
+        let path = out.join(format!("thumbnails-{width}.png"));
+        let _ = fs::remove_file(out.join(format!("thumbnails-{width}-{renderer}.png")));
         assert!(snapshot.matches_image(&path).expect("writing the capture"));
     }
 }

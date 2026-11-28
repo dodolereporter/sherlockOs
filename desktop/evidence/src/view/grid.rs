@@ -98,12 +98,18 @@ impl App {
             .center_x(Length::Fill)
             .into(),
         };
-        let body = column![
-            container(ui::icon(entry.icon(), size, tint)).center_x(Length::Fill),
-            name
-        ]
-        .spacing(metrics::GAP_TIGHT)
-        .align_x(Alignment::Center);
+        // The thumbnail once made (lot E-14), else the icon.
+        let picture: Element<'a, Message> = match self.thumbnails.get(entry) {
+            Some(handle) => iced::widget::image(handle.clone())
+                .width(size)
+                .height(size)
+                .content_fit(iced::ContentFit::Contain)
+                .into(),
+            None => ui::icon(entry.icon(), size, tint).into(),
+        };
+        let body = column![container(picture).center_x(Length::Fill), name]
+            .spacing(metrics::GAP_TIGHT)
+            .align_x(Alignment::Center);
         let tile = container(body)
             .width(width)
             .height(height)
