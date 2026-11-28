@@ -158,6 +158,15 @@ impl State {
         is_shell_client(client)
     }
 
+    /// Shows `zwlr_layer_shell_v1` to every client, not only to those of the shell socket. For
+    /// a compositor without a shell, whose clients are all trusted, such as the login screen's
+    /// (its one client is the greeter). Call it before the clients connect: a registry already
+    /// listed is not told again.
+    pub fn share_layer_shell(&mut self) {
+        self.layer_shell_shared
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
     /// Rectangle of the dock icon that the shell gave for `window`: screen name and rectangle
     /// on that screen. For the minimize animation (lot D-19).
     pub fn icon_rectangle(&self, window: &Window) -> Option<(String, Rectangle<i32, Logical>)> {

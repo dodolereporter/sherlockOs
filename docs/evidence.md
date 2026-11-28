@@ -110,6 +110,25 @@ are built once (`sherlock_ui::component::icon` caches the SVG handles).
   most 20 000 entries within 500 ms, offers 200 folders at most, and leaves out names that are
   not UTF-8 or hold a control character. A stale read, overtaken by a newer one, is dropped.
   A typed path longer than 4096 bytes, or with a control character, is refused.
+- **Images.** The preview reads an image's size from its header before decoding it: beyond
+  32 million pixels or 16 384 on a side, only its information shows (a 420 KB PNG can hold
+  12000 × 12000 pixels, 430 MB decoded). The decoder may hold 192 MB at most. A decode that is
+  no longer the last one asked for, or that ran out of time, stops at its next read, so that
+  images run through with the arrows never pile up. Application icons: 1 MB per file, 1024
+  pixels on a side.
+- **Disguised files.** The preview reads the first bytes of the selected file. A program (ELF,
+  Windows, `#!`) named like a document, or an image, PDF or ZIP named as another of these
+  kinds, gets a warning in salmon above the preview: « Attention : malgré son nom en .pdf, ce
+  fichier est un programme. »
+- **No program through xdg-open.** A file opened without an application chosen for its type
+  goes to `xdg-open`, which on some desktops runs launchers. An executable file, a `.desktop`
+  launcher, or a file that starts like a binary or a script, is never handed to it: Evidence
+  says it does not run programs. A file that cannot be read in time counts as one.
+- **Copies drop setuid and setgid**, as `cp` without `-p` does; the sticky bit of a folder
+  stays.
+- **Small files stay small.** Trash records and `user-dirs.dirs` are read up to 64 KB, a named
+  pipe in their place is never waited on.
+- **Renames refuse control characters** (a line feed, an escape, a tab), as they refuse « / ».
 - **Names shown safely.** In the listing, the preview and the breadcrumb, a control character
   of a name shows as its picture (␊ for a line feed, ␛ for an escape) and a direction mark
   (U+202E and its kin, which can make a name read « exe.txt » for an `.exe`) as �.
@@ -155,6 +174,17 @@ are built once (`sherlock_ui::component::icon` caches the SVG handles).
   | 1920 × 1080 | Smallest window | In a WSLg window |
   | --- | --- | --- |
   | ![](evidence/path-crumbs-1080p.png) | ![](evidence/path-crumbs-small.png) | ![](evidence/path-wslg.png) |
+- The window follows its width (lot E-05, after the Finder and Nautilus). The name of a file
+  always keeps `NAME_MIN_WIDTH` (220): when the room runs short, the Git column folds first,
+  then Type, the preview, Size, Modified, and last the sidebar (`layout::Panes`). The preview
+  folds at half a 1080p screen; Space brings it back at that width, and the columns fold
+  instead. Names, the origin of a trash item and the preview's title end with « … » where the
+  shaped text stops fitting (`sherlock_ui::ellipsis`), not after an estimated count of
+  characters.
+
+  | 720 × 460 | 944 × 1048 (half of 1080p) | 1366 × 768 | 1920 × 1080 |
+  | --- | --- | --- | --- |
+  | ![](evidence/width-720.png) | ![](evidence/width-944.png) | ![](evidence/width-1366.png) | ![](evidence/width-1920.png) |
 - List: name with an icon per kind, modified date, size (item count for folders), kind, git
   state (modified, new, ignored). Click a column header to sort, again to reverse. Folders
   stay first. Hidden files with Ctrl+H. A double click opens an item, selected or not: the
@@ -214,6 +244,17 @@ are built once (`sherlock_ui::component::icon` caches the SVG handles).
   without F5. Changes closer than 100 ms are one, and the folder is read again at most every
   400 ms, so that a build or a download never floods the interface. The selection is kept; while
   a menu, a rename or a lasso is under way, the reading waits for it to end.
+- Network (lot E-07): a « Réseau » section of the sidebar lists the file servers of the local
+  network, found without any tool installed (`network`): a multicast DNS question for
+  `_smb._tcp.local` (Samba, macOS and NAS boxes, announced by Avahi or mDNSResponder) and a
+  WS-Discovery probe (Windows computers, Samba with wsdd). Each listening lasts 2.5 s, on a
+  thread of its own, again every 2 minutes; at most 256 answers of 9000 bytes are read and 64
+  servers kept; a compression loop or a cut packet names nothing; names are shown safely. A
+  click mounts the server as a guest through gvfs (`gio mount --anonymous smb://host/`, `smb`),
+  without root, off the interface thread with a 30 s limit, then opens the folder gvfs shows it
+  in (`gio info`, « local path »); an eject button beside it unmounts it. Without gvfs, the
+  status bar says so. Servers that want a name and a password say so for now: the sheet that
+  asks for them, and the Secret Service keyring, come in E-07b.
 - Trash: deleting moves to the freedesktop trash (shared with Plasma, GNOME, `gio trash`).
   The trash view lists the original name, the deletion date read from the record, and the
   origin. Emptying asks first and deletes only what was listed when the question was asked.
