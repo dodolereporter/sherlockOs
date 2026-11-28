@@ -7,7 +7,7 @@ use std::{cell::Cell, os::fd::OwnedFd, sync::OnceLock};
 use smithay::{
     backend::renderer::utils::on_commit_buffer_handler,
     delegate_compositor, delegate_cursor_shape, delegate_data_device, delegate_output,
-    delegate_primary_selection, delegate_seat, delegate_shm, delegate_xdg_shell,
+    delegate_primary_selection, delegate_seat, delegate_shm,
     desktop::{PopupKind, PopupManager, Window, find_popup_root_surface},
     input::{
         Seat, SeatHandler, SeatState,
@@ -31,8 +31,7 @@ use smithay::{
         selection::{
             SelectionHandler, SelectionTarget,
             data_device::{
-                ClientDndGrabHandler, DataDeviceHandler, DataDeviceState, ServerDndGrabHandler,
-                set_data_device_focus,
+                DataDeviceHandler, DataDeviceState, ServerDndGrabHandler, set_data_device_focus,
             },
             primary_selection::{
                 PrimarySelectionHandler, PrimarySelectionState, set_primary_focus,
@@ -76,6 +75,7 @@ impl CompositorHandler for State {
 
     fn commit(&mut self, surface: &WlSurface) {
         on_commit_buffer_handler::<Self>(surface);
+        self.drag_icon_commit(surface);
         if !compositor::is_sync_subsurface(surface) {
             let mut root = surface.clone();
             while let Some(parent) = compositor::get_parent(&root) {
@@ -469,6 +469,14 @@ impl XdgShellHandler for State {
         &mut self.xdg_shell_state
     }
 
+    fn new_client(&mut self, client: smithay::wayland::shell::xdg::ShellClient) {
+        self.shell_client_bound(client);
+    }
+
+    fn client_pong(&mut self, client: smithay::wayland::shell::xdg::ShellClient) {
+        self.shell_client_pong(&client);
+    }
+
     fn new_toplevel(&mut self, surface: ToplevelSurface) {
         // Placed for good at its first content, when its size is known.
         let loc = self.output_area().map(|a| a.loc).unwrap_or_default();
@@ -779,9 +787,7 @@ impl DataDeviceHandler for State {
     }
 }
 
-// Drag and drop between Wayland clients follows Smithay's default behavior. Between Wayland
-// and X11, smithay 0.7 has no XDND: it is left to lot D-29c (see `docs/compositor.md`).
-impl ClientDndGrabHandler for State {}
+// The drags of Wayland clients: `dnd.rs`. The compositor starts none of its own.
 impl ServerDndGrabHandler for State {}
 
 impl PrimarySelectionHandler for State {
@@ -794,7 +800,28 @@ delegate_compositor!(State);
 delegate_shm!(State);
 delegate_seat!(State);
 delegate_output!(State);
-delegate_xdg_shell!(State);
+// `delegate_xdg_shell!`, but the binding of `xdg_wm_base`, which `lock.rs` reads first to know
+// the shell client of the lock program (lot D-25f).
+smithay::reexports::wayland_server::delegate_dispatch!(State: [
+    smithay::reexports::wayland_protocols::xdg::shell::server::xdg_wm_base::XdgWmBase:
+        smithay::wayland::shell::xdg::XdgWmBaseUserData
+] => XdgShellState);
+smithay::reexports::wayland_server::delegate_dispatch!(State: [
+    smithay::reexports::wayland_protocols::xdg::shell::server::xdg_positioner::XdgPositioner:
+        smithay::wayland::shell::xdg::XdgPositionerUserData
+] => XdgShellState);
+smithay::reexports::wayland_server::delegate_dispatch!(State: [
+    smithay::reexports::wayland_protocols::xdg::shell::server::xdg_popup::XdgPopup:
+        smithay::wayland::shell::xdg::XdgShellSurfaceUserData
+] => XdgShellState);
+smithay::reexports::wayland_server::delegate_dispatch!(State: [
+    smithay::reexports::wayland_protocols::xdg::shell::server::xdg_surface::XdgSurface:
+        smithay::wayland::shell::xdg::XdgSurfaceUserData
+] => XdgShellState);
+smithay::reexports::wayland_server::delegate_dispatch!(State: [
+    smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::XdgToplevel:
+        smithay::wayland::shell::xdg::XdgShellSurfaceUserData
+] => XdgShellState);
 delegate_cursor_shape!(State);
 delegate_data_device!(State);
 delegate_primary_selection!(State);

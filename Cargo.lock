@@ -92,6 +92,7 @@ name = "appearance-config"
 version = "0.0.0"
 dependencies = [
  "libc",
+ "mime-apps",
  "sherlock-ui",
  "tracing",
 ]
@@ -126,7 +127,6 @@ dependencies = [
  "launcher",
  "log",
  "mime-apps",
- "resvg",
  "sherlock-ui",
  "thiserror 2.0.21",
  "tracing",
@@ -886,6 +886,7 @@ name = "desktop-config"
 version = "0.0.0"
 dependencies = [
  "image",
+ "mime-apps",
  "sherlock-ui",
  "thiserror 2.0.21",
 ]
@@ -936,6 +937,7 @@ dependencies = [
  "iced_test",
  "icon-theme",
  "libc",
+ "mime-apps",
  "shell-protocol",
  "sherlock-ui",
  "thiserror 2.0.21",
@@ -1139,6 +1141,8 @@ dependencies = [
  "sherlock-ui",
  "tracing",
  "tracing-subscriber",
+ "wayland-backend",
+ "wayland-client",
  "zbus",
 ]
 
@@ -1933,6 +1937,9 @@ dependencies = [
 [[package]]
 name = "icon-theme"
 version = "0.0.0"
+dependencies = [
+ "mime-apps",
+]
 
 [[package]]
 name = "ident_case"
@@ -2519,6 +2526,7 @@ name = "notifications-config"
 version = "0.0.0"
 dependencies = [
  "dock-config",
+ "mime-apps",
 ]
 
 [[package]]
@@ -4053,6 +4061,7 @@ version = "0.0.0"
 dependencies = [
  "appearance-config",
  "cursor-theme",
+ "mime-apps",
  "sherlock-ui",
  "thiserror 2.0.21",
  "tracing",

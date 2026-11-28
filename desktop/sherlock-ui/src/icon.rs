@@ -78,11 +78,12 @@ pub enum Icon {
     Touchpad,
     Grid,
     Sidebar,
+    Keyboard,
 }
 
 impl Icon {
     /// All the icons, for the tests and the gallery.
-    pub const ALL: [Self; 46] = [
+    pub const ALL: [Self; 47] = [
         Self::Chevron,
         Self::Check,
         Self::Search,
@@ -129,6 +130,7 @@ impl Icon {
         Self::Touchpad,
         Self::Grid,
         Self::Sidebar,
+        Self::Keyboard,
     ];
 
     /// Path on the 24 grid. All come from the mock-ups, except the cross and the two sort
@@ -228,6 +230,10 @@ impl Icon {
             Self::Grid => "M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z",
             // A window with its sidebar: shows or hides a folded sidebar.
             Self::Sidebar => "M4 5h16v14H4zM10 5v14",
+            // The keyboard of the backlight, without its rays, a little taller: Control Room.
+            Self::Keyboard => {
+                "M4.5 7h15A1.5 1.5 0 0 1 21 8.5v8a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 16.5v-8A1.5 1.5 0 0 1 4.5 7zM7 10h.01M10 10h.01M14 10h.01M17 10h.01M7 12.5h.01M17 12.5h.01M8.5 15h7"
+            }
         }
     }
 

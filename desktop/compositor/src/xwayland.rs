@@ -94,6 +94,7 @@ impl State {
                                 tracing::info!(display = display_number, "XWayland ready");
                                 state.xwm = Some(xwm);
                                 state.x_display = Some(display_number);
+                                state.connect_xdnd(display_number);
                                 Some(display_number)
                             }
                             Err(err) => {
@@ -134,6 +135,7 @@ impl State {
         if let Some(token) = self.xwayland.take() {
             self.loop_handle.remove(token);
         }
+        self.disconnect_xdnd();
     }
 }
 

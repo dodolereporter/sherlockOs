@@ -53,6 +53,11 @@ pub enum SourceError {
         command: &'static str,
         stderr: String,
     },
+    #[error("{command} gave no answer in {limit:?}")]
+    Timeout {
+        command: &'static str,
+        limit: Duration,
+    },
     #[error("unreadable output from {command}: {detail}")]
     Parse {
         command: &'static str,
@@ -152,22 +157,85 @@ fn command(program: &str) -> Command {
     command
 }
 
-/// Runs `program` with `args` and returns its output.
+/// Longest wait for a command that reads a state (`upower -i`, `nmcli`): a service that no
+/// longer answers leaves the icon as it was, and the next reading tries again.
+pub const RUN_LIMIT: Duration = Duration::from_secs(10);
+
+/// Runs `program` with `args` and returns its output; killed past `RUN_LIMIT`.
 pub fn run(program: &'static str, args: &[&str]) -> Result<String, SourceError> {
-    let output = command(program)
+    run_within(program, args, RUN_LIMIT)
+}
+
+/// Runs `program` with `args` and returns its output, killed past `limit`.
+fn run_within(
+    program: &'static str,
+    args: &[&str],
+    limit: Duration,
+) -> Result<String, SourceError> {
+    use std::io::Read;
+    let mut child = command(program)
         .args(args)
-        .output()
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
         .map_err(|source| SourceError::Spawn {
             command: program,
             source,
         })?;
-    if !output.status.success() {
+    // Read on threads of their own: a full pipe never holds the command back.
+    let drain = |pipe: Option<Box<dyn Read + Send>>| {
+        std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            if let Some(mut pipe) = pipe {
+                let _ = pipe.read_to_end(&mut bytes);
+            }
+            bytes
+        })
+    };
+    let stdout = drain(
+        child
+            .stdout
+            .take()
+            .map(|p| Box::new(p) as Box<dyn Read + Send>),
+    );
+    let stderr = drain(
+        child
+            .stderr
+            .take()
+            .map(|p| Box::new(p) as Box<dyn Read + Send>),
+    );
+    let start = Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if start.elapsed() < limit => std::thread::sleep(Duration::from_millis(20)),
+            result => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(match result {
+                    Err(source) => SourceError::Spawn {
+                        command: program,
+                        source,
+                    },
+                    _ => SourceError::Timeout {
+                        command: program,
+                        limit,
+                    },
+                });
+            }
+        }
+    };
+    let text = |reader: std::thread::JoinHandle<Vec<u8>>| {
+        String::from_utf8_lossy(&reader.join().unwrap_or_default()).into_owned()
+    };
+    let (out, err) = (text(stdout), text(stderr));
+    if !status.success() {
         return Err(SourceError::Failed {
             command: program,
-            stderr: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+            stderr: err.trim().to_owned(),
         });
     }
-    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    Ok(out)
 }
 
 /// Stops the monitors still running. Called when the bar leaves `run`.
@@ -334,6 +402,16 @@ mod tests {
     use super::*;
     use iced::futures::StreamExt;
     use iced::futures::executor::block_on;
+
+    #[test]
+    fn a_command_that_hangs_is_stopped() {
+        let start = Instant::now();
+        let hung = run_within("sleep", &["30"], Duration::from_millis(200));
+        assert!(matches!(hung, Err(SourceError::Timeout { .. })), "{hung:?}");
+        assert!(start.elapsed() < Duration::from_secs(5));
+        assert_eq!(run("echo", &["ready"]).ok().as_deref(), Some("ready\n"));
+        assert!(matches!(run("false", &[]), Err(SourceError::Failed { .. })));
+    }
 
     #[test]
     fn a_fixed_source_yields_its_state_once() {
