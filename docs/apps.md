@@ -170,8 +170,9 @@ dominant axis counts, vertical or horizontal.
 ### Starting an application
 
 As in the launcher: its `Exec` expanded by `mime-apps`, no shell, the environment without the
-renderer choice (ADR 0018), its own process group, no standard streams, its `Path`. Then the
-view fades out and the program ends. A failed start leaves the view open and is logged.
+renderer choice (ADR 0018), its own process group, no standard streams, its `Path`, and the
+activation token of the click (`XDG_ACTIVATION_TOKEN`, `DESKTOP_STARTUP_ID`, lot Q-52; see
+`docs/launcher.md`). Then the view fades out and the program ends. A failed start is logged.
 
 ### Menu of an application
 
