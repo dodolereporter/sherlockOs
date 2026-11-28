@@ -525,6 +525,7 @@ impl XdgShellHandler for State {
     /// another client closes the whole chain; the client handles clicks on its own surfaces.
     /// The serial is not checked: iced opens its menus on release, after the press it names.
     fn grab(&mut self, surface: PopupSurface, seat: wl_seat::WlSeat, _serial: Serial) {
+        let parent = surface.get_parent_surface();
         let popup = PopupKind::Xdg(surface);
         let Ok(root) = find_popup_root_surface(&popup) else {
             return;
@@ -539,13 +540,19 @@ impl XdgShellHandler for State {
             self.popup_grab = None;
         }
         // A submenu keeps the first menu of the chain: closing that one closes them all.
-        if self
-            .popup_grab
-            .as_ref()
-            .is_none_or(|grab| grab.root != root)
-        {
-            self.dismiss_popups();
-            self.popup_grab = Some(PopupGrab { root, popup });
+        match &mut self.popup_grab {
+            Some(grab) if grab.root == root => {
+                // A first menu of the same window replaces the one it holds: the window opened
+                // its menu again elsewhere, and destroys the old one after making the new one
+                // (lot Q-58).
+                if parent.as_ref() == Some(&root) {
+                    grab.popup = popup;
+                }
+            }
+            _ => {
+                self.dismiss_popups();
+                self.popup_grab = Some(PopupGrab { root, popup });
+            }
         }
     }
 

@@ -1743,8 +1743,6 @@ dependencies = [
 [[package]]
 name = "iced_exwlshell"
 version = "0.21.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6e6d1a09bfec923b3e34ae898982aca394367629ba438f5556793a029a28dc3b"
 dependencies = [
  "enumflags2",
  "exwlshellev",

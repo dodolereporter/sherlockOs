@@ -2344,6 +2344,98 @@ mod tests {
         assert!(!animating(&h, h.state.now()));
     }
 
+    /// Lot Q-58: the menu of a window, a popup with a grab, closes on a click anywhere else on
+    /// the screen, as the bar's panels do: here on the empty desktop.
+    #[test]
+    fn a_menu_of_a_window_closes_on_a_click_elsewhere() {
+        let mut h = Harness::start();
+        h.state.set_window_animations(false);
+        let qh = h.queue.handle();
+        let registry = h.conn.display().get_registry(&qh, ());
+        h.run_until("the globals", |c, _| {
+            c.globals.iter().any(|g| g.1 == "wl_seat")
+        });
+        let compositor: WlCompositor = h.bind(&registry);
+        let wm_base: XdgWmBase = h.bind(&registry);
+        let shm: WlShm = h.bind(&registry);
+        let seat: WlSeat = h.bind(&registry);
+        let buffer = |w: i32, ht: i32| {
+            let file = shm_file((w * ht * 4) as u64);
+            let pool = shm.create_pool(file.as_fd(), w * ht * 4, &qh, ());
+            (
+                pool.create_buffer(0, w, ht, w * 4, Format::Argb8888, &qh, ()),
+                file,
+            )
+        };
+        let surface = compositor.create_surface(&qh, ());
+        let xdg_surface = wm_base.get_xdg_surface(&surface, &qh, ());
+        let _toplevel = xdg_surface.get_toplevel(&qh, ());
+        surface.commit();
+        h.run_until("the first configure", |c, _| !c.configures.is_empty());
+        let (window_buffer, _window_file) = buffer(100, 80);
+        surface.attach(Some(&window_buffer), 0, 0);
+        surface.commit();
+        h.run_until("the placement", |_, s| {
+            location(s) == Some((350, 260).into())
+        });
+        // A right click in the window opens its menu, which grabs with the press's serial.
+        h.click(380.0, 280.0, 10);
+        let positioner = wm_base.create_positioner(&qh, ());
+        positioner.set_size(60, 40);
+        positioner.set_anchor_rect(30, 20, 1, 1);
+        let menu = compositor.create_surface(&qh, ());
+        let popup = wm_base.get_xdg_surface(&menu, &qh, ()).get_popup(
+            Some(&xdg_surface),
+            &positioner,
+            &qh,
+            (),
+        );
+        popup.grab(&seat, 0);
+        menu.commit();
+        settle(&mut h);
+        let (menu_buffer, _menu_file) = buffer(60, 40);
+        menu.attach(Some(&menu_buffer), 0, 0);
+        menu.commit();
+        settle(&mut h);
+        h.click(700.0, 500.0, 20);
+        let id = popup.id().protocol_id();
+        h.run_until("the menu closed by a click on the desktop", |c, _| {
+            c.popups_done.contains(&id)
+        });
+        popup.destroy();
+        settle(&mut h);
+        // The menu opened again elsewhere: the new popup is made, and grabs, before the old
+        // one is destroyed, in the same batch (as iced_exwlshell sends them). The new one still
+        // closes on a click elsewhere.
+        let open = |h: &Harness, x: i32| {
+            let positioner = wm_base.create_positioner(&qh, ());
+            positioner.set_size(60, 40);
+            positioner.set_anchor_rect(x, 20, 1, 1);
+            let menu = compositor.create_surface(&qh, ());
+            let popup = wm_base.get_xdg_surface(&menu, &qh, ()).get_popup(
+                Some(&xdg_surface),
+                &positioner,
+                &qh,
+                (),
+            );
+            popup.grab(&seat, 0);
+            menu.commit();
+            let _ = h;
+            popup
+        };
+        let first = open(&h, 10);
+        settle(&mut h);
+        let second = open(&h, 50);
+        first.destroy();
+        settle(&mut h);
+        h.click(700.0, 500.0, 30);
+        let id = second.id().protocol_id();
+        h.run_until(
+            "the menu opened again, closed by a click elsewhere",
+            |c, _| c.popups_done.contains(&id),
+        );
+    }
+
     /// A menu of a window appears with a short fade, without moving (lot C-01).
     #[test]
     fn a_menu_of_a_window_appears_with_a_fade() {
