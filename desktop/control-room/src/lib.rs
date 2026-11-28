@@ -10,6 +10,8 @@ pub mod apps;
 pub mod arrangement;
 pub mod displays;
 pub mod follow;
+pub mod instance;
+pub mod network;
 mod pages;
 pub mod scroll;
 pub mod search;
