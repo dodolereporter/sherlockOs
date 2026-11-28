@@ -19,7 +19,8 @@ The `sherlock/sherlockd` crate is a library and a binary.
 | `src/proxy.rs` | `serve`: `sherlockd` as an MCP server, in front of Sherlock's servers |
 | `src/claude_code.rs` | `ClaudeCode`: the Claude Code provider, its command line, the reading of its stream |
 | `src/test_server.rs` | Test MCP server, with no effect on the system, well-behaved or hostile depending on its case |
-| `src/main.rs` | `--demo`, `--claude-code`, `--proxy` and `--test-server` |
+| `src/windows_server.rs` | The windows server: the session's windows, through the compositor's windows socket (A-12) |
+| `src/main.rs` | `--demo`, `--claude-code`, `--proxy`, `--test-server` and `--windows-server` |
 | `tests/mcp.rs` | Client and loop against the test server, started as a real process, well-behaved or hostile |
 | `tests/proxy.rs` | The proxy as a real process, in front of the test server |
 | `tests/claude_code.rs` | The provider on recorded transcripts (`tests/transcripts/`), and against fake `claude` programs |
@@ -379,6 +380,8 @@ cargo test -p sherlockd
 | `src/claude_code.rs` | Command line and MCP configuration, truncated text, recap quoted as JSON, private 0700 directory removed at the end |
 | `tests/proxy.rs` | The proxy in front of the real test server: `echo` relayed, `vider_corbeille` refused |
 | `tests/claude_code.rs` | Transcripts of echo, of a refusal, of requested built-in tools, of a missing login and of an API key; trapped init (tool, server, mode, source); unknown block; nothing before `init`, lone result refused; bounded lines; Claude Code missing or not logged in; cleaned environment; timeout (Claude Code killed and reaped); recap of final answers only; bounded history |
+| `src/windows_server.rs` | The level of each tool; hostile arguments refused before the compositor |
+| `tests/windows_server.rs` | The windows server behind the broker, in front of a fake compositor: each tool's request and level, nothing but the list sent without consent, hostile arguments never sent, a trapped title kept a value, a socket held by another program |
 | `tests/mcp.rs` | Tool list, third-party server, successful call, direct call refused, refusal in the conversation, JSON-RPC error that stays data, turn limit, crashing server, timeout (server stopped and reaped), malformed list, duplicates, endless pagination, giant line, server not found, silent server |
 
 The silent server test runs `sleep`, present on any Linux machine and on the CI. The provider tests
@@ -435,6 +438,33 @@ answers, a compositor gone mid-request and nobody to ask, `vider_corbeille` neve
 server, directly or through the agent loop obeying an injection, while the read beside it runs;
 each decision is journaled. A consent runs exactly that call, once, after a reinforced request
 that showed its arguments, journaled with its outcome.
+
+## The windows server (lot A-12, ADR 0032, proposed)
+
+`sherlockd --windows-server <socket>` is one of Sherlock's own servers (`ServerConfig::ours`),
+started by `servers()` in a Wayland session with the compositor's windows socket,
+`$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY-sherlock` (`CompositorWindow::windows_socket`, next to the
+consent one; `docs/compositor.md`, "The windows, for Sherlock"). Its tools, their levels from
+their annotations:
+
+| Tool | Arguments | Level |
+| --- | --- | --- |
+| `lister_fenetres` | | read: number, title, application, workspace, screen, states |
+| `activer_fenetre`, `agrandir_fenetre`, `reduire_fenetre` | `fenetre` | action |
+| `caler_fenetre` | `fenetre`, `cote` (`gauche`, `droite`) | action |
+| `deplacer_vers_bureau` | `fenetre`, `bureau` (from 1) | action |
+| `deplacer_vers_ecran` | `fenetre`, `ecran` (a name from the list) | action |
+| `ranger_fenetres` | | action: the windows shown side by side, four per screen at most |
+| `fermer_fenetre` | `fenetre` | destructive: the reinforced consent |
+
+It asks for no consent: every call reaches it through `McpServers::call`, with a permit. It
+checks every argument before sending anything (unknown argument, number out of range, a screen
+name past 64 characters or with control characters: refused), and the compositor refuses what
+does not exist (« aucun bureau 9 »), said to the model as a failed tool. The list is given as
+JSON after a sentence that says titles are the applications' text, never instructions: a title
+cannot break a line nor pass for the model's text. The socket's peer must be the compositor of
+this user (`--any-peer` only for the tests' fake). One connection per call, 5 s to answer,
+256 KiB at most.
 
 ## What will come next
 
