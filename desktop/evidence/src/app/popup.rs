@@ -23,6 +23,8 @@ pub struct Popups {
     pub submenu: Option<(window::Id, Sub)>,
     /// The compositor closed the menu's popup: the menu goes without folding back.
     pub dismissed: bool,
+    /// The popup of the folders folded behind « … » (lot E-04d).
+    pub folded: Option<window::Id>,
 }
 
 /// A rectangle in a surface: x, y, width, height, in logical pixels.
@@ -121,7 +123,7 @@ impl App {
             (None, Some(closing)) => Some((closing.menu.clone(), closing.items.clone())),
             (None, None) => None,
         };
-        let mut tasks = Vec::new();
+        let mut tasks = vec![self.sync_folded(main, margins)];
         // The menu's popup: closed when nothing shows, opened again where the menu moved.
         let wanted = shown.as_ref().map(|(menu, _)| menu.at);
         if let Some((id, at)) = self.popups.menu
@@ -175,6 +177,39 @@ impl App {
         Task::batch(tasks)
     }
 
+    /// The menu of « … » in a popup of its own, under « … », while it shows or fades out.
+    fn sync_folded(&mut self, main: window::Id, margins: Padding) -> Task<Message> {
+        let shown = self.folded.level(self.now()) > 0.0 && !self.folded.items.is_empty();
+        match (shown, self.popups.folded) {
+            (false, Some(id)) => {
+                self.popups.folded = None;
+                Task::done(Message::RemoveWindow(id))
+            }
+            (true, None) => {
+                let rows = self.folded.items.len() as f32;
+                let height = rows * metrics::MENU_ITEM_HEIGHT
+                    + 2.0 * (metrics::MENU_PADDING + metrics::BORDER_WIDTH);
+                let width = metrics::CONTEXT_SUBMENU_WIDTH;
+                let at = Point::new(self.folded.x, crate::view::folded_top());
+                let anchor = menu_anchor(at, margins);
+                let (Some(size), Some(rect)) = (popup_size(width, height, margins), extent(anchor))
+                else {
+                    return Task::none();
+                };
+                let settings = IcedNewPopupSettings::new(main, size, position(anchor), rect)
+                    .anchor(PopupAnchor::TopLeft)
+                    .gravity(PopupGravity::BottomRight);
+                let id = window::Id::unique();
+                self.popups.folded = Some(id);
+                Task::batch([
+                    Task::done(Message::NewPopUp { settings, id }),
+                    input_region(id, width, height, margins),
+                ])
+            }
+            _ => Task::none(),
+        }
+    }
+
     fn remove_submenu(&mut self) -> Task<Message> {
         match self.popups.submenu.take() {
             Some((id, _)) => Task::done(Message::RemoveWindow(id)),
@@ -184,9 +219,17 @@ impl App {
 
     /// The compositor closed a popup (a click outside it, `popup_done`): its menu closes.
     pub(super) fn popup_closed(&mut self, id: window::Id) {
+        // A click outside the menu of « … »: it goes at once.
+        if self.popups.folded == Some(id) {
+            self.popups.folded = None;
+            self.folded.open = false;
+            self.folded.fade = None;
+            return;
+        }
         if self.popups.menu.is_some_and(|(menu, _)| menu == id) {
             self.popups = Popups {
                 dismissed: self.menu.is_some(),
+                folded: self.popups.folded,
                 ..Popups::default()
             };
             self.menu = None;
@@ -202,6 +245,13 @@ impl App {
     /// The view of a popup, or `None` when `id` is not one.
     pub(crate) fn popup_view(&self, id: window::Id) -> Option<Element<'_, Message>> {
         let margins = Elevation::Menu.margins();
+        if self.popups.folded == Some(id) {
+            let panel = container(self.folded_panel())
+                .padding(margins)
+                .width(Length::Fill)
+                .height(Length::Fill);
+            return Some(panel.into());
+        }
         let (menu, items, sub, live) = match (&self.menu, &self.closing) {
             (Some(menu), _) => {
                 let sub = menu.submenu.map(|s| self.submenu_items(s));

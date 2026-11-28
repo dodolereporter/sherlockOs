@@ -216,6 +216,7 @@ impl<Message> Widget<Message, Theme, Renderer> for Shadowed<'_, Message> {
         let gpu = is_gpu(renderer);
         let palette = crate::theme::palette(theme);
         DRAWN.store(if gpu { GPU } else { SOFTWARE }, Ordering::Relaxed);
+        crate::color::set_opaque_glass(!gpu);
         if gpu {
             if let Some(shadow) = self.elevation.blurred(palette) {
                 // A transparent quad that only casts the shadow; the content covers it.

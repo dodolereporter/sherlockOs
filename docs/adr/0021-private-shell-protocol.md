@@ -112,8 +112,7 @@ socket from `WAYLAND_DISPLAY` (`shell_protocol::socket_from_env`).
   when activated. Client requests to minimize (`xdg_toplevel.set_minimized`,
   `_NET_WM_STATE_HIDDEN`) are not honored yet: until the dock can bring a window back
   (D-18c), a minimize button would lose the window.
-- `zwlr_layer_shell_v1` stays open to every client; moving it behind the same filter is a
-  separate decision (see the security notes of `docs/compositor.md`).
+- `zwlr_layer_shell_v1` is behind the same filter since lot D-46 (see the amendment below).
 
 ## What would change our mind
 
@@ -124,3 +123,33 @@ socket from `WAYLAND_DISPLAY` (`shell_protocol::socket_from_env`).
 - `wp_security_context_v1` used by every sandbox we ship: the filter could rest on it.
 - A standard protocol that carries the geometry, the snapped state and the per screen state:
   the private protocol would then step back for it.
+
+## Amendment (lot D-46, 2026-11-27): layer-shell on the shell socket only
+
+The decision above left `zwlr_layer_shell_v1` open to every client. The security audit of the
+session (27/11) showed what that allows: any application on the session's socket, a Flatpak one
+included, can put an `Overlay` surface over every screen with an `exclusive` keyboard, draw an
+imitation of the lock screen or of the polkit dialog there, and receive the password typed into
+it, or keep the keyboard for as long as it wants. `ext-session-lock` cannot be imitated, but
+layer-shell went around it.
+
+- **Decision.** `zwlr_layer_shell_v1` is only visible to the clients of the shell socket
+  (`WlrLayerShellState::new_with_filter`), as `sherlock_shell_v1` and `ext-workspace-v1` are;
+  binding it by name from the ordinary socket ends in `invalid_object`.
+- **The shell programs.** The bar, the dock, the notifications, the launcher and the
+  applications view open their surfaces on a connection to the shell socket
+  (`shell_protocol::connect`, given to `iced_exwlshell` as `ExWlSettings::with_connection`),
+  found from the `WAYLAND_DISPLAY` that the session gives them. That variable itself is not
+  changed: what these programs launch inherits the ordinary socket, so an application started
+  from the dock or the launcher sees none of the shell's globals. Setting `WAYLAND_DISPLAY` to
+  the shell socket for them would have handed it to every application they start.
+- **The lock screen** uses `ext-session-lock` on the connection the compositor hands it, and
+  needs no layer-shell. The volume and brightness indicator is drawn by the compositor.
+- **The login screen** (`--greeter`) opens no shell socket and has one client, the greeter:
+  `State::share_layer_shell` shows layer-shell to every client there.
+- **Third-party programs.** None needs layer-shell today. One that would (a panel, a dock, an
+  on-screen keyboard) goes through an ADR of its own, which says how it is started on the shell
+  socket or which narrower right it gets.
+- **What this does not stop.** A native process of the user outside any sandbox can still
+  connect to the shell socket (see "Why the socket" above): the filter keeps the sandboxed
+  applications, and the ordinary ones that only know `WAYLAND_DISPLAY`, out.

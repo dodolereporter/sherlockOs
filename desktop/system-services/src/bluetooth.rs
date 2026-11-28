@@ -1,19 +1,22 @@
 //! Bluetooth through BlueZ on the system bus: the adapter and whether it is powered, its
 //! devices (paired, and found by a scan), connecting, disconnecting, pairing with an agent that
-//! asks the user, and forgetting a device.
+//! asks the user, and forgetting a device. Shared by the quick settings of the bar and
+//! Control Room's Bluetooth page (lot D-26o): every call takes the connection it goes through,
+//! a system bus with a time limit on its calls, from a task off the interface thread.
 
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::{Arc, Mutex, PoisonError};
 
-use iced::futures::channel::{mpsc, oneshot};
-use iced::futures::stream::{self, BoxStream};
-use iced::futures::{FutureExt, StreamExt};
+use futures::channel::{mpsc, oneshot};
+use futures::stream::{self, BoxStream};
+use futures::{FutureExt, StreamExt};
 use zbus::Connection;
 use zbus::message::Header;
 use zbus::zvariant::{ObjectPath, OwnedObjectPath, OwnedValue, Value};
 
-use super::{Problem, Result, set};
+use crate::bus::set;
+use crate::{Problem, Result};
 
 pub const SERVICE: &str = "org.bluez";
 /// Where BlueZ's adapters and devices live.
@@ -22,8 +25,9 @@ pub const ADAPTER: &str = "org.bluez.Adapter1";
 pub const DEVICE: &str = "org.bluez.Device1";
 const BATTERY: &str = "org.bluez.Battery1";
 const AGENT_MANAGER: &str = "org.bluez.AgentManager1";
-/// Where the bar serves its agent, only while it pairs a device.
-pub const AGENT_PATH: &str = "/org/sherlockos/bar/agent";
+/// Where the program that pairs a device serves its agent, only while it pairs: the bar or
+/// Control Room, each on its own connection.
+pub const AGENT_PATH: &str = "/org/sherlockos/agent";
 /// What the agent can do: show a code, ask for a yes or a no.
 const CAPABILITY: &str = "KeyboardDisplay";
 /// Devices found by a scan listed at most, besides the paired ones.
@@ -104,10 +108,14 @@ fn device(path: &str, interfaces: &Interfaces) -> Option<Device> {
     let properties = interfaces.get(DEVICE)?;
     let paired = flag(properties, "Paired");
     let named: Option<String> = property(properties, "Name");
-    let name = match named {
-        Some(name) => name,
-        None if paired => property(properties, "Alias")?,
-        None => return None,
+    let alias: Option<String> = property(properties, "Alias");
+    // The alias is the name unless the user renamed the device (`rename`); without a name of
+    // its own, BlueZ makes it of the address.
+    let name = match (named, alias) {
+        (Some(_), Some(alias)) if !alias.is_empty() => alias,
+        (Some(name), _) => name,
+        (None, Some(alias)) if paired => alias,
+        (None, _) => return None,
     };
     let icon: Option<String> = property(properties, "Icon");
     let battery = interfaces
@@ -117,7 +125,7 @@ fn device(path: &str, interfaces: &Interfaces) -> Option<Device> {
     Some(Device {
         path: path.to_owned(),
         // Chosen by whoever owns the device, near: cleaned before it is shown.
-        name: system_services::names::shown(&name),
+        name: crate::names::shown(&name),
         kind: Kind::of(icon.as_deref().unwrap_or_default()),
         paired,
         connected: flag(properties, "Connected"),
@@ -217,6 +225,75 @@ pub async fn forget(bus: &Connection, adapter: &str, device: &str) -> Result<()>
     )
     .await?;
     Ok(())
+}
+
+/// Longest name given to a device, in characters: BlueZ keeps its alias as it is given.
+pub const MAX_ALIAS_CHARS: usize = 64;
+
+/// Renames a device (its `Alias`, kept by BlueZ): the name shown everywhere from then on. An
+/// empty name gives the device its own back. Control characters are left out and the name is
+/// cut to `MAX_ALIAS_CHARS`.
+pub async fn rename(bus: &Connection, device: &str, name: &str) -> Result<()> {
+    let name: String = name
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(MAX_ALIAS_CHARS)
+        .collect();
+    set(
+        bus,
+        SERVICE,
+        device,
+        DEVICE,
+        "Alias",
+        Value::from(name.trim()),
+    )
+    .await
+}
+
+/// One item per change BlueZ announces on `bus`: a property of an adapter or a device (powered,
+/// connected, paired, a battery level, a name), a device found by a scan or forgotten. For a
+/// view that reads everything again, coalescing the bursts itself.
+pub async fn changes(bus: &Connection) -> Result<BoxStream<'static, ()>> {
+    let signal =
+        |interface: &'static str, member: &'static str, path: &'static str, namespace: bool| {
+            let rule = zbus::MatchRule::builder()
+                .msg_type(zbus::message::Type::Signal)
+                .sender(SERVICE)?
+                .interface(interface)?
+                .member(member)?;
+            let rule = if namespace {
+                rule.path_namespace(path)?
+            } else {
+                rule.path(path)?
+            };
+            zbus::Result::Ok(rule.build())
+        };
+    let rules = [
+        signal(
+            "org.freedesktop.DBus.Properties",
+            "PropertiesChanged",
+            PATH,
+            true,
+        )?,
+        signal(
+            "org.freedesktop.DBus.ObjectManager",
+            "InterfacesAdded",
+            "/",
+            false,
+        )?,
+        signal(
+            "org.freedesktop.DBus.ObjectManager",
+            "InterfacesRemoved",
+            "/",
+            false,
+        )?,
+    ];
+    let mut streams = Vec::new();
+    for rule in rules {
+        let messages = zbus::MessageStream::for_match_rule(rule, bus, None).await?;
+        streams.push(messages.map(|_| ()).boxed());
+    }
+    Ok(stream::select_all(streams).boxed())
 }
 
 /// What the agent asks the user while a device pairs.
@@ -586,9 +663,9 @@ mod tests {
         let reply = Reply::new(sender);
         reply.send(true);
         reply.send(false);
-        assert_eq!(iced::futures::executor::block_on(answer), Ok(true));
+        assert_eq!(zbus::block_on(answer), Ok(true));
         let (sender, answer) = oneshot::channel::<bool>();
         drop(Reply::new(sender));
-        assert!(iced::futures::executor::block_on(answer).is_err());
+        assert!(zbus::block_on(answer).is_err());
     }
 }

@@ -31,6 +31,7 @@ fn main() {
     let choice = Choice::Vulkan {
         manifests: vec![PathBuf::from(radv)],
         user_backend: false,
+        software: None,
     };
     // SAFETY: as above.
     unsafe { choice.apply() };

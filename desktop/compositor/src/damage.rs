@@ -41,24 +41,48 @@ pub enum Part {
     Dim,
     Highlight,
     Label,
+    /// The « × » of the window under the pointer (lot D-33c).
+    CloseButton,
     MiniBar,
     /// Mission Control: the background, the border and the name of the thumbnail of a
     /// workspace, by its index.
     Thumbnail(usize),
     ThumbnailBorder(usize),
     ThumbnailLabel(usize),
+    /// The « × » of a thumbnail under the pointer, and the « + » after the thumbnails (lot
+    /// D-33c).
+    ThumbnailClose(usize),
+    AddWorkspace,
     /// The on-screen display of the media keys (lot D-35).
     Osd,
     /// The screenshot tool (lots D-35c, D-35e): its shapes (dim, area, handles, toolbar,
     /// buttons) and its texts, by their order.
     CaptureShape(usize),
     CaptureLabel(usize),
+    /// The thumbnail of the last screenshot and its outline, the loupe of the tool.
+    CaptureThumbnail,
+    CaptureThumbnailShadow,
+    CaptureLoupe,
     /// The ring of a click shown (lot C-01), by its number.
     Click(u64),
     /// The background of a locked screen, and the pills of the rescue screen, by their index
     /// (lot D-25a).
     LockBackground,
     LockLabel(usize),
+    /// The screens off (lot D-38): the black, the light over the squashed picture, the picture,
+    /// the line or the dot, and its halo.
+    ScreenOff,
+    ScreenOffGlow,
+    ScreenOffPicture,
+    ScreenOffLine,
+    ScreenOffHalo,
+    /// The veil before the inactivity (lot D-38).
+    IdleVeil,
+    /// The curtain (lot D-24e): its picture, light or dark, the black before and after it, and
+    /// the last frame of the desktop frozen under it while it comes down.
+    Curtain(bool),
+    CurtainBlack,
+    Frozen,
     /// The blur behind a glass surface (lot D-37).
     Blur,
 }

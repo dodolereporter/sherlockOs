@@ -26,20 +26,22 @@ if [ ! -d "$repo/target/wallpapers/first-clue" ]; then
 	exit 1
 fi
 
-for program in $programs; do
-	if [ ! -x "$repo/target/release/$program" ]; then
-		echo "missing $repo/target/release/$program: cargo build --release --bin $program" >&2
-		exit 1
-	fi
-done
+# The release build of CARGO_TARGET_DIR, where `just install-session` has just built it; every
+# program up to date with the sources of this repository, or nothing is printed.
+. "$(dirname "$0")/built.sh"
+release=$(release_dir "$repo")
+check_built "$repo" "$release" $programs
 
-# The repository path is quoted in the commands: it may hold spaces.
-q="'$(printf '%s' "$repo" | sed "s/'/'\\\\''/g")'"
+# The paths are quoted in the commands: they may hold spaces.
+quote() {
+	printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
+}
+q=$(quote "$repo")
 cat <<EOF
 # Run as root to install the SherlockOS session (shown by the login screen as "SherlockOS"):
 
 sudo install -d $dest $applications $data/icons
-sudo install -m 755 $(for p in $programs; do printf '%s/target/release/%s ' "$q" "$p"; done)$dest/
+sudo install -m 755 $(for p in $programs; do printf '%s/%s ' "$(quote "$release")" "$p"; done)$dest/
 sudo install -m 755 $q/desktop/compositor/session/sherlockos-session $dest/
 # Evidence, the one program meant for the user, where the session's PATH finds it (its desktop
 # entry runs \`evidence\`); the others stay out of the PATH:
@@ -56,6 +58,9 @@ sudo install -D -m 644 $q/assets/lock/lock-dark.jpg $data/lock/lock-dark.jpg
 sudo install -D -m 644 $q/assets/lock/lock-light.jpg $data/lock/lock-light.jpg
 # The PAM service of the lock screen (lot D-25a):
 sudo install -m 644 $q/desktop/lock/pam/sherlockos-lock /etc/pam.d/sherlockos-lock
+# No program of the user may trace the lock screen or the compositor (lot D-25k):
+sudo install -m 644 $q/distro/sysctl.d/60-sherlockos-ptrace.conf /etc/sysctl.d/
+sudo sysctl -p /etc/sysctl.d/60-sherlockos-ptrace.conf
 # Which portal backend serves the session (xdg-desktop-portal reads it from XDG_DATA_DIRS):
 sudo install -D -m 644 $q/desktop/compositor/session/sherlockos-portals.conf $data/xdg-desktop-portal/sherlockos-portals.conf
 # The cursor themes, their aliases kept as links:
@@ -64,7 +69,7 @@ sudo rm -rf $(for t in $themes; do printf '%s/%s ' "$icons" "$t"; done)
 sudo cp -R $(for t in $themes; do printf '%s/target/cursors/%s ' "$q" "$t"; done)$icons/
 
 # To remove it:
-#   sudo rm -r $dest $data $sessions/sherlockos.desktop /usr/local/bin/evidence $applications/evidence.desktop $applications/control-room.desktop /etc/pam.d/sherlockos-lock
+#   sudo rm -r $dest $data $sessions/sherlockos.desktop /usr/local/bin/evidence $applications/evidence.desktop $applications/control-room.desktop /etc/pam.d/sherlockos-lock /etc/sysctl.d/60-sherlockos-ptrace.conf
 #   sudo rm -r $(for t in $themes; do printf '%s/%s ' "$icons" "$t"; done)
 EOF
 
