@@ -8,6 +8,7 @@ use std::time::Duration;
 use anyhow::{Context, bail};
 use serde_json::json;
 use sherlockd::agent::{Agent, AgentConfig};
+use sherlockd::broker::{Broker, Journal, Nobody};
 use sherlockd::claude_code::{ClaudeCode, ClaudeCodeConfig};
 use sherlockd::mcp::{McpClient, McpServers, ServerConfig, ToolHost};
 use sherlockd::model::{Message, ModelReply, ModelRequest, ToolCall};
@@ -48,6 +49,10 @@ fn main() -> anyhow::Result<()> {
         }
         ["--proxy"] => serve_proxy(),
         ["--test-server"] => test_server::run(Mode::Normal).context("test server"),
+        ["--test-server", "--trace", trace] => {
+            test_server::run_traced(Mode::Normal, Some(std::path::Path::new(trace)))
+                .context("test server")
+        }
         ["--test-server", case] => {
             let mode = Mode::from_arg(case).with_context(|| format!("unknown case: {case}"))?;
             test_server::run(mode).context("test server")
@@ -79,7 +84,17 @@ async fn servers() -> anyhow::Result<McpServers> {
         .timeout(Duration::from_secs(5))
         .ours();
     let client = McpClient::spawn(&config).await?;
-    let mut servers = McpServers::new();
+    // Nobody to ask yet (the compositor's consent window comes with A-11b): read only, and
+    // every decision journaled. Without a journal, reads still run, actions never.
+    let journal = match Journal::default_path().map(|path| Journal::open(&path)) {
+        Some(Ok(journal)) => journal,
+        Some(Err(error)) => {
+            tracing::error!(%error, "consent journal unavailable: actions refused");
+            Journal::none()
+        }
+        None => Journal::none(),
+    };
+    let mut servers = McpServers::with_broker(Broker::new(Box::new(Nobody), journal));
     servers.add(client).await.context("tool discovery")?;
     Ok(servers)
 }

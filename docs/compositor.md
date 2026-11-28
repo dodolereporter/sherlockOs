@@ -408,7 +408,9 @@ sees `wayland-2` and not `wayland-2-shell` (see ADR 0021).
   window's center), the target of an animation rather than its steps. A minimized window
   keeps the screen and the geometry it had. Without any screen, a window stays listed with an
   empty screen name and its place in the space.
-- **States.** `maximized`, `fullscreen`, `snapped` (half or quarter), `minimized`, `activated`.
+- **States.** `maximized`, `fullscreen`, `snapped` (half or quarter), `minimized`, `activated`,
+  and from version 5 `attention` (lot Q-52, see "Activation" below); a client bound at an
+  older version never receives it.
   The active window is the last one given the keyboard: it stays active while the bar or the
   dock has the keyboard after a click on them, which is what the dock needs to choose between
   bringing an application forward and minimizing it (`docs/dock.md`, Launching).
@@ -875,6 +877,33 @@ reads and sets both. Exchanges with X11 go through `X11Wm`:
   Wayland client, X11, or the compositor). `is_secret` recognizes a secret copied by a password
   manager (`x-kde-passwordManagerHint`). From X11, smithay passes on only the types with a `/`:
   that hint does not cross from an X11 application.
+## Activation (lot Q-52)
+
+An application brings its window forward: a click on its icon in the bar's notification area,
+a notification, a second launch. `State::request_activation` (`activation.rs`) decides.
+
+- **Granted:** out of its minimized state, its workspace shown, raised with the animation of
+  D-19d and given the keyboard (`State::activate`, as the dock does).
+- **Refused:** no keyboard stolen. The window asks for attention: the `attention` state of
+  `sherlock_shell_v1` (version 5; version 4 is App Expose), for the dock to show, until it gets the keyboard.
+- **Wayland, `xdg-activation-v1`.** A token is granted when it carries the serial of a press
+  (button or key, the last 32 remembered, within 10 s) that the compositor gave to the very
+  client that asks for it: the bar, after a click on an icon, asks for one and hands it to the
+  application, which activates its window with it. A token is used once and lives 10 s; one
+  without a serial, or with a serial its client never got, is refused.
+- **X11, `_NET_ACTIVE_WINDOW`.** smithay 0.7's window manager does not read it: the compositor
+  hears it as an X11 client of XWayland watching the root window's substructure
+  (`x11_activation.rs`, read in the loop, 64 requests a turn at most). `WM_CHANGE_STATE` to
+  `NormalState` (smithay's `unminimize_request`) is handled the same. A pager (source 2) is
+  obeyed; an application (source 1) when a token was granted within the last 10 s and not used
+  by another X11 request (an X11 application cannot hand the token back: the click on its tray
+  icon granted one), or when its process already has the keyboard.
+- **Tests.** `tests/shell.rs`: a token from a click on the dock brings a minimized window of
+  another workspace back; used again it does nothing; without a serial, or with another
+  client's, the window asks for attention, until it gets the keyboard. `tests/xwayland.rs`:
+  `WM_CHANGE_STATE` and `_NET_ACTIVE_WINDOW` from the application ask for attention, a pager's
+  activates.
+
 ## Drag and drop (lot D-29c)
 
 Between Wayland clients, smithay's grab (`DnDGrab`) does the protocol. The compositor adds

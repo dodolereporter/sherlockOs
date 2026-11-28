@@ -28,6 +28,8 @@ pub enum Error {
     OtherDisk,
     /// The item is no longer in the trash.
     NotInTrash,
+    /// Stopped by the user (lot E-11); what was being written is removed.
+    Stopped,
     Io(io::Error),
 }
 
@@ -40,6 +42,7 @@ impl fmt::Display for Error {
             Self::IntoItself => f.write_str(texts::INTO_ITSELF),
             Self::OtherDisk => f.write_str(texts::OTHER_DISK),
             Self::NotInTrash => f.write_str(texts::NOT_IN_TRASH),
+            Self::Stopped => f.write_str(texts::STOPPED),
             Self::Io(error) => match error.kind() {
                 io::ErrorKind::PermissionDenied | io::ErrorKind::ReadOnlyFilesystem => {
                     f.write_str(texts::NOT_ALLOWED)
@@ -247,7 +250,12 @@ fn copy_file(from: &Path, to: &Path, meta: &fs::Metadata) -> io::Result<()> {
         .create_new(true)
         .mode(kept_mode(meta))
         .open(to)?;
-    io::copy(&mut source, &mut target)?;
+    // By chunks, counted and stoppable (lot E-11). A copy cut short leaves nothing behind.
+    if let Err(error) = crate::transfer_job::copy_bytes(&mut source, &mut target) {
+        drop(target);
+        let _ = fs::remove_file(to);
+        return Err(error);
+    }
     target.set_permissions(fs::Permissions::from_mode(kept_mode(meta)))?;
     target.set_times(times(meta))
 }
@@ -322,6 +330,9 @@ fn copy_tree(from: &Path, to: &Path, report: &mut Report) -> Result<()> {
             if error.kind() == io::ErrorKind::AlreadyExists && !created {
                 return Err(exists_error(to));
             }
+            if error.kind() == io::ErrorKind::Interrupted {
+                return Err(Error::Stopped);
+            }
             Err(error.into())
         }
     }
@@ -339,6 +350,20 @@ pub fn copy_into(sources: &[PathBuf], dest: &Path) -> Result<Report> {
         copy_tree(source, &target, &mut report)?;
         report.paths.push(target);
     }
+    Ok(report)
+}
+
+/// Copies `source` to `target`, which must not exist (lot E-11: the target is chosen by the
+/// caller, after the user's choice on taken names).
+pub fn copy_into_as(source: &Path, target: &Path) -> Result<Report> {
+    let mut report = Report::default();
+    if fs::symlink_metadata(source)?.is_dir()
+        && let Some(dest) = target.parent()
+    {
+        check_not_inside(source, dest)?;
+    }
+    copy_tree(source, target, &mut report)?;
+    report.paths.push(target.to_path_buf());
     Ok(report)
 }
 
