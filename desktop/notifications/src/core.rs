@@ -88,7 +88,8 @@ impl State {
         if let Some(problem) = problem {
             tracing::warn!(%problem, "Do not disturb setting ignored");
         }
-        config.do_not_disturb
+        // An end of Do not disturb that passed lets the notifications show (D-23e).
+        config.active_now()
     }
 }
 
