@@ -248,6 +248,13 @@ are built once (`sherlock_ui::component::icon` caches the SVG handles).
   closes it. Each tab keeps its folder, its history, its selection and its search; one listing
   is live, the active tab's, and switching reads the other folder again off the interface
   thread. At most 24 tabs.
+- Copies and moves (lot E-11, `transfer_job`): a paste first looks, off the interface
+  thread, for the names already taken where it goes. If any, a dialog asks once for all of them:
+  « Remplacer » (the item there goes to the trash, never deleted for good), « Garder les deux »
+  (« nom (copie) »), « Ignorer », or « Annuler ». While it runs, the status bar shows its share
+  done and an « Arrêter » button: the size is counted first (200 000 entries at most), the
+  files are copied by chunks of 1 MB that count and check for a stop, and a copy stopped or
+  failed leaves nothing half-written behind.
 - Network (lot E-07): a « Réseau » section of the sidebar lists the file servers of the local
   network, found without any tool installed (`network`): a multicast DNS question for
   `_smb._tcp.local` (Samba, macOS and NAS boxes, announced by Avahi or mDNSResponder) and a

@@ -384,6 +384,23 @@ pub mod evidence {
         }
     }
     pub const DONE: &str = "C'est fait.";
+    /// Copies and moves: stopped, and the question on taken names (lot E-11).
+    pub const STOPPED: &str = "Arrêté. Ce qui était en cours d'écriture a été retiré.";
+    pub const STOP: &str = "Arrêter";
+    pub fn taken_question(count: usize, first: &str) -> String {
+        match count {
+            1 => format!("« {first} » existe déjà ici."),
+            n => format!(
+                "« {first} » et {} autres éléments existent déjà ici.",
+                n - 1
+            ),
+        }
+    }
+    pub const TAKEN_DETAIL: &str =
+        "Ton choix vaut pour tous. Un élément remplacé va à la corbeille.";
+    pub const REPLACE: &str = "Remplacer";
+    pub const KEEP_BOTH: &str = "Garder les deux";
+    pub const SKIP: &str = "Ignorer";
     pub const PATH_COPIED: &str = "Chemin copié.";
     pub const TRASH_EMPTIED: &str = "La corbeille est vide.";
 

@@ -130,6 +130,9 @@ impl App {
         if self.confirm_empty {
             layers.push(self.dialog());
         }
+        if let Some((_, _, _, names)) = &self.pending_paste {
+            layers.push(self.taken_dialog(names));
+        }
         if let Some(search) = &self.chooser {
             layers.push(self.chooser(search));
         }
@@ -753,12 +756,27 @@ impl App {
                 .color(tint)
                 .wrapping(text::Wrapping::None)
         };
-        let line = row![
-            small(left, tint),
-            space::horizontal(),
-            small(t::HINT.into(), color::palette().text_tertiary),
-        ]
-        .align_y(Alignment::Center);
+        // A copy or a move under way: its bar and its stop button (lot E-11).
+        let right: Element<'_, Message> = match &self.progress {
+            Some(progress) => {
+                let fraction = progress.fraction();
+                row![
+                    small(
+                        format!("{} %", (fraction * 100.0).round()),
+                        color::palette().text_tertiary
+                    ),
+                    iced::widget::progress_bar(0.0..=1.0, fraction)
+                        .length(metrics::SEARCH_WIDTH)
+                        .girth(metrics::BORDER_WIDTH * 4.0),
+                    ui::secondary_button(t::STOP, Some(Message::StopTransfer)),
+                ]
+                .spacing(metrics::GAP_ICON)
+                .align_y(Alignment::Center)
+                .into()
+            }
+            None => small(t::HINT.into(), color::palette().text_tertiary).into(),
+        };
+        let line = row![small(left, tint), space::horizontal(), right].align_y(Alignment::Center);
         container(line)
             .width(Length::Fill)
             .height(metrics::STATUS_BAR_HEIGHT)
@@ -845,6 +863,36 @@ impl App {
             .padding([more::TAB_PADDING, metrics::TOOLBAR_PADDING])
             .clip(true);
         column![reveal(bar).opacity(level), ui::divider()].into()
+    }
+
+    /// The names a paste would take: replace, keep both, skip, for all of them (lot E-11).
+    fn taken_dialog(&self, names: &[String]) -> Element<'_, Message> {
+        use crate::transfer_job::Taken;
+        let first = names.first().map(String::as_str).unwrap_or_default();
+        let actions = row![
+            ui::secondary_button(t::CANCEL, Some(Message::TakenChoice(None))),
+            space::horizontal(),
+            ui::secondary_button(t::SKIP, Some(Message::TakenChoice(Some(Taken::Skip)))),
+            ui::secondary_button(
+                t::KEEP_BOTH,
+                Some(Message::TakenChoice(Some(Taken::KeepBoth)))
+            ),
+            ui::primary_button(t::REPLACE, Some(Message::TakenChoice(Some(Taken::Replace)))),
+        ]
+        .spacing(metrics::BUTTON_STACK_GAP);
+        let card = column![
+            ui::body(t::taken_question(
+                names.len(),
+                &crate::pathbar::visible(first)
+            ))
+            .font(typography::UI_SEMIBOLD)
+            .size(typography::CARD_TITLE_SIZE),
+            ui::description(t::TAKEN_DETAIL),
+            actions,
+        ]
+        .spacing(metrics::PREVIEW_GAP);
+        let panel = ui::floating_panel(card, metrics::DIALOG_WIDTH * 1.4);
+        opaque(container(panel).center(Length::Fill).style(theme::scrim))
     }
 
     /// The menu itself, unfolding or folding back from its top left corner (lot E-01).
