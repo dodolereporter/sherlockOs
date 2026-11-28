@@ -48,6 +48,9 @@ use crate::{
     window_data,
 };
 
+/// Openings per second past which a flick of the fingers decides, whatever the distance.
+const FLICK: f64 = 2.0;
+
 /// Half a pixel on a screen 4096 wide, as a share of the opening.
 const PRECISION: f64 = motion::GEOMETRY_PRECISION / 4096.0;
 const NO_FILL: [f32; 4] = [0.0; 4];
@@ -210,6 +213,14 @@ impl Overview {
 
     fn shown(&self, now: Duration) -> bool {
         self.open || self.held.is_some() || self.animating(now)
+    }
+
+    /// Leaves from where the fingers let it, towards `to`, at their `speed` (openings per
+    /// second): no break between the fingers and the spring (lot D-33c).
+    fn fling(&mut self, now: Duration, to: f64, speed: f64) {
+        let from = self.progress(now);
+        self.held = None;
+        self.motion = Some(Animation::with_velocity(mc::SPRING, from, to, speed, now));
     }
 
     /// Leaves from where the view is, towards `to`, without a jolt.
@@ -791,22 +802,34 @@ impl State {
         }
     }
 
-    /// The three fingers lifted: the view opens if they went far enough up (`done`), closes if
-    /// they went far enough down, and goes back to where it was otherwise. `false` if the
-    /// swipe did not move the view.
-    pub(crate) fn release_overview(&mut self, up: bool, done: bool) -> bool {
+    /// The three fingers lifted, moving at `velocity` (units per second, down positive): the
+    /// view goes where that velocity carries it, open past half way, closed short of it, and
+    /// leaves at the fingers' speed, without a break (lot D-33c). A quick short flick is
+    /// enough; fingers that came back past their start close it, whatever direction they
+    /// first took. Cancelled by libinput, it goes back to where it was. `false` if the swipe
+    /// did not move the view.
+    pub(crate) fn release_overview(&mut self, cancelled: bool, velocity: f64) -> bool {
         let base = self.overview.swipe.take();
         if std::mem::take(&mut self.overview.swipe_closed) {
             return true;
         }
-        let (Some(base), Some(_)) = (base, self.overview.held) else {
+        let (Some(base), Some(held)) = (base, self.overview.held) else {
             return false;
         };
-        let open = if done { up } else { base >= 0.5 };
+        // In openings per second, up opening.
+        let speed = -velocity / crate::gestures::OVERVIEW_DISTANCE;
+        let projected = held + speed * crate::gestures::PROJECTION;
+        let open = match cancelled {
+            true => base >= 0.5,
+            false if speed.abs() >= FLICK => speed > 0.0,
+            false => projected >= 0.5,
+        };
+        let now = self.now();
         if open {
-            self.overview.animate(self.now(), 1.0);
+            self.overview.fling(now, 1.0, speed);
         } else {
             self.leave_overview(None);
+            self.overview.fling(now, 0.0, speed);
         }
         true
     }

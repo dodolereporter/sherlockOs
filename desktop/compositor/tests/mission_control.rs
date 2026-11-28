@@ -622,6 +622,41 @@ mod tests {
         assert!(h.state.overview_add_button(&output).is_none());
     }
 
+    /// Lot D-33c: the fingers' velocity decides, and the view leaves at their speed.
+    #[test]
+    fn a_quick_flick_opens_the_view_and_fingers_back_past_their_start_close_it() {
+        let (mut h, _shown) = two_windows();
+        let s = &mut h.state;
+        // Up 60 units in 15 ms: short of half way, but quick: it opens.
+        s.gesture_swipe_begin(3, 1000);
+        for i in 1..=3 {
+            s.gesture_swipe_update(1000 + i * 5, (0.0, -20.0).into());
+        }
+        let held = s.overview_progress(s.now());
+        assert!(held > 0.0 && held < 0.5, "{held}");
+        s.gesture_swipe_end(1016, false);
+        assert!(s.overview_open());
+        // It goes on at the fingers' speed: no stop at the release.
+        let soon = s.now() + std::time::Duration::from_millis(16);
+        assert!(s.overview_progress(soon) > held + 0.05);
+        let later = s.now() + std::time::Duration::from_secs(5);
+        assert_eq!(s.overview_progress(later), 1.0);
+        h.tap(KEY_ESCAPE);
+        // Up 150, then slowly back down past where the fingers started: it stays closed.
+        let s = &mut h.state;
+        s.gesture_swipe_begin(3, 5000);
+        for i in 1..=10 {
+            s.gesture_swipe_update(5000 + i * 10, (0.0, -15.0).into());
+        }
+        for i in 11..=40 {
+            s.gesture_swipe_update(5000 + i * 50, (0.0, 7.0).into());
+        }
+        s.gesture_swipe_end(7100, false);
+        assert!(!s.overview_open());
+        let later = s.now() + std::time::Duration::from_secs(5);
+        assert!(!s.overview_shown(later));
+    }
+
     #[test]
     fn the_view_follows_three_fingers_up_and_down() {
         let (mut h, _shown) = two_windows();
