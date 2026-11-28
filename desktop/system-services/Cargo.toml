@@ -23,6 +23,10 @@ tracing = "=0.1.44"
 # The channels and streams of the Bluetooth agent and its pairings (lot D-26o, moved from the
 # bar): the version iced already pulls into the workspace.
 futures = { version = "=0.3.34", default-features = false, features = ["std", "async-await"] }
+# The time limit of a Wi-Fi activation (lot D-20e) and the stream of its state: the timer and
+# the helpers of zbus's own runtime, already built for it (no interface toolkit, no tokio).
+async-io = "=2.6.0"
+futures-lite = { version = "=2.6.1", default-features = false, features = ["std"] }
 
 [lints]
 workspace = true

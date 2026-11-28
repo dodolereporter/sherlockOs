@@ -1,9 +1,9 @@
 //! The system services behind the quick settings of the bar and the media keys of the
 //! compositor (lot D-35): the sound of the default output and of the microphone (`pactl`, or
 //! `wpctl`), the screen brightness (logind), the keyboard backlight (UPower, or logind), the
-//! media players (MPRIS). Every write goes to the
-//! service that owns the setting, which asks polkit where its policy wants it. Nothing runs as
-//! root, nothing uses `sudo`, nothing writes into sysfs.
+//! media players (MPRIS), and Wi-Fi (NetworkManager), shared with Control Room. Every write goes
+//! to the service that owns the setting, which asks polkit where its policy wants it. Nothing
+//! runs as root, nothing uses `sudo`, nothing writes into sysfs.
 //!
 //! Each call takes the command or the connection it goes through, so that the tests run them
 //! against fake commands and fake services on a private bus. See `docs/media-keys.md`.
@@ -11,9 +11,11 @@
 pub mod audio;
 pub mod backlight;
 pub mod bluetooth;
+pub mod bus;
 pub mod keyboard;
 pub mod mpris;
 pub mod names;
+pub mod network;
 pub mod notify;
 pub mod secret;
 pub mod watch;
