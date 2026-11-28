@@ -117,8 +117,17 @@ impl Item {
 
     /// A stack named `name`, the downloads folder: the theme's `folder-download`, else the
     /// tile from sherlock-ui.
-    pub fn stack(folder: std::path::PathBuf, name: &str, themed: Option<&Path>) -> Self {
+    pub fn stack(
+        folder: std::path::PathBuf,
+        name: &str,
+        themed: Option<&Path>,
+        pile: &[dock::PileCard],
+    ) -> Self {
+        // Shown as a stack (lot D-21k2): its newest items' cards; else the folder.
         let glyph = match themed {
+            _ if !pile.is_empty() => Glyph::File(svg::Handle::from_memory(
+                dock::stack_pile(pile).into_bytes(),
+            )),
             Some(path) => Glyph::File(icon_handle(path)),
             None => Glyph::File(svg::Handle::from_memory(dock::stack_icon().into_bytes())),
         };
@@ -185,7 +194,8 @@ pub struct Builder<'a> {
     /// The trash at the end, full (`Some(true)`) or empty; none without a trash folder.
     pub trash: Option<bool>,
     /// The downloads stack before it: its folder and its name (lot D-21k).
-    pub stack: Option<(&'a Path, &'a str)>,
+    /// Its cards when it shows as a stack, none to show the folder.
+    pub stack: Option<(&'a Path, &'a str, &'a [dock::PileCard])>,
     pub catalog: &'a Catalog,
     pub lookup: &'a IconLookup,
     /// Size the icon files are looked up for: a fully magnified icon.
@@ -243,9 +253,14 @@ impl Builder<'_> {
             items.push(item);
         }
         // The stack, then the trash last, after the separator, as on macOS (lots D-21j, k).
-        if let Some((folder, name)) = self.stack {
+        if let Some((folder, name, pile)) = self.stack {
             let themed = self.lookup.find("folder-download", self.icon_size);
-            items.push(Item::stack(folder.to_path_buf(), name, themed.as_deref()));
+            items.push(Item::stack(
+                folder.to_path_buf(),
+                name,
+                themed.as_deref(),
+                pile,
+            ));
         }
         if let Some(full) = self.trash {
             items.push(Item::trash(full));
@@ -386,7 +401,7 @@ mod tests {
             applications: false,
             sherlock: false,
             trash: Some(true),
-            stack: Some((Path::new("/home/me/Downloads"), "Downloads")),
+            stack: Some((Path::new("/home/me/Downloads"), "Downloads", &[])),
             catalog: &catalog,
             lookup: &lookup,
             icon_size: 88,
