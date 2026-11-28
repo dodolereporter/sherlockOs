@@ -159,6 +159,10 @@ pub enum Change {
     LockAfter(Delay),
     ClipboardHistory(bool),
     ClipboardKeep(bool),
+    ReduceMotion(bool),
+    ReduceTransparency(bool),
+    IncreaseContrast(bool),
+    Effects(appearance_config::Effects),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -804,7 +808,13 @@ fn close_window() -> Task<Message> {
 /// The file that holds a change.
 pub(crate) fn file_of(change: Change) -> File {
     match change {
-        Change::Mode(_) | Change::LightFrom(_) | Change::DarkFrom(_) => File::Appearance,
+        Change::Mode(_)
+        | Change::LightFrom(_)
+        | Change::DarkFrom(_)
+        | Change::ReduceMotion(_)
+        | Change::ReduceTransparency(_)
+        | Change::IncreaseContrast(_)
+        | Change::Effects(_) => File::Appearance,
         Change::Wallpaper(_) | Change::FollowTheme(_) => File::Wallpaper,
         Change::DockSize(_)
         | Change::Magnification(_)
@@ -877,6 +887,10 @@ fn apply(s: &mut Settings, change: Change) {
         Change::LockAfter(Delay(minutes)) => s.lock.idle_minutes = minutes,
         Change::ClipboardHistory(on) => s.clipboard.history = on,
         Change::ClipboardKeep(on) => s.clipboard.keep_on_disk = on,
+        Change::ReduceMotion(on) => s.appearance.accessibility.reduce_motion = on,
+        Change::ReduceTransparency(on) => s.appearance.accessibility.reduce_transparency = on,
+        Change::IncreaseContrast(on) => s.appearance.accessibility.increase_contrast = on,
+        Change::Effects(effects) => s.appearance.accessibility.effects = effects,
     }
 }
 

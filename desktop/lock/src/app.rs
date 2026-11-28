@@ -701,10 +701,12 @@ impl Lock {
             diameter + ui::BUBBLE_GAP + ui::NAME_SIZE + ui::NAME_GAP + 2.0 * ui::RISE,
         );
         let gaze = form::gaze(field, self.elapsed()).then_some(below);
-        // Without the model, the still picture of the boards, its top in the bubble. With it,
-        // the 3D widget, which falls back to the still picture itself in software.
+        // Without the model, or in the light mode (« Effets visuels » other than full, lot
+        // D-26p), the still picture of the boards, its top in the bubble. With it, the 3D
+        // widget, which falls back to the still picture itself in software.
+        let full = sherlock_ui::motion::effects() == sherlock_ui::motion::Effects::Full;
         let mascot: Element<'_, Message> = match &self.mascot {
-            Some(Mascot(model)) => Sherlock3d::new(Some(model.clone()))
+            Some(Mascot(model)) if full => Sherlock3d::new(Some(model.clone()))
                 .mood(self.mood())
                 .look_at(gaze)
                 .background(fill)
@@ -712,7 +714,7 @@ impl Lock {
                 .width(side)
                 .height(side)
                 .into(),
-            None => container(
+            _ => container(
                 image(image::Handle::from_bytes(SHERLOCK))
                     .height(side * 1.15)
                     .opacity(self.presence(1)),

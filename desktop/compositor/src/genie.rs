@@ -437,11 +437,23 @@ impl State {
 
     /// Starts the effect of `window` being minimized (`minimizing`) or restored. One already
     /// running turns around from where it is, without a jump.
+    /// The minimize effect as the Accessibility settings leave it (lot D-26p): the session's,
+    /// a fade and shrink instead of the genie in the light mode (« Effets visuels : Réduits »),
+    /// none with « Réduire les animations » or without effects.
+    fn effective_minimize_effect(&self) -> Effect {
+        use sherlock_ui::motion::{self, Effects};
+        match (motion::reduced(), motion::effects(), self.minimize_effect) {
+            (true, ..) | (_, Effects::None, _) => Effect::None,
+            (_, Effects::Reduced, Effect::Genie) => Effect::Scale,
+            (.., effect) => effect,
+        }
+    }
+
     pub(crate) fn start_minimize_effect(&mut self, window: &Window, minimizing: bool) {
         let now = self.now();
         let track = track(window);
         let running = track.running.get().filter(|(p, _)| !p.is_done(now));
-        let started = match (running, self.minimize_effect) {
+        let started = match (running, self.effective_minimize_effect()) {
             (Some((mut progress, way)), _) => {
                 progress.turn(now, minimizing);
                 Some((progress, way))

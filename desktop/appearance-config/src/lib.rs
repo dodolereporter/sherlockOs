@@ -8,7 +8,14 @@
 //! Theme=auto
 //! AutoLightFrom=07:00
 //! AutoDarkFrom=19:00
+//! ReduceMotion=false
+//! ReduceTransparency=false
+//! Effects=full
+//! IncreaseContrast=false
 //! ```
+//!
+//! The last four are the Accessibility page of Control Room (lot D-26p): every program that
+//! follows the file applies them to itself (`Accessibility::apply`), live.
 //!
 //! Every key is optional. A value that cannot be read gives the default and a `Problem` that
 //! the caller logs: a bad file never stops a program. See `docs/appearance.md`.
@@ -26,6 +33,37 @@ const GROUP: &str = "Appearance";
 const THEME: &str = "Theme";
 const LIGHT_FROM: &str = "AutoLightFrom";
 const DARK_FROM: &str = "AutoDarkFrom";
+const REDUCE_MOTION: &str = "ReduceMotion";
+const REDUCE_TRANSPARENCY: &str = "ReduceTransparency";
+const EFFECTS: &str = "Effects";
+const INCREASE_CONTRAST: &str = "IncreaseContrast";
+
+pub use sherlock_ui::motion::Effects;
+
+/// The Accessibility settings (lot D-26p), each off by default.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash)]
+pub struct Accessibility {
+    /// « Réduire les animations »: what only decorates a change jumps to its end.
+    pub reduce_motion: bool,
+    /// « Réduire la transparence »: an opaque veil instead of the glass.
+    pub reduce_transparency: bool,
+    /// « Effets visuels »: full, reduced (the light mode), none.
+    pub effects: Effects,
+    /// « Augmenter le contraste ».
+    pub increase_contrast: bool,
+}
+
+impl Accessibility {
+    /// Applies these settings to the whole process: sherlock-ui's motion and palette read them
+    /// at once. `follow` calls it each time the file changes them.
+    pub fn apply(self) {
+        let no_motion = self.reduce_motion || self.effects == Effects::None;
+        sherlock_ui::motion::set_reduced(no_motion);
+        sherlock_ui::motion::set_effects(self.effects);
+        sherlock_ui::color::set_reduced_transparency(self.reduce_transparency);
+        sherlock_ui::color::set_increased_contrast(self.increase_contrast);
+    }
+}
 
 /// The theme chosen in the file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -180,6 +218,7 @@ pub struct AppearanceConfig {
     pub mode: Mode,
     pub light_from: TimeOfDay,
     pub dark_from: TimeOfDay,
+    pub accessibility: Accessibility,
 }
 
 impl Default for AppearanceConfig {
@@ -188,6 +227,7 @@ impl Default for AppearanceConfig {
             mode: Mode::Dark,
             light_from: TimeOfDay(7 * 3600),
             dark_from: TimeOfDay(19 * 3600),
+            accessibility: Accessibility::default(),
         }
     }
 }
@@ -206,13 +246,36 @@ impl AppearanceConfig {
             let Some((key, value)) = line.split_once('=').filter(|_| group == GROUP) else {
                 continue;
             };
-            let value = value.trim();
-            match key.trim() {
+            let (key, value) = (key.trim(), value.trim());
+            match key {
                 THEME => match Mode::ALL.into_iter().find(|m| m.key() == value) {
                     Some(mode) => config.mode = mode,
                     None => problems.push(problem(THEME, value, "one of dark, light, auto")),
                 },
                 LIGHT_FROM => read_time(LIGHT_FROM, value, &mut config.light_from, &mut problems),
+                REDUCE_MOTION | REDUCE_TRANSPARENCY | INCREASE_CONTRAST => {
+                    let a = &mut config.accessibility;
+                    let slot = match key {
+                        REDUCE_MOTION => &mut a.reduce_motion,
+                        REDUCE_TRANSPARENCY => &mut a.reduce_transparency,
+                        _ => &mut a.increase_contrast,
+                    };
+                    match value {
+                        "true" => *slot = true,
+                        "false" => *slot = false,
+                        _ => {
+                            let key = [REDUCE_MOTION, REDUCE_TRANSPARENCY, INCREASE_CONTRAST]
+                                .into_iter()
+                                .find(|k| *k == key)
+                                .unwrap_or(REDUCE_MOTION);
+                            problems.push(problem(key, value, "true or false"));
+                        }
+                    }
+                }
+                EFFECTS => match Effects::ALL.into_iter().find(|e| e.key() == value) {
+                    Some(effects) => config.accessibility.effects = effects,
+                    None => problems.push(problem(EFFECTS, value, "one of full, reduced, none")),
+                },
                 DARK_FROM => read_time(DARK_FROM, value, &mut config.dark_from, &mut problems),
                 _ => {}
             }
@@ -248,10 +311,15 @@ impl AppearanceConfig {
     pub fn write_into(&self, text: &str) -> String {
         let (read, _) = Self::parse(text);
         let values = |c: &Self| {
+            let a = c.accessibility;
             [
                 (THEME, c.mode.key().to_owned()),
                 (LIGHT_FROM, c.light_from.to_string()),
                 (DARK_FROM, c.dark_from.to_string()),
+                (REDUCE_MOTION, a.reduce_motion.to_string()),
+                (REDUCE_TRANSPARENCY, a.reduce_transparency.to_string()),
+                (EFFECTS, a.effects.key().to_owned()),
+                (INCREASE_CONTRAST, a.increase_contrast.to_string()),
             ]
         };
         let mut text = text.to_owned();
@@ -392,12 +460,36 @@ mod tests {
         config
     }
 
+    /// Lot D-26p: the Accessibility keys, read tolerantly, and applied to the process.
+    #[test]
+    fn the_accessibility_keys_are_read_and_applied() {
+        let text = "[Appearance]\nReduceMotion=true\nReduceTransparency=maybe\nEffects=none\n";
+        let (config, problems) = AppearanceConfig::parse(text);
+        let a = config.accessibility;
+        assert!(a.reduce_motion && !a.reduce_transparency && !a.increase_contrast);
+        assert_eq!(a.effects, Effects::None);
+        assert_eq!(problems.len(), 1, "{problems:?}");
+        assert_eq!(problems[0].key, "ReduceTransparency");
+        a.apply();
+        assert!(sherlock_ui::motion::reduced());
+        assert_eq!(sherlock_ui::motion::effects(), Effects::None);
+        Accessibility::default().apply();
+        assert!(!sherlock_ui::motion::reduced());
+        assert_eq!(sherlock_ui::motion::effects(), Effects::Full);
+    }
+
     #[test]
     fn what_control_room_writes_reads_back() {
         let config = AppearanceConfig {
             mode: Mode::Auto,
             light_from: at(6, 30, 0),
             dark_from: at(20, 0, 0),
+            accessibility: Accessibility {
+                reduce_motion: true,
+                reduce_transparency: false,
+                effects: Effects::Reduced,
+                increase_contrast: true,
+            },
         };
         let (read, problems) = AppearanceConfig::parse(&config.write_into(""));
         assert!(problems.is_empty(), "{problems:?}");

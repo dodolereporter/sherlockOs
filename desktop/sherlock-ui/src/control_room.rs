@@ -134,6 +134,9 @@ pub mod texts {
         "La disposition des touches, leur répétition et les raccourcis.";
     pub const CLIPBOARD: &str = "Presse-papiers";
     pub const CLIPBOARD_ABOUT: &str = "Ce que Super + V garde de ce que tu copies.";
+    pub const ACCESSIBILITY: &str = "Accessibilité";
+    pub const ACCESSIBILITY_ABOUT: &str =
+        "Des mouvements, de la transparence et du contraste à ta mesure.";
     pub const DEFAULT_APPS: &str = "Applications par défaut";
     pub const DEFAULT_APPS_ABOUT: &str = "Ce qui s'ouvre pour chaque sorte de fichier ou de lien.";
 
@@ -283,6 +286,22 @@ pub mod texts {
     pub const CLIPBOARD_HISTORY_HELP: &str = "Garde en mémoire tes 50 dernières copies, pour les retrouver avec Super + V. Jamais les mots de passe, rien pendant le verrouillage.";
     pub const CLIPBOARD_KEEP: &str = "Garder après la déconnexion";
     pub const CLIPBOARD_KEEP_HELP: &str = "Écrit l'historique sur le disque, avec les éléments épinglés. Sinon, il s'efface à la fin de la session.";
+    // Accessibility (lot D-26p).
+    pub const DISPLAY_CARD: &str = "Affichage";
+    pub const REDUCE_MOTION: &str = "Réduire les animations";
+    pub const REDUCE_MOTION_HELP: &str =
+        "Les fenêtres, les panneaux et les vues apparaissent sans glisser ni rebondir.";
+    pub const REDUCE_TRANSPARENCY: &str = "Réduire la transparence";
+    pub const REDUCE_TRANSPARENCY_HELP: &str =
+        "La barre, le dock, les menus et les bulles prennent un fond opaque.";
+    pub const INCREASE_CONTRAST: &str = "Augmenter le contraste";
+    pub const INCREASE_CONTRAST_HELP: &str =
+        "Des bordures plus nettes et des textes secondaires plus foncés, sur des fonds opaques.";
+    pub const EFFECTS: &str = "Effets visuels";
+    pub const EFFECTS_HELP: &str = "Réduits : un fondu au lieu du génie, Sherlock en image fixe et Mission Control sans fenêtres animées dans ses vignettes. Pour un ordinateur lent.";
+    pub const EFFECTS_FULL: &str = "Complets";
+    pub const EFFECTS_REDUCED: &str = "Réduits";
+    pub const EFFECTS_NONE: &str = "Aucun";
 
     /// A delay before the lock: « 1 minute », « 5 minutes ».
     pub fn minutes(count: u32) -> String {
@@ -337,6 +356,11 @@ pub mod texts {
     pub const SHORTCUT_WORDS: &str = "clavier raccourcis touches super combinaisons";
     pub const GESTURE_WORDS: &str = "gestes doigts trackpad glisser balayer";
     pub const CLIPBOARD_WORDS: &str = "presse-papiers copier coller historique super v vie privée";
+    pub const MOTION_WORDS: &str = "animations mouvement vertige accessibilité";
+    pub const TRANSPARENCY_WORDS: &str = "transparence flou verre opaque accessibilité";
+    pub const CONTRAST_WORDS: &str = "contraste lisibilité bordures accessibilité";
+    pub const EFFECTS_WORDS: &str =
+        "effets visuels mode léger génie lent performances accessibilité";
     pub const APPS_WORDS: &str = "applications par défaut ouvrir avec programme";
 
     /// Hour of the day as the menus show it: « 07:30 ».

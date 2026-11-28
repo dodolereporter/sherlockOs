@@ -100,6 +100,10 @@ fn every_setting_is_written_and_read_back() {
         Change::Layout(LayoutChoice::Known(2)),
         Change::RepeatDelay(100),
         Change::RepeatRate(0),
+        Change::ReduceMotion(true),
+        Change::ReduceTransparency(true),
+        Change::IncreaseContrast(true),
+        Change::Effects(appearance_config::Effects::Reduced),
     ] {
         let _ = app.update(Message::Set(change));
     }
@@ -138,6 +142,15 @@ fn every_setting_is_written_and_read_back() {
     let text = |path: &Path| fs::read_to_string(path).expect("written");
     assert!(text(&app.paths.touchpad).contains("click = areas"));
     assert!(text(&app.paths.appearance).contains("AutoLightFrom=06:30"));
+    // The Accessibility page (lot D-26p), in the appearance file every program follows.
+    for line in [
+        "ReduceMotion=true",
+        "ReduceTransparency=true",
+        "IncreaseContrast=true",
+        "Effects=reduced",
+    ] {
+        assert!(text(&app.paths.appearance).contains(line), "{line}");
+    }
     assert!(text(&app.paths.dock).contains("Position=left"));
     assert!(text(&app.paths.pointer).contains("show-clicks = true"));
     assert!(text(&app.paths.touchpad).contains("swipe-down = minimize"));
@@ -505,6 +518,7 @@ fn captures_of_the_pages_in_both_themes() {
             (Page::Touchpad, "touchpad"),
             (Page::Lock, "lock"),
             (Page::Clipboard, "clipboard"),
+            (Page::Accessibility, "accessibility"),
             (Page::DefaultApps, "default-apps"),
         ] {
             let (tmp, mut app) = bench("capture", dirs.clone());

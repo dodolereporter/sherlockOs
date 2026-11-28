@@ -175,7 +175,28 @@ configuration:
 - captures of every page, dark and light, at 1920 by 1032 (a window maximized on a 1080p
   screen, under the bar) and 520 by 760, in `target/tmp/control-room-*.png`.
 
+**Accessibility (lot D-26p).** « Réduire les animations », « Réduire la transparence » and
+« Augmenter le contraste » (switches), and « Effets visuels » (« Complets », « Réduits », « Aucun »), in the
+appearance file (`ReduceMotion`, `ReduceTransparency`, `IncreaseContrast`, `Effects`: see
+`docs/appearance.md`). Every program that follows that file applies them to itself, live:
+
+- reduce motion: `sherlock_ui::motion::set_reduced` (what only decorates jumps to its end), and
+  in the compositor no opening or closing animation and no minimize effect;
+- reduce transparency: every glass of the palette opaque, laid over the desktop color (the
+  compositor has no blur to replace: the veil is the glass itself);
+- increase contrast: the opaque glass, borders and dividers two and a half times as present,
+  the secondary texts as the primary ones (`Palette::contrasted`);
+- reduced effects, the light mode of the J3 plan: a shrink and fade instead of the genie,
+  Sherlock as his still picture on the lock screen, Mission Control's thumbnails without their
+  live windows; no effects: none of these animations at all.
+
 ## Captures
+
+The accessibility page, wide in both themes and narrow:
+
+![Accessibility, dark](control-room/accessibility-wide-dark.png)
+![Accessibility, light](control-room/accessibility-wide-light.png)
+![Accessibility, narrow, light](control-room/accessibility-narrow-light.png)
 
 The appearance page, dark and light, in a wide window:
 

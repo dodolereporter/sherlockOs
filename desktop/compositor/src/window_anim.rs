@@ -91,8 +91,12 @@ impl State {
         self.window_anims.off = !on;
     }
 
+    /// Whether windows open and close with their animation: not with `--window-animations
+    /// off`, nor with « Réduire les animations » or « Effets visuels : Aucun » of Control Room,
+    /// read live from the appearance file (lot D-26p).
     pub fn window_animations(&self) -> bool {
-        !self.window_anims.off
+        use sherlock_ui::motion::{self, Effects};
+        !self.window_anims.off && !motion::reduced() && motion::effects() != Effects::None
     }
 
     /// Plugs in the backend's way to draw a window into a texture.
