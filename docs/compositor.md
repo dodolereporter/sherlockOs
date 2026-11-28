@@ -2449,10 +2449,14 @@ shortcuts, do not reach the client.
 
 **Following the fingers.** Once a three finger swipe picks the vertical direction (see
 "Touchpad"), the view is held where the fingers put it: 300 units up open it fully
-(`gestures::OVERVIEW_DISTANCE`), from closed, or from open going down. When the fingers lift
-past the trigger of the vertical swipe (100 units, `VERTICAL_DISTANCE`), up opens and down
-closes; short of it, or cancelled by libinput, the view goes back to where it was. Either way it
-leaves from where the fingers left it, on `mission_control::SPRING` (the snap spring). Three
+(`gestures::OVERVIEW_DISTANCE`), from closed, or from open going down. When the fingers lift,
+their velocity over the last 100 ms decides (lot D-33c): past 2 openings a second
+(`mission_control::FLICK`), the way they flicked wins, so a quick short swipe opens or closes;
+slower, the view goes where that velocity carries it in 0.2 s (`gestures::PROJECTION`, as for
+the workspaces), open past half way, closed short of it. Fingers that came back past where they
+started close it, whatever way they first went. Cancelled by libinput, the view goes back to
+where it was. It leaves from where the fingers left it, at their speed, on
+`mission_control::SPRING` (the snap spring): no stop at the release. Three
 fingers down on the desktop open nothing: they do what `swipe-down` says, nothing by default.
 
 **What it may not do.** It does not open during a move or resize gesture, nor while an anchored
