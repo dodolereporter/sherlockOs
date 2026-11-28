@@ -349,6 +349,7 @@ mod tests {
         let signals = signals(&client);
         NotificationsConfig {
             do_not_disturb: true,
+            until: None,
         }
         .save(&settings)
         .unwrap();
@@ -368,6 +369,14 @@ mod tests {
         // Read again at once: the next notification shows.
         NotificationsConfig {
             do_not_disturb: false,
+            until: None,
+        }
+        .save(&settings)
+        .unwrap();
+        // An end already past (D-23e): Do not disturb holds no more.
+        NotificationsConfig {
+            do_not_disturb: true,
+            until: Some(1),
         }
         .save(&settings)
         .unwrap();

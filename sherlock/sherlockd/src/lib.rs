@@ -30,6 +30,7 @@ pub mod own_server;
 pub mod process;
 pub mod proxy;
 pub mod scripted;
+pub mod shell;
 pub mod test_server;
 pub mod window;
 pub mod windows_server;

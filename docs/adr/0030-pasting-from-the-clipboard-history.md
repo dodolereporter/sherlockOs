@@ -1,6 +1,6 @@
 # ADR 0030: Pasting from the clipboard history puts the item back, the user pastes
 
-- Status: proposed
+- Status: accepted (the author approved it on 2026-11-28)
 - Date: 2026-11-27
 - Lot: D-42
 
