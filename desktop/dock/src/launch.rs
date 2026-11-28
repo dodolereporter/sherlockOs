@@ -86,6 +86,18 @@ pub fn toggle_applications() -> Result<u32, LaunchError> {
     spawn(&program, &[], None, None)
 }
 
+/// The file manager: « Afficher dans Evidence » (lot D-21i).
+pub const EVIDENCE: &str = "evidence";
+
+/// Opens Evidence on `folder`, found beside the session's programs or in the `PATH`.
+pub fn show_in_evidence(folder: &Path) -> Result<u32, LaunchError> {
+    let program = std::env::var_os("SHERLOCKOS_BIN")
+        .map(|dir| Path::new(&dir).join(EVIDENCE))
+        .filter(|path| path.is_file())
+        .unwrap_or_else(|| EVIDENCE.into());
+    spawn(&program, &[folder.display().to_string()], None, None)
+}
+
 /// Program of the launcher, Super + Space (`docs/launcher.md`).
 pub const LAUNCHER: &str = "launcher";
 
