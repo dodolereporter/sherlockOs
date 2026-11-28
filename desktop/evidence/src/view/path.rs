@@ -41,7 +41,9 @@ impl App {
         } else {
             metrics::SEARCH_WIDTH
         };
-        let mut right = metrics::GAP_ICON + search + metrics::TOOLBAR_PADDING;
+        // The search, then the preview's button (lot E-08).
+        let mut right =
+            2.0 * metrics::GAP_ICON + search + metrics::ICON_BUTTON + metrics::TOOLBAR_PADDING;
         if let Some(branch) = self.repo.as_ref().and_then(|r| r.branch.as_deref()) {
             let (_, padding) = metrics::BRANCH_CHIP_PADDING;
             let label = t::branch(branch);
