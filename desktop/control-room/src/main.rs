@@ -1,6 +1,7 @@
 //! Control Room: `cargo run -p control-room`.
 
 use control_room::app::{App, Config};
+use control_room::instance;
 use sherlock_ui::control_room as cr;
 use sherlock_ui::{theme, typography};
 
@@ -16,10 +17,20 @@ fn main() -> iced::Result {
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
     tracing::info!(?renderer, "renderer");
-    let Some(config) = Config::from_env() else {
+    let Some(mut config) = Config::from_env() else {
         tracing::error!("no home folder: the settings files cannot be found");
         return Ok(());
     };
+    // `--page <id>` opens a page; a Control Room already open shows it instead (lot D-26n).
+    let page = instance::page_argument(std::env::args().skip(1));
+    let socket = instance::socket_path();
+    if let instance::Start::Handed = instance::start(socket.as_deref(), page) {
+        tracing::info!(?page, "Control Room is already open: it shows the page");
+        return Ok(());
+    }
+    if let Some(page) = page {
+        config.page = page;
+    }
     // The theme of the file before the first frame; the subscription follows it afterwards.
     sherlock_ui::color::set_active(appearance_config::theme_now(&config.paths.appearance));
     let (width, height) = cr::WINDOW;

@@ -1,6 +1,7 @@
-//! Screen capture for screen sharing (lot D-28b, ADR 0028): a capture client on the shell
-//! socket speaks `ext-image-copy-capture-v1` with `ext-output-image-capture-source-v1`, an
-//! application on the ordinary socket shows a window. Without a screen: the backend's drawing
+//! Screen capture for screen sharing (lots D-28b and D-28c, ADR 0028): a capture client on the
+//! shell socket speaks `ext-image-copy-capture-v1` with `ext-output-image-capture-source-v1` and
+//! `ext-foreign-toplevel-image-capture-source-v1`, an application on the ordinary socket shows a
+//! window. Without a screen: the backend's drawing
 //! is a `Capturer` given by the test, a pattern, or Mesa's software renderer for the test that
 //! compares with the real rendering.
 
@@ -19,10 +20,12 @@ mod tests {
 
     use compositor::{
         State,
-        capture::{Image, Target},
+        capture::{self, Image},
         lock::Programs,
+        screencast::Access,
     };
     use smithay::reexports::calloop::EventLoop;
+    use wayland_client::event_created_child;
     use wayland_client::{
         Connection, Dispatch, EventQueue, Proxy, QueueHandle, WEnum, delegate_noop,
         protocol::{
@@ -35,7 +38,12 @@ mod tests {
             wl_surface::WlSurface,
         },
     };
+    use wayland_protocols::ext::foreign_toplevel_list::v1::client::{
+        ext_foreign_toplevel_handle_v1::{self, ExtForeignToplevelHandleV1},
+        ext_foreign_toplevel_list_v1::{self, ExtForeignToplevelListV1},
+    };
     use wayland_protocols::ext::image_capture_source::v1::client::{
+        ext_foreign_toplevel_image_capture_source_manager_v1::ExtForeignToplevelImageCaptureSourceManagerV1,
         ext_image_capture_source_v1::ExtImageCaptureSourceV1,
         ext_output_image_capture_source_manager_v1::ExtOutputImageCaptureSourceManagerV1,
     };
@@ -64,6 +72,53 @@ mod tests {
         stopped: bool,
         ready: usize,
         failed: Vec<u32>,
+        /// The windows listed, with their title, until closed.
+        toplevels: Vec<(ExtForeignToplevelHandleV1, String)>,
+        closed: usize,
+    }
+
+    impl Dispatch<ExtForeignToplevelListV1, ()> for Client {
+        fn event(
+            client: &mut Self,
+            _: &ExtForeignToplevelListV1,
+            event: ext_foreign_toplevel_list_v1::Event,
+            _: &(),
+            _: &Connection,
+            _: &QueueHandle<Self>,
+        ) {
+            if let ext_foreign_toplevel_list_v1::Event::Toplevel { toplevel } = event {
+                client.toplevels.push((toplevel, String::new()));
+            }
+        }
+
+        event_created_child!(Client, ExtForeignToplevelListV1, [
+            ext_foreign_toplevel_list_v1::EVT_TOPLEVEL_OPCODE => (ExtForeignToplevelHandleV1, ()),
+        ]);
+    }
+
+    impl Dispatch<ExtForeignToplevelHandleV1, ()> for Client {
+        fn event(
+            client: &mut Self,
+            handle: &ExtForeignToplevelHandleV1,
+            event: ext_foreign_toplevel_handle_v1::Event,
+            _: &(),
+            _: &Connection,
+            _: &QueueHandle<Self>,
+        ) {
+            use ext_foreign_toplevel_handle_v1::Event;
+            match event {
+                Event::Title { title } => {
+                    if let Some(t) = client.toplevels.iter_mut().find(|t| &t.0 == handle) {
+                        t.1 = title;
+                    }
+                }
+                Event::Closed => {
+                    client.toplevels.retain(|t| &t.0 != handle);
+                    client.closed += 1;
+                }
+                _ => {}
+            }
+        }
     }
 
     impl Dispatch<wl_registry::WlRegistry, ()> for Client {
@@ -169,6 +224,7 @@ mod tests {
     delegate_noop!(Client: ExtImageCopyCaptureManagerV1);
     delegate_noop!(Client: ExtOutputImageCaptureSourceManagerV1);
     delegate_noop!(Client: ExtImageCaptureSourceV1);
+    delegate_noop!(Client: ExtForeignToplevelImageCaptureSourceManagerV1);
 
     /// A connection, its queue and what it received.
     struct Side {
@@ -258,6 +314,8 @@ mod tests {
         shell: Side,
         /// How many times the screen was drawn for a capture.
         draws: Rc<Cell<usize>>,
+        /// Whether the last drawing had the cursor.
+        cursor: Rc<Cell<bool>>,
     }
 
     /// The pattern the test's capturer draws: red and green from the place, blue 7.
@@ -272,9 +330,13 @@ mod tests {
     }
 
     impl Harness {
-        /// One screen of 800 × 600, an application client, a shell client, and a capturer that
-        /// draws `pattern`.
+        /// One screen of 800 × 600, an application client, a shell client that may capture,
+        /// and a capturer that draws `pattern`.
         fn start() -> Self {
+            Self::with_access(Access::ShellClients)
+        }
+
+        fn with_access(access: Access) -> Self {
             let event_loop = EventLoop::try_new().unwrap();
             let mut state = State::new(&event_loop).unwrap();
             state.add_output((800, 600).into(), 1.0);
@@ -285,16 +347,20 @@ mod tests {
                 rescue: None,
                 swaylock: None,
             });
+            state.set_capture_access(access);
             let (server, app) = UnixStream::pair().unwrap();
             state.insert_client(server);
             let (server, shell) = UnixStream::pair().unwrap();
             state.insert_shell_client(server);
             let draws = Rc::new(Cell::new(0));
             let counted = draws.clone();
-            state.set_capturer(Box::new(move |_, target| {
+            let cursor = Rc::new(Cell::new(false));
+            let with_cursor = cursor.clone();
+            state.set_capturer(Box::new(move |state, target, cursor| {
                 counted.set(counted.get() + 1);
-                assert!(matches!(target, Target::Screen(_)));
-                let (width, height) = (800, 600);
+                with_cursor.set(cursor);
+                let size = capture::target_size(state, target).unwrap();
+                let (width, height) = (size.w as u32, size.h as u32);
                 let rgba = (0..height)
                     .flat_map(|y| (0..width).flat_map(move |x| pattern(x, y)))
                     .collect();
@@ -310,6 +376,7 @@ mod tests {
                 app: Side::new(app),
                 shell: Side::new(shell),
                 draws,
+                cursor,
             };
             h.run_until("the globals", |h| {
                 h.app.sees("wl_shm") && h.shell.sees("wl_shm")
@@ -342,13 +409,63 @@ mod tests {
         /// constraints.
         fn session(&mut self) -> ExtImageCopyCaptureSessionV1 {
             let qh = self.shell.queue.handle();
-            let manager: ExtImageCopyCaptureManagerV1 = self.shell.bind();
             let sources: ExtOutputImageCaptureSourceManagerV1 = self.shell.bind();
             let output: WlOutput = self.shell.bind();
             let source = sources.create_source(&output, &qh, ());
-            let session = manager.create_session(&source, Options::empty(), &qh, ());
+            self.session_on(&source, Options::empty())
+        }
+
+        fn session_on(
+            &mut self,
+            source: &ExtImageCaptureSourceV1,
+            options: Options,
+        ) -> ExtImageCopyCaptureSessionV1 {
+            let qh = self.shell.queue.handle();
+            let manager: ExtImageCopyCaptureManagerV1 = self.shell.bind();
+            let session = manager.create_session(source, options, &qh, ());
             self.run_until("the constraints", |h| h.shell.client.done);
             session
+        }
+
+        /// The application shows a window of `w` × `h`, all of one color; its surface and
+        /// buffer file.
+        fn window(&mut self, (w, h): (i32, i32)) -> (WlSurface, XdgToplevel, File) {
+            let qh = self.app.queue.handle();
+            let compositor: WlCompositor = self.app.bind();
+            let wm_base: XdgWmBase = self.app.bind();
+            let surface = compositor.create_surface(&qh, ());
+            let toplevel = wm_base
+                .get_xdg_surface(&surface, &qh, ())
+                .get_toplevel(&qh, ());
+            toplevel.set_title(String::from("Notes"));
+            surface.commit();
+            self.run_until("the configure", |h| h.app.client.configured);
+            let file = self.attach(&surface, (w, h));
+            self.run_until("the window", |h| h.state.space.elements().count() == 1);
+            (surface, toplevel, file)
+        }
+
+        /// A new buffer of `w` × `h` on `surface`.
+        fn attach(&mut self, surface: &WlSurface, (w, h): (i32, i32)) -> File {
+            let layout = (w, h, w * 4, 0);
+            let (buffer, file) = self.app.buffer(layout, Format::Argb8888, [0, 0, 255, 255]);
+            surface.attach(Some(&buffer), 0, 0);
+            surface.damage_buffer(0, 0, w, h);
+            surface.commit();
+            file
+        }
+
+        /// The shell client lists the windows and makes a source of the one titled `title`.
+        fn window_source(&mut self, title: &str) -> ExtImageCaptureSourceV1 {
+            let qh = self.shell.queue.handle();
+            let _list: ExtForeignToplevelListV1 = self.shell.bind();
+            self.run_until("the listed window", |h| {
+                h.shell.client.toplevels.iter().any(|t| t.1 == title)
+            });
+            let toplevels = &self.shell.client.toplevels;
+            let handle = &toplevels.iter().find(|t| t.1 == title).unwrap().0;
+            let sources: ExtForeignToplevelImageCaptureSourceManagerV1 = self.shell.bind();
+            sources.create_source(handle, &qh, ())
         }
 
         /// A frame into `buffer`, asked for.
@@ -373,14 +490,73 @@ mod tests {
         pixel
     }
 
+    const GLOBALS: [&str; 4] = [
+        MANAGER,
+        "ext_output_image_capture_source_manager_v1",
+        "ext_foreign_toplevel_image_capture_source_manager_v1",
+        "ext_foreign_toplevel_list_v1",
+    ];
+
     /// A capture protocol shows every pixel of the session: only the shell socket sees it.
     #[test]
     fn only_the_shell_sees_the_capture_globals() {
         let h = Harness::start();
-        for global in [MANAGER, "ext_output_image_capture_source_manager_v1"] {
+        for global in GLOBALS {
             assert!(h.shell.sees(global), "{global}");
             assert!(!h.app.sees(global), "{global}");
         }
+    }
+
+    /// In the real session only the portal's program may capture: another program on the shell
+    /// socket (here the test itself) sees the shell's globals, not the capture's.
+    #[test]
+    fn a_shell_client_that_is_not_the_portal_cannot_capture() {
+        let h = Harness::with_access(Access::Portal);
+        assert!(h.shell.sees("sherlock_shell_manager_v1"));
+        for global in GLOBALS {
+            assert!(!h.shell.sees(global), "{global}");
+        }
+    }
+
+    /// A window is listed with its title, captured at its size with its title bar, the cursor
+    /// drawn when asked for; it grows, and the session gives its new size, failing the frame
+    /// asked for; it closes, and the session stops.
+    #[test]
+    fn a_window_is_captured_and_followed() {
+        let mut h = Harness::start();
+        h.state.set_window_animations(false);
+        let (surface, toplevel, _file) = h.window((200, 100));
+        let source = h.window_source("Notes");
+        let session = h.session_on(&source, Options::PaintCursors);
+        let (w, h_) = h.shell.client.size.unwrap();
+        // The window and its title bar, at scale 1.
+        assert_eq!(w, 200);
+        assert!(h_ >= 100, "{h_}");
+        let layout = (w as i32, h_ as i32, w as i32 * 4, 0);
+        let (buffer, _target) = h.shell.buffer(layout, Format::Xrgb8888, [0; 4]);
+        let frame = h.capture(&session, &buffer);
+        h.run_until("the frame", |h| h.shell.client.ready == 1);
+        assert!(h.cursor.get(), "the cursor is drawn");
+        frame.destroy();
+
+        // Larger: new constraints, and the frame asked for fails.
+        let output = h.state.space.outputs().next().unwrap().clone();
+        h.state.screen_changed(&output);
+        let frame = h.capture(&session, &buffer);
+        let _file = h.attach(&surface, (300, 150));
+        h.run_until("the new size", |h| {
+            h.shell.client.size.is_some_and(|s| s.0 == 300)
+        });
+        h.run_until("the failure", |h| !h.shell.client.failed.is_empty());
+        let reason = FailureReason::BufferConstraints as u32;
+        assert_eq!(h.shell.client.failed, vec![reason]);
+        frame.destroy();
+
+        // Closed: the list says so, and the session stops.
+        toplevel.destroy();
+        surface.destroy();
+        h.run_until("the stop", |h| h.shell.client.stopped);
+        h.run_until("the closed window", |h| h.shell.client.closed == 1);
     }
 
     /// The session asks for a buffer of the screen's size, in the two formats every compositor
@@ -494,9 +670,9 @@ mod tests {
         let mut renderer = unsafe { GlesRenderer::new(context) }.unwrap();
         let scene = Scene::new(&mut renderer).unwrap();
         let mut textures = wallpaper::Textures::default();
-        h.state.set_capturer(Box::new(move |state, target| {
+        h.state.set_capturer(Box::new(move |state, target, _| {
             let _ = &display;
-            compositor::capture::image(&scene, &mut renderer, &mut textures, state, target)
+            compositor::capture::image(&scene, &mut renderer, &mut textures, state, target, None)
         }));
         // The window appears at once: its opening would start at this first drawing.
         h.state.set_window_animations(false);

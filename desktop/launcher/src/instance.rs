@@ -121,13 +121,6 @@ mod tests {
     /// Set for the copy of this test program that plays a running launcher.
     const STAND_IN: &str = "LAUNCHER_TEST_STAND_IN";
 
-    /// Taken by the tests that start a process. Until its `exec`, a child is a copy of this
-    /// program: it holds a copy of every descriptor, the lock another test has just released
-    /// included, so that lock looked still taken; and its `/proc/<id>/exe` is still this
-    /// program, so a stranger looked like a launcher and was signalled. Both seen when several
-    /// test programs run at once.
-    static PROCESSES: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
     /// `child` once it runs its own program: `spawn` may return before the `exec`, until which
     /// its command line is still ours. Gives up after 5 s.
     fn started(child: std::process::Child) -> std::process::Child {
@@ -170,7 +163,7 @@ mod tests {
 
     #[test]
     fn a_second_launcher_closes_the_first() {
-        let _processes = PROCESSES.lock().unwrap_or_else(|e| e.into_inner());
+        let _processes = crate::processes();
         let dir = temp("instance");
         let lock = holds(&dir);
         let written = std::fs::read_to_string(dir.join(FILE)).expect("lock file");
@@ -199,7 +192,7 @@ mod tests {
 
     #[test]
     fn a_live_process_that_is_not_a_launcher_is_never_signalled() {
-        let _processes = PROCESSES.lock().unwrap_or_else(|e| e.into_inner());
+        let _processes = crate::processes();
         let dir = temp("stranger");
         let _lock = holds(&dir);
         let stranger = std::process::Command::new("sleep")

@@ -15,6 +15,7 @@ use crate::settings::File;
 pub enum Page {
     Displays,
     Sound,
+    Network,
     Appearance,
     Keyboard,
     Touchpad,
@@ -24,9 +25,10 @@ pub enum Page {
 }
 
 impl Page {
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::Displays,
         Self::Sound,
+        Self::Network,
         Self::Appearance,
         Self::Keyboard,
         Self::Touchpad,
@@ -39,6 +41,7 @@ impl Page {
         match self {
             Self::Displays => t::DISPLAYS,
             Self::Sound => t::SOUND,
+            Self::Network => t::NETWORK,
             Self::Appearance => t::APPEARANCE,
             Self::Keyboard => t::KEYBOARD,
             Self::Touchpad => t::TOUCHPAD,
@@ -53,6 +56,7 @@ impl Page {
         match self {
             Self::Displays => t::DISPLAYS_ABOUT,
             Self::Sound => t::SOUND_ABOUT,
+            Self::Network => t::NETWORK_ABOUT,
             Self::Appearance => t::APPEARANCE_ABOUT,
             Self::Keyboard => t::KEYBOARD_ABOUT,
             Self::Touchpad => t::TOUCHPAD_ABOUT,
@@ -62,10 +66,30 @@ impl Page {
         }
     }
 
+    /// Its name on the command line (`control-room --page network`), and back.
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::Displays => "displays",
+            Self::Sound => "sound",
+            Self::Network => "network",
+            Self::Appearance => "appearance",
+            Self::Keyboard => "keyboard",
+            Self::Touchpad => "touchpad",
+            Self::Lock => "lock",
+            Self::Clipboard => "clipboard",
+            Self::DefaultApps => "apps",
+        }
+    }
+
+    pub fn from_id(id: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|p| p.id() == id)
+    }
+
     pub fn icon(self) -> Icon {
         match self {
             Self::Displays => Icon::Desktop,
             Self::Sound => Icon::Sound,
+            Self::Network => Icon::Network,
             Self::Appearance => Icon::Image,
             Self::Keyboard => Icon::Keyboard,
             Self::Touchpad => Icon::Touchpad,
@@ -86,6 +110,9 @@ pub enum Setting {
     Rotation,
     MainDisplay,
     DisplayOn,
+    Wifi,
+    Networks,
+    OtherNetwork,
     Theme,
     LightFrom,
     DarkFrom,
@@ -120,7 +147,7 @@ pub enum Setting {
 }
 
 impl Setting {
-    pub const ALL: [Self; 45] = [
+    pub const ALL: [Self; 48] = [
         Self::Arrangement,
         Self::Resolution,
         Self::Refresh,
@@ -128,6 +155,9 @@ impl Setting {
         Self::Rotation,
         Self::MainDisplay,
         Self::DisplayOn,
+        Self::Wifi,
+        Self::Networks,
+        Self::OtherNetwork,
         Self::Theme,
         Self::LightFrom,
         Self::DarkFrom,
@@ -179,6 +209,9 @@ impl Setting {
             Self::Rotation => (Displays, t::ROTATION, t::DISPLAY_WORDS),
             Self::MainDisplay => (Displays, t::MAIN_DISPLAY, t::DISPLAY_WORDS),
             Self::DisplayOn => (Displays, t::DISPLAY_ON, t::DISPLAY_WORDS),
+            Self::Wifi => (Network, t::WIFI, t::NETWORK_WORDS),
+            Self::Networks => (Network, t::NETWORKS, t::NETWORK_WORDS),
+            Self::OtherNetwork => (Network, t::OTHER_NETWORK_SEARCH, t::NETWORK_WORDS),
             Self::Theme => (Appearance, t::THEME, t::THEME_WORDS),
             Self::LightFrom => (Appearance, t::LIGHT_FROM, t::HOURS_WORDS),
             Self::DarkFrom => (Appearance, t::DARK_FROM, t::HOURS_WORDS),
@@ -236,7 +269,7 @@ impl Setting {
             },
             Page::Lock => File::Lock,
             Page::Clipboard => File::Clipboard,
-            Page::Displays | Page::Sound | Page::DefaultApps => return None,
+            Page::Displays | Page::Sound | Page::Network | Page::DefaultApps => return None,
         };
         Some(file)
     }
