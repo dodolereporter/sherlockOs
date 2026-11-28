@@ -68,7 +68,7 @@ impl MimeApps {
     pub fn load(dirs: &Dirs, desktops: &[String]) -> Self {
         let mut apps = Self::default();
         for file in files(dirs, desktops) {
-            if let Ok(text) = std::fs::read_to_string(&file) {
+            if let Ok(text) = crate::file::read_bounded(&file, crate::file::MAX_SETTINGS_SIZE) {
                 apps.merge(&text);
             }
         }
@@ -121,6 +121,16 @@ impl MimeApps {
 ///   type is updated the same way, otherwise it would hide the choice. A desktop file without
 ///   an entry for the type is left alone, and none is created.
 pub fn set_default(dirs: &Dirs, desktops: &[String], mime: &str, app: &str) -> io::Result<()> {
+    // An id that would end its line or its list would write entries nobody chose.
+    if [mime, app]
+        .iter()
+        .any(|id| id.is_empty() || crate::file::breaks_line(id) || id.contains([';', '=']))
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "not a valid id",
+        ));
+    }
     for desktop in desktops {
         let path = dirs.config_home.join(format!("{desktop}-mimeapps.list"));
         let Some(text) = read_optional(&path)? else {
@@ -144,7 +154,7 @@ pub fn set_default(dirs: &Dirs, desktops: &[String], mime: &str, app: &str) -> i
 }
 
 fn read_optional(path: &Path) -> io::Result<Option<String>> {
-    match std::fs::read_to_string(path) {
+    match crate::file::read_bounded(path, crate::file::MAX_SETTINGS_SIZE) {
         Ok(text) => Ok(Some(text)),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(error),
@@ -318,6 +328,24 @@ mod tests {
         let after =
             std::fs::read_to_string(tmp.path().join("config/kde-mimeapps.list")).expect("read");
         assert_eq!(after, desktop);
+        // An id that would add a line or an entry is refused, nothing is written.
+        let before = std::fs::read(tmp.path().join("config/mimeapps.list")).expect("read");
+        for (mime, app) in [
+            (
+                "text/plain",
+                "evil.desktop\n[Default Applications]\nx/y=z.desktop",
+            ),
+            ("text/plain\r", "code.desktop"),
+            ("text/plain", "a.desktop;b.desktop"),
+            ("text/plain=x", "code.desktop"),
+        ] {
+            assert!(
+                set_default(&tmp.dirs(), &kde, mime, app).is_err(),
+                "{mime} {app}"
+            );
+        }
+        let after = std::fs::read(tmp.path().join("config/mimeapps.list")).expect("read");
+        assert_eq!(after, before);
     }
 
     #[test]

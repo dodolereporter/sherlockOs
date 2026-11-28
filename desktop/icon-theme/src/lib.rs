@@ -16,6 +16,10 @@ pub const EXTENSIONS: [&str; 2] = ["png", "svg"];
 /// The theme every lookup ends with.
 pub const FALLBACK_THEME: &str = "hicolor";
 
+/// The largest key file read. `hicolor`'s `index.theme` lists every size and context and already
+/// holds 55 KiB; the biggest themes stay under a few hundred.
+pub const MAX_KEY_FILE_SIZE: u64 = 512 * 1024;
+
 /// A key file (`index.theme`, `settings.ini`, `kdeglobals`): `[Group]` headers, `Key=Value`
 /// lines, `#` comments. The first value of a key wins.
 #[derive(Debug, Clone, Default)]
@@ -42,8 +46,12 @@ impl KeyFile {
         Self(groups)
     }
 
+    /// Reads a key file of `MAX_KEY_FILE_SIZE` at most (`index.theme`, `settings.ini`,
+    /// `kdeglobals`): a link to a device or a huge file is ignored like an absent one.
     fn read(path: &Path) -> Option<Self> {
-        std::fs::read_to_string(path).ok().map(|t| Self::parse(&t))
+        mime_apps::file::read_bounded(path, MAX_KEY_FILE_SIZE)
+            .ok()
+            .map(|t| Self::parse(&t))
     }
 
     fn get(&self, group: &str, key: &str) -> Option<&str> {
@@ -503,6 +511,17 @@ mod tests {
         let lookup = Lookup::new(&[data], None, Some("Climber"));
         assert_eq!(lookup.themes(), ["Climber", "hicolor"]);
         assert_eq!(lookup.find("secret", 32, 1), None);
+    }
+
+    #[test]
+    fn an_index_that_never_ends_is_ignored() {
+        let tmp = TempDir::new("zero");
+        let data = fake_data(&tmp);
+        let theme = tmp.0.join("share/icons/Endless");
+        std::fs::create_dir_all(&theme).expect("folder");
+        std::os::unix::fs::symlink("/dev/zero", theme.join("index.theme")).expect("link");
+        let lookup = Lookup::new(&[data], None, Some("Endless"));
+        assert_eq!(lookup.themes(), ["hicolor"]);
     }
 
     #[test]

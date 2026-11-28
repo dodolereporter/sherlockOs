@@ -89,7 +89,7 @@ fn is_shell_client(client: &Client) -> bool {
 #[derive(Debug, Clone, Copy)]
 struct WindowId(u32);
 
-fn window_id(window: &Window) -> u32 {
+pub(crate) fn window_id(window: &Window) -> u32 {
     static NEXT: AtomicU32 = AtomicU32::new(1);
     window
         .user_data()
