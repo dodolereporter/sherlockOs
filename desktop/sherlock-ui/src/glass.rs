@@ -1,7 +1,9 @@
 //! Glass that asks for the blur behind it (lot D-37, ADR 0027): its content, laid out and drawn
 //! as is, and its rounded shape given to the compositor as the blur region of the surface,
 //! through iced_exwlshell's surface regions (`ext_background_effect_v1`). Behind the
-//! `layer-shell` feature: only the programs on layer-shell have such surfaces.
+//! `layer-shell` feature: only the programs on layer-shell have such surfaces. The menus and
+//! panels over their shadow (`surface::shadowed`) ask for it by themselves (lot D-37b); `glass`
+//! is for the glass without a shadow: the dock, the bar, the notifications, the launcher.
 
 use iced::advanced::layout::{self, Layout};
 use iced::advanced::widget::{Operation, Tree};
@@ -44,6 +46,13 @@ pub fn region(bounds: Rectangle, radius: f32) -> Vec<BlurRegion> {
         .collect()
 }
 
+/// Gives the blur region of glass at `bounds`, rounded by `radius`, to the operation:
+/// iced_exwlshell gathers the regions of every glass of the surface at each redraw.
+pub fn declare(operation: &mut dyn Operation, bounds: Rectangle, radius: f32) {
+    let mut regions = BlurRegions(region(bounds, radius));
+    operation.custom(None, bounds, &mut regions);
+}
+
 impl<Message> Widget<Message, Theme, Renderer> for Glass<'_, Message> {
     fn children(&self) -> Vec<Tree> {
         vec![Tree::new(&self.content)]
@@ -68,7 +77,6 @@ impl<Message> Widget<Message, Theme, Renderer> for Glass<'_, Message> {
             .layout(&mut tree.children[0], renderer, limits)
     }
 
-    // iced_exwlshell gathers the regions of every glass of the surface at each redraw.
     fn operate(
         &mut self,
         tree: &mut Tree,
@@ -76,8 +84,7 @@ impl<Message> Widget<Message, Theme, Renderer> for Glass<'_, Message> {
         renderer: &Renderer,
         operation: &mut dyn Operation,
     ) {
-        let mut regions = BlurRegions(region(layout.bounds(), self.radius));
-        operation.custom(None, layout.bounds(), &mut regions);
+        declare(operation, layout.bounds(), self.radius);
         self.content
             .as_widget_mut()
             .operate(&mut tree.children[0], layout, renderer, operation);

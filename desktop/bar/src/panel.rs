@@ -143,8 +143,6 @@ pub fn glass<'a>(
         .height(height)
         .padding(panels::PADDING + metrics::BORDER_WIDTH)
         .style(panels::panel);
-    // The blur behind its glass (lot D-37).
-    let glass = sherlock_ui::glass::glass(glass, panels::RADIUS);
     opaque(surface::shadowed(glass, panels::RADIUS, Elevation::Panel))
 }
 

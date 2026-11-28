@@ -1,9 +1,12 @@
 //! What clients ask to have blurred behind their surfaces (lot D-37, ADR 0027):
-//! `ext_background_effect_v1`. The region a surface gives, in its own coordinates, applies at
-//! its commit; `blur.rs` draws the blur behind it. See "Blur behind glass" in
-//! `docs/compositor.md`.
+//! `ext_background_effect_v1`, and KDE's `org_kde_kwin_blur` for Qt applications (lot D-37b).
+//! The region a surface gives, in its own coordinates, applies at its commit; `blur.rs` draws
+//! the blur behind it. See "Blur behind glass" in `docs/compositor.md`.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{
+    Mutex,
+    atomic::{AtomicBool, Ordering},
+};
 
 use smithay::{
     backend::renderer::utils::with_renderer_surface_state,
@@ -23,10 +26,16 @@ use smithay::{
     },
 };
 
+use wayland_protocols_plasma::blur::server::{
+    org_kde_kwin_blur::{self as kde, OrgKdeKwinBlur},
+    org_kde_kwin_blur_manager::{self as kde_manager, OrgKdeKwinBlurManager},
+};
+
 use crate::State;
 
 pub(crate) fn create_global(dh: &DisplayHandle) {
     dh.create_global::<State, ExtBackgroundEffectManagerV1, ()>(1, ());
+    dh.create_global::<State, OrgKdeKwinBlurManager, ()>(1, ());
 }
 
 /// The blur region of a surface, double-buffered: the pending one applies at its commit.
@@ -164,6 +173,88 @@ impl Dispatch<ExtBackgroundEffectSurfaceV1, WlSurface> for State {
     }
 }
 
+/// What KDE's blur object of a surface holds until its `commit`: the region it was given,
+/// `None` for the whole surface.
+struct KdeBlur {
+    surface: WlSurface,
+    region: Mutex<Option<RegionAttributes>>,
+}
+
+/// The whole of any surface: `resolve` cuts it to the surface's size.
+fn whole() -> RegionAttributes {
+    RegionAttributes {
+        rects: vec![(
+            RectangleKind::Add,
+            Rectangle::from_size((i32::MAX / 2, i32::MAX / 2).into()),
+        )],
+    }
+}
+
+impl GlobalDispatch<OrgKdeKwinBlurManager, ()> for State {
+    fn bind(
+        _: &mut Self,
+        _: &DisplayHandle,
+        _: &Client,
+        resource: New<OrgKdeKwinBlurManager>,
+        _: &(),
+        data_init: &mut DataInit<'_, Self>,
+    ) {
+        data_init.init(resource, ());
+    }
+}
+
+impl Dispatch<OrgKdeKwinBlurManager, ()> for State {
+    fn request(
+        _: &mut Self,
+        _: &Client,
+        _: &OrgKdeKwinBlurManager,
+        request: kde_manager::Request,
+        _: &(),
+        _: &DisplayHandle,
+        data_init: &mut DataInit<'_, Self>,
+    ) {
+        match request {
+            kde_manager::Request::Create { id, surface } => {
+                let region = Mutex::new(None);
+                data_init.init(id, KdeBlur { surface, region });
+            }
+            // As KWin does: no more blur from the next commit of the surface.
+            kde_manager::Request::Unset { surface } if surface.is_alive() => {
+                set_pending(&surface, None);
+            }
+            _ => {}
+        }
+    }
+}
+
+impl Dispatch<OrgKdeKwinBlur, KdeBlur> for State {
+    fn request(
+        _: &mut Self,
+        _: &Client,
+        _: &OrgKdeKwinBlur,
+        request: kde::Request,
+        blur: &KdeBlur,
+        _: &DisplayHandle,
+        _: &mut DataInit<'_, Self>,
+    ) {
+        let Ok(mut region) = blur.region.lock() else {
+            return;
+        };
+        match request {
+            kde::Request::SetRegion { region: given } => {
+                *region = given.as_ref().map(get_region_attributes);
+            }
+            // The region goes at the next commit of the surface, as with KWin.
+            kde::Request::Commit if blur.surface.is_alive() => {
+                let attributes = region.clone().unwrap_or_else(whole);
+                set_pending(&blur.surface, Some(attributes));
+            }
+            // Releasing the object keeps the blur, as with KWin: `unset` takes it away.
+            _ => {}
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -187,5 +278,13 @@ mod tests {
         assert_eq!(area, 100 * 40 + 20 * 30 + 50 * 10 - 10 * 10);
         assert!(rects.iter().all(|r| rect(0, 0, 120, 50).contains_rect(*r)));
         assert!(!rects.iter().any(|r| r.contains((15, 15))));
+    }
+
+    #[test]
+    fn kde_s_null_region_is_the_whole_surface() {
+        assert_eq!(
+            resolve(&whole(), rect(0, 0, 120, 50)),
+            vec![rect(0, 0, 120, 50)]
+        );
     }
 }
