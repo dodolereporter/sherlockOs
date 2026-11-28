@@ -26,7 +26,10 @@ path is for the files server and its folders. The screens are read only: they ch
 the compositor (ADR 0025), from Control Room.
 
 **Levels**: reading is a read; changing a setting is an action; forgetting a Wi-Fi network is
-destructive, since its password goes with it.
+destructive, since its password goes with it. A setting that lowers the session's protection
+(never locking again, the clipboard history, passwords included, kept on the disk) is refused by
+the tool of the action level, and goes through a tool of the destructive level, for the
+reinforced consent (the A-20 review).
 
 ## Consequences
 

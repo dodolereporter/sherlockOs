@@ -613,7 +613,7 @@ setting Control Room shows, by the same functions.
 | --- | --- |
 | `lire_reglages` (`domaine`: `apparence`, `clavier`, `pave_tactile`, `pointeur`, `verrouillage`, `presse_papiers`, `fond_ecran`, `dock`, `ne_pas_deranger`, `ecrans`, `son`, `wifi`, `bluetooth`) | read |
 | `changer_reglage` (`domaine`, `reglage`, `valeur`), `regler_son`, `choisir_appareil_son`, `activer_wifi`, `activer_bluetooth` | action |
-| `oublier_reseau` (`ssid`): its password goes with it | destructive |
+| `oublier_reseau` (`ssid`): its password goes with it; `changer_reglage_de_securite`: a setting that lowers the session's protection, never locking again (`verrouillage` `idle-minutes` 0) or the clipboard history kept on the disk (`presse_papiers` `keep-on-disk` on), which `changer_reglage` refuses (the A-20 review) | destructive |
 
 ## What will come next
 

@@ -291,6 +291,36 @@ mod tests {
             before
         );
         assert_eq!(control_room(&s.dir).appearance.mode.key(), "light");
+
+        // Never locking again, the clipboard kept on the disk: only with the reinforced consent
+        // (the A-20 review).
+        let asked = s.asked.lock().unwrap().len();
+        for (domain, key, value) in [
+            ("verrouillage", "idle-minutes", json!(0)),
+            ("presse_papiers", "keep-on-disk", json!(true)),
+        ] {
+            let arguments = json!({ "domaine": domain, "reglage": key, "valeur": value });
+            let plain = s
+                .servers
+                .call("changer_reglage", arguments.clone())
+                .await
+                .unwrap();
+            assert!(plain.is_error && plain.text.contains("changer_reglage_de_securite"));
+            let secure = s
+                .servers
+                .call("changer_reglage_de_securite", arguments)
+                .await
+                .unwrap();
+            assert!(!secure.is_error, "{}", secure.text);
+        }
+        let settings = control_room(&s.dir);
+        assert_eq!(settings.lock.idle_minutes, 0);
+        assert!(settings.clipboard.keep_on_disk);
+        let asked: Vec<bool> = s.asked.lock().unwrap()[asked..]
+            .iter()
+            .map(Request::reinforced)
+            .collect();
+        assert_eq!(asked, [false, true, false, true]);
         s.servers.shutdown().await;
         let _ = std::fs::remove_dir_all(&s.dir);
     }

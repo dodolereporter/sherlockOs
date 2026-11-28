@@ -107,7 +107,7 @@ INTERFACE_NAMES = {
     "lire_reglages", "changer_reglage", "regler_son", "choisir_appareil_son", "activer_wifi",
     "activer_bluetooth", "oublier_reseau", "domaine", "reglage", "valeur", "apparence",
     "clavier", "pave_tactile", "pointeur", "verrouillage", "presse_papiers", "fond_ecran",
-    "ne_pas_deranger", "ecrans", "son",
+    "ne_pas_deranger", "ecrans", "son", "changer_reglage_de_securite",
 }
 
 # Marker for a French name kept on purpose in a script or configuration file, such as a former

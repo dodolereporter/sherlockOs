@@ -252,7 +252,7 @@ type Tool = (
     &'static [&'static str],
 );
 
-const TOOLS: [Tool; 7] = [
+const TOOLS: [Tool; 8] = [
     (
         "lire_reglages",
         READ,
@@ -267,6 +267,15 @@ const TOOLS: [Tool; 7] = [
         ACTION,
         "Change un réglage, comme Control Room : le domaine, la clé que lire_reglages donne, la \
          valeur.",
+        &["domaine", "reglage", "valeur"],
+        &["domaine", "reglage", "valeur"],
+    ),
+    (
+        "changer_reglage_de_securite",
+        DESTRUCTIVE,
+        "Change un réglage qui touche à la sécurité, avec l'accord renforcé : ne plus jamais \
+         verrouiller (verrouillage idle-minutes 0), garder l'historique du presse-papiers sur \
+         le disque (presse_papiers keep-on-disk on). Les mêmes arguments que changer_reglage.",
         &["domaine", "reglage", "valeur"],
         &["domaine", "reglage", "valeur"],
     ),
@@ -436,7 +445,8 @@ impl Server {
         };
         match name {
             "lire_reglages" => self.read(map.get("domaine").and_then(Value::as_str).unwrap_or("")),
-            "changer_reglage" => self.change(map),
+            "changer_reglage" => self.change(map, false),
+            "changer_reglage_de_securite" => self.change(map, true),
             "regler_son" => {
                 let device = device(map)?;
                 if map.get("volume").is_none() && map.get("coupe").is_none() {
@@ -655,7 +665,9 @@ impl Server {
         Value::Object(sound)
     }
 
-    fn change(&self, map: &Map<String, Value>) -> Result<String, String> {
+    /// Changes a setting; one that lowers the session's protection only with `reinforced`, the
+    /// tool of the destructive level (the A-20 review).
+    fn change(&self, map: &Map<String, Value>, reinforced: bool) -> Result<String, String> {
         let domain = map.get("domaine").and_then(Value::as_str).unwrap_or("");
         let key = map.get("reglage").and_then(Value::as_str).unwrap_or("");
         let Some((_, target, key, hint)) = KEYS.iter().find(|k| k.0 == domain && k.2 == key) else {
@@ -677,6 +689,13 @@ impl Server {
         };
         if value.len() > 200 || value.chars().any(crate::own_server::hidden) {
             return Err(String::from("valeur : refusée"));
+        }
+        if sensitive(key, &value) && !reinforced {
+            return Err(format!(
+                "{key} = {} touche à la sécurité : passe par changer_reglage_de_securite, \
+                 qui demande l'accord renforcé",
+                plain(&value, 20)
+            ));
         }
         let refused = || format!("valeur refusée pour {key} : {hint}");
         match target {
@@ -707,6 +726,16 @@ impl Server {
     }
 }
 
+/// Whether `key = value` lowers the protection of the session: never locking again, or the
+/// clipboard history, passwords included, kept on the disk. Those need the reinforced consent.
+fn sensitive(key: &str, value: &str) -> bool {
+    match key {
+        "idle-minutes" => value.trim().trim_start_matches('0').is_empty(),
+        "keep-on-disk" => matches!(value.trim(), "on" | "true" | "yes" | "1"),
+        _ => false,
+    }
+}
+
 /// What a service said, for the model.
 fn said(problem: &system_services::Problem) -> String {
     match problem {
@@ -727,7 +756,7 @@ mod tests {
             let name = tool["name"].as_str().unwrap();
             let expected = match name {
                 "lire_reglages" => Level::Read,
-                "oublier_reseau" => Level::Destructive,
+                "oublier_reseau" | "changer_reglage_de_securite" => Level::Destructive,
                 _ => Level::Action,
             };
             assert_eq!(
@@ -736,6 +765,10 @@ mod tests {
                 "{name}"
             );
         }
+        assert!(sensitive("idle-minutes", "0") && sensitive("idle-minutes", "00"));
+        assert!(!sensitive("idle-minutes", "15") && !sensitive("idle-minutes", "10"));
+        assert!(sensitive("keep-on-disk", "on") && !sensitive("keep-on-disk", "off"));
+        assert!(!sensitive("history", "on"));
         for (domain, _, key, _) in KEYS {
             assert!(DOMAINS.contains(&domain), "{domain}");
             assert!(
