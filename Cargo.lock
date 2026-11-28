@@ -92,6 +92,7 @@ name = "appearance-config"
 version = "0.0.0"
 dependencies = [
  "libc",
+ "mime-apps",
  "sherlock-ui",
  "tracing",
 ]
@@ -126,7 +127,6 @@ dependencies = [
  "launcher",
  "log",
  "mime-apps",
- "resvg",
  "sherlock-ui",
  "thiserror 2.0.21",
  "tracing",
@@ -886,6 +886,7 @@ name = "desktop-config"
 version = "0.0.0"
 dependencies = [
  "image",
+ "mime-apps",
  "sherlock-ui",
  "thiserror 2.0.21",
 ]
@@ -2525,6 +2526,7 @@ name = "notifications-config"
 version = "0.0.0"
 dependencies = [
  "dock-config",
+ "mime-apps",
 ]
 
 [[package]]
@@ -3883,6 +3885,8 @@ dependencies = [
 name = "system-services"
 version = "0.0.0"
 dependencies = [
+ "async-io",
+ "futures-lite",
  "libc",
  "thiserror 2.0.21",
  "tracing",
@@ -4059,6 +4063,7 @@ version = "0.0.0"
 dependencies = [
  "appearance-config",
  "cursor-theme",
+ "mime-apps",
  "sherlock-ui",
  "thiserror 2.0.21",
  "tracing",

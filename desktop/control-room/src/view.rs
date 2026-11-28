@@ -265,6 +265,7 @@ impl App {
                 Page::Sound => self.sound(inner),
                 Page::Network => self.network_page(inner),
                 Page::Appearance => self.appearance(inner),
+                Page::Keyboard => self.keyboard(inner),
                 Page::Touchpad => self.touchpad(inner),
                 Page::Lock => self.lock(inner),
                 Page::Clipboard => self.clipboard(inner),
