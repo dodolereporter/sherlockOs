@@ -53,7 +53,8 @@ const MAX_QUEUE: usize = 16;
 /// Characters of a tool name shown.
 const MAX_TOOL: usize = 128;
 
-/// Who may ask: `sherlockd` of this user (the session), or any process of this user (tests).
+/// Who may ask, here and on the windows socket (lot A-12): `sherlockd` of this user (the
+/// session), or any process of this user (tests).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Peers {
     #[default]
@@ -118,7 +119,7 @@ pub fn socket_path(socket: &Path) -> PathBuf {
 }
 
 /// Whether the process at the other end of `stream` may ask.
-fn allowed(stream: &UnixStream, peers: Peers) -> bool {
+pub(crate) fn allowed(stream: &UnixStream, peers: Peers) -> bool {
     let Ok(peer) = rustix::net::sockopt::socket_peercred(stream) else {
         return false;
     };

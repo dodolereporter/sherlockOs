@@ -910,6 +910,42 @@ the window itself and answers (`consent.rs`):
   withdraws its request; a malformed request closes the connection; a process that is not
   `sherlockd` cannot ask.
 
+## The windows, for Sherlock (lot A-12, ADR 0032, proposed)
+
+Sherlock's windows server (`sherlockd --windows-server`, see `docs/sherlockd.md`) lists the
+windows and acts on them through a private socket of the compositor (`sherlock_api.rs`). The
+consent is asked before, by `sherlockd`'s broker; this side only checks who asks and what:
+
+- **The socket**: `<Wayland socket>-sherlock`, next to the consent one, not opened on the login
+  screen. Same peer check as the consent socket: the user's uid and an executable named
+  `sherlockd`; anything else is closed at once. Four connections at most.
+- **One JSON object per line**, answered at once: `{"id", "op", "window", "workspace",
+  "output", "side"}`, `op` one of `list`, `focus`, `maximize`, `minimize`, `workspace` (from
+  1), `output` (a screen's name), `snap` (`left` or `right`), `arrange` and `close`. Answered
+  `{"id", "ok": true}`, with `windows` for `list`, or `{"id", "ok": false, "error"}`, a French
+  sentence the model reads (« aucun bureau 9 »).
+- **Bounded**: a line past 4 KiB, a malformed one or one with an unknown field closes the
+  connection. A title and an application id are given on one line, without control characters, line
+  separators nor zero-width or bidirectional marks, cut to 200 characters (« … » after): a title is
+  the application's text, never an instruction. Sixty-four windows are listed at most. A peer that
+  does not read its answers is closed. An unknown window, workspace, screen or side is refused,
+  never guessed.
+- **What a window is**: a shown window of the space (no X11 menu nor tooltip), with its id (the
+  one of `sherlock_shell_v1`), its title, its application id, its workspace from 1, its screen,
+  and its states (`active`, `maximized`, `fullscreen`, `snapped`, `minimized`).
+- **The actions** are the shell's: `focus` like a click on the dock (brings it back, goes to
+  its workspace), `maximize` and `snap` like Super + arrows, `output` keeps it maximized or
+  snapped on the other screen, `close` asks the application (it may still ask to save).
+  `arrange`: on each screen the windows shown, fullscreen ones aside, maximized alone, side by
+  side by two, a half and two quarters by three, the quarters by four; more stay where they
+  are. Nothing acts while the session is locked.
+- **Tests** (`tests/mission_control.rs`): the list, then each action seen in the list and the
+  space; the arrangement of three windows without overlap; a trapped title (line breaks,
+  escape sequences, 300 characters) comes out on one bounded line; a window, a workspace (0,
+  99), a screen or a side that does not exist is refused, nothing moves; locked, nothing moves;
+  an unknown field, a malformed or overlong line closes the connection; a process that is not
+  `sherlockd` gets nothing.
+
 ## Activation (lot Q-52)
 
 An application brings its window forward: a click on its icon in the bar's notification area,

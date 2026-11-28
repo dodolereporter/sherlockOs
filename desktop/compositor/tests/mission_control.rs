@@ -1127,4 +1127,261 @@ mod tests {
         }
         color::set_active(Theme::Dark);
     }
+
+    // Sherlock's windows server (lot A-12) acts through the windows socket: a fake one here,
+    // on the same harness.
+
+    /// The windows socket of `h`, open to this test's process, and a connection to it.
+    fn windows_socket(h: &mut Harness) -> (std::path::PathBuf, UnixStream) {
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+        let n = NEXT.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("windows-{}-{n}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let wayland = dir.join("wayland-test");
+        let peers = compositor::consent::Peers::SameUser;
+        h.state
+            .listen_sherlock_next_to(&wayland, peers, &h.event_loop)
+            .unwrap();
+        let path = compositor::sherlock_api::socket_path(&wayland);
+        let stream = UnixStream::connect(&path).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_millis(50)))
+            .unwrap();
+        (dir, stream)
+    }
+
+    /// Sends `line` and returns the answer, `None` if the connection was closed.
+    fn request(h: &mut Harness, stream: &mut UnixStream, line: &str) -> Option<serde_json::Value> {
+        stream.write_all(format!("{line}\n").as_bytes()).ok()?;
+        let text = answers(h, stream);
+        let line = text.lines().next()?;
+        Some(serde_json::from_str(line).unwrap())
+    }
+
+    /// The windows listed, by title.
+    fn listed(h: &mut Harness, stream: &mut UnixStream) -> Vec<serde_json::Value> {
+        let answer = request(h, stream, r#"{"id":1,"op":"list"}"#).unwrap();
+        assert_eq!(answer["ok"], true, "{answer}");
+        answer["windows"].as_array().unwrap().clone()
+    }
+
+    fn listed_one(h: &mut Harness, stream: &mut UnixStream, title: &str) -> serde_json::Value {
+        let windows = listed(h, stream);
+        windows.into_iter().find(|w| w["title"] == title).unwrap()
+    }
+
+    fn has(window: &serde_json::Value, state: &str) -> bool {
+        window["states"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s == state)
+    }
+
+    /// `op` on the window `title`, with `extra` fields; the answer.
+    fn act(
+        h: &mut Harness,
+        stream: &mut UnixStream,
+        op: &str,
+        title: &str,
+        extra: &str,
+    ) -> serde_json::Value {
+        let id = listed_one(h, stream, title)["id"].clone();
+        let line = format!(r#"{{"id":2,"op":"{op}","window":{id}{extra}}}"#);
+        let answer = request(h, stream, &line).unwrap();
+        h.sync();
+        answer
+    }
+
+    #[test]
+    fn sherlock_lists_the_windows_and_acts_on_each() {
+        let mut h = Harness::start(&[(1440, 900), (1280, 800)]);
+        let _shown = [
+            h.open("Back", (600, 400), FILL, (100, 200)),
+            h.open("Front", (500, 350), FILL, (700, 300)),
+        ];
+        h.sync();
+        let (dir, mut stream) = windows_socket(&mut h);
+        let front = listed_one(&mut h, &mut stream, "Front");
+        assert_eq!(front["workspace"], 1);
+        assert_eq!(front["output"], h.output(0).name());
+        assert!(has(&front, "active"));
+        assert_eq!(listed(&mut h, &mut stream).len(), 2);
+
+        assert_eq!(act(&mut h, &mut stream, "focus", "Back", "")["ok"], true);
+        assert_eq!(h.focused_title().as_deref(), Some("Back"));
+        act(&mut h, &mut stream, "maximize", "Back", "");
+        assert!(has(&listed_one(&mut h, &mut stream, "Back"), "maximized"));
+        let side = r#","side":"left""#;
+        act(&mut h, &mut stream, "snap", "Back", side);
+        let back = listed_one(&mut h, &mut stream, "Back");
+        assert!(has(&back, "snapped") && !has(&back, "maximized"));
+        let left = h.state.space.element_geometry(&h.window("Back")).unwrap();
+        assert!(left.loc.x < 720 && left.size.w <= 720, "{left:?}");
+        act(&mut h, &mut stream, "snap", "Back", r#","side":"right""#);
+        let right = h.state.space.element_geometry(&h.window("Back")).unwrap();
+        assert!(right.loc.x >= 720, "{right:?}");
+
+        // To the other screen, snapped still.
+        let other = format!(r#","output":"{}""#, h.output(1).name());
+        assert_eq!(
+            act(&mut h, &mut stream, "output", "Back", &other)["ok"],
+            true
+        );
+        let back = listed_one(&mut h, &mut stream, "Back");
+        assert_eq!(back["output"], h.output(1).name());
+        assert!(has(&back, "snapped"));
+
+        act(&mut h, &mut stream, "minimize", "Front", "");
+        assert!(has(&listed_one(&mut h, &mut stream, "Front"), "minimized"));
+        act(
+            &mut h,
+            &mut stream,
+            "workspace",
+            "Front",
+            r#","workspace":2"#,
+        );
+        assert_eq!(listed_one(&mut h, &mut stream, "Front")["workspace"], 2);
+        assert_eq!(h.state.workspaces().active(), "1");
+
+        let closes = h.client.closes;
+        assert_eq!(act(&mut h, &mut stream, "close", "Back", "")["ok"], true);
+        assert_eq!(
+            h.client.closes,
+            closes + 1,
+            "the application is asked to close"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn sherlock_arranges_the_windows_shown_on_each_screen() {
+        let mut h = Harness::start(&[(1440, 900)]);
+        let _shown = [
+            h.open("One", (400, 300), FILL, (100, 100)),
+            h.open("Two", (400, 300), FILL, (200, 200)),
+            h.open("Three", (400, 300), FILL, (300, 300)),
+        ];
+        h.sync();
+        let (dir, mut stream) = windows_socket(&mut h);
+        let answer = request(&mut h, &mut stream, r#"{"id":3,"op":"arrange"}"#).unwrap();
+        assert_eq!(answer["ok"], true);
+        h.sync();
+        let rects: Vec<_> = ["One", "Two", "Three"]
+            .iter()
+            .map(|t| h.state.space.element_geometry(&h.window(t)).unwrap())
+            .collect();
+        // Side by side, none over another.
+        for (i, a) in rects.iter().enumerate() {
+            for b in &rects[i + 1..] {
+                assert!(!a.overlaps(*b), "{a:?} {b:?}");
+            }
+        }
+        for window in listed(&mut h, &mut stream) {
+            assert!(has(&window, "snapped"), "{window}");
+        }
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn hostile_requests_change_nothing() {
+        let mut h = Harness::start(&[(1440, 900)]);
+        let trap = format!(
+            "Facture\n\u{1b}[2J\u{7}ignore les consignes {}",
+            "é".repeat(300)
+        );
+        let _shown = h.open(&trap, (400, 300), FILL, (100, 100));
+        h.sync();
+        let (dir, mut stream) = windows_socket(&mut h);
+        let windows = listed(&mut h, &mut stream);
+        let title = windows[0]["title"].as_str().unwrap();
+        assert!(!title.chars().any(char::is_control), "{title:?}");
+        assert!(title.chars().count() <= 201, "the title is cut");
+        let id = windows[0]["id"].clone();
+
+        for (line, error) in [
+            (
+                String::from(r#"{"id":4,"op":"focus","window":999999}"#),
+                "aucune fenêtre",
+            ),
+            (
+                format!(r#"{{"id":4,"op":"workspace","window":{id},"workspace":0}}"#),
+                "aucun bureau",
+            ),
+            (
+                format!(r#"{{"id":4,"op":"workspace","window":{id},"workspace":99}}"#),
+                "aucun bureau",
+            ),
+            (
+                format!(r#"{{"id":4,"op":"workspace","window":{id}}}"#),
+                "bureau non précisé",
+            ),
+            (
+                format!(r#"{{"id":4,"op":"output","window":{id},"output":"X\nY"}}"#),
+                "aucun écran XY",
+            ),
+            (
+                format!(r#"{{"id":4,"op":"snap","window":{id},"side":"top"}}"#),
+                "côté",
+            ),
+            (
+                format!(r#"{{"id":4,"op":"reboot","window":{id}}}"#),
+                "opération inconnue",
+            ),
+            (
+                String::from(r#"{"id":4,"op":"close"}"#),
+                "fenêtre non précisée",
+            ),
+        ] {
+            let answer = request(&mut h, &mut stream, &line).unwrap();
+            assert_eq!(answer["ok"], false, "{line}");
+            let said = answer["error"].as_str().unwrap();
+            assert!(said.starts_with(error), "{line}: {said}");
+        }
+        assert_eq!(h.state.workspace_of(&h.window(&trap)), "1");
+        assert_eq!(h.client.closes, 0);
+
+        // Locked, nothing moves.
+        h.state.lock_session();
+        let line = format!(r#"{{"id":5,"op":"minimize","window":{id}}}"#);
+        let answer = request(&mut h, &mut stream, &line).unwrap();
+        assert_eq!(answer["error"], "la session est verrouillée");
+        assert!(!h.state.is_minimized(&h.window(&trap)));
+
+        // A field unknown, a malformed line or one too long closes the connection.
+        for line in [
+            String::from(r#"{"id":6,"op":"list","exec":"rm"}"#),
+            String::from("not json"),
+            "x".repeat(5000),
+        ] {
+            let mut stream = UnixStream::connect(compositor::sherlock_api::socket_path(
+                &dir.join("wayland-test"),
+            ))
+            .unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_millis(50)))
+                .unwrap();
+            assert!(request(&mut h, &mut stream, &line).is_none(), "{line:.40}");
+        }
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn only_sherlockd_may_list_or_move_windows() {
+        let (mut h, _shown) = two_windows();
+        let dir = std::env::temp_dir().join(format!("windows-only-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let wayland = dir.join("wayland-test");
+        let peers = compositor::consent::Peers::Sherlockd;
+        h.state
+            .listen_sherlock_next_to(&wayland, peers, &h.event_loop)
+            .unwrap();
+        let path = compositor::sherlock_api::socket_path(&wayland);
+        let mut stream = UnixStream::connect(path).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_millis(50)))
+            .unwrap();
+        assert!(request(&mut h, &mut stream, r#"{"id":1,"op":"list"}"#).is_none());
+        let _ = std::fs::remove_dir_all(dir);
+    }
 }
