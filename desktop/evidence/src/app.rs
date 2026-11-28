@@ -30,12 +30,14 @@ use crate::probe::{Probe, Step};
 use crate::selection::{Click, Lasso, Selection, edge_scroll};
 use crate::trash::Trash;
 use crate::udisks::UDisks;
+use crate::undo::Step as Undoable;
 use sherlock_ui::motion::{self, Animation, Fade};
 
 mod network;
 pub use network::{Field, Login};
 mod path;
 mod popup;
+mod tabs;
 pub use path::{FoldedMenu, PathEdit};
 pub use popup::Popups;
 use std::collections::HashMap;
@@ -75,6 +77,8 @@ pub const SUGGESTIONS: &str = "path-suggestions";
 pub struct Config {
     pub home: PathBuf,
     pub start: PathBuf,
+    /// Opens on the trash (`trash:///` as argument, lot D-21j), when there is one.
+    pub start_trash: bool,
     pub favorites: Vec<Place>,
     pub trash: Option<Trash>,
     /// `--measure <folder> [--maximized]`: measures smoothness on this folder, then quits.
@@ -107,8 +111,11 @@ impl Config {
             _ => None,
         };
         let maximized = measure.is_some() && args.iter().any(|a| a == "--maximized");
+        // `trash:///`, as the dock's trash asks (lot D-21j): Evidence opens on the trash.
+        let start_trash = measure.is_none() && args.first().is_some_and(|a| a == "trash:///");
         let start = match measure {
             Some(_) => home.clone(),
+            None if start_trash => home.clone(),
             None => args
                 .first()
                 .and_then(|p| std::path::absolute(p).ok())
@@ -119,6 +126,7 @@ impl Config {
         Self {
             home,
             start,
+            start_trash,
             favorites,
             trash: Trash::user(),
             measure,
@@ -174,6 +182,9 @@ pub enum Command {
     DeviceEject,
     /// Sort by a column, from the « Trier par » submenu: the same column again reverses.
     SortBy(Column),
+    /// Undo the last step done to the disk, or redo the last undone (lot E-10).
+    Undo,
+    Redo,
     /// The large preview of the item under the cursor, opened or closed (lot E-12).
     QuickLook,
     /// The list view, from the « Vue » submenu: the only view so far.
@@ -249,6 +260,17 @@ pub struct Notice {
 /// the error.
 pub type Outcome = Result<(String, Vec<PathBuf>), String>;
 
+/// Which list a finished step goes to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Recorded {
+    /// Done by the user: undoable, and nothing to redo any more.
+    Done,
+    /// Undone: it can be redone.
+    Undone,
+    /// Redone: it can be undone again.
+    Redone,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WindowAction {
     Drag,
@@ -306,6 +328,8 @@ pub enum Message {
     ConfirmEmpty,
     CancelEmpty,
     Done(Outcome),
+    /// An operation that can be undone is over: its outcome, and its step for the history.
+    Stepped(Outcome, Option<crate::undo::Step>, Recorded),
     /// The names a paste would take, found off the interface thread: the items, where they
     /// go, whether they move, and the names already there (lot E-11).
     Taken(Vec<PathBuf>, PathBuf, bool, Vec<String>),
@@ -352,6 +376,17 @@ pub enum Message {
     DeviceMenu(String),
     /// The eject button beside a volume.
     EjectDevice(String),
+    /// Tabs (lot D-27b): a new one on this folder, one closed, one shown, one pressed (to
+    /// drag), the pointer over one while dragging, a folder opened in a tab by the middle
+    /// button.
+    NewTab,
+    CloseTab(usize),
+    SwitchTab(usize),
+    PressTab(usize),
+    OverTab(usize),
+    MiddleClick(usize),
+    /// The folder shown changed, by another program (lot E-09).
+    FolderChanged(PathBuf),
     /// The file servers of the network, found now (lot E-07).
     Servers(Vec<crate::network::Server>),
     /// A click on a server: connect to it, or open it when it is.
@@ -482,6 +517,13 @@ pub struct App {
     pub(crate) preview_fade: Option<Fade>,
     /// Volumes of the sidebar, and the one whose menu is open.
     pub(crate) volumes: Vec<Volume>,
+    /// The tabs of the window (lot D-27b).
+    pub(crate) tabs: tabs::Tabs,
+    /// What can be undone and redone (lot E-10).
+    pub(crate) steps: crate::undo::History,
+    /// The folder shown changed on disk: reread once nothing is being done in it (a menu, a
+    /// rename, a lasso).
+    folder_changed: bool,
     /// The copy or move under way, and the paste waiting for a choice on taken names.
     pub(crate) progress: Option<Arc<crate::transfer_job::Progress>>,
     pub(crate) pending_paste: Option<(Vec<PathBuf>, PathBuf, bool, Vec<String>)>,
@@ -532,7 +574,10 @@ pub struct App {
 impl App {
     pub fn new(config: Config) -> (Self, Task<Message>) {
         let built = Instant::now();
-        let start = Location::Folder(config.start.clone());
+        let start = match config.start_trash && config.trash.is_some() {
+            true => Location::Trash,
+            false => Location::Folder(config.start.clone()),
+        };
         let (width, height) = metrics::REFERENCE_WINDOW;
         let mut app = Self {
             main: None,
@@ -583,6 +628,9 @@ impl App {
             content_fade: None,
             preview_fade: None,
             volumes: Vec::new(),
+            tabs: tabs::Tabs::default(),
+            steps: crate::undo::History::default(),
+            folder_changed: false,
             progress: None,
             pending_paste: None,
             servers: Vec::new(),
@@ -661,6 +709,15 @@ impl App {
             // The compositor closed the window (Wayland daemon): the program ends with it.
             _ => None,
         });
+        // The folder shown, watched for the changes of other programs (lot E-09); only with
+        // the live sources, never in the tests.
+        let folder = match &self.location {
+            Location::Folder(dir) if self.config.watch_devices => {
+                Subscription::run_with(crate::watch::Watched(dir.clone()), crate::watch::changes)
+                    .map(Message::FolderChanged)
+            }
+            _ => Subscription::none(),
+        };
         // A window closed: the main one ends the program, a menu's popup closes its menu.
         let closed = window::close_events().map(Message::WindowClosed);
         let devices = if self.config.watch_devices && self.config.devices.is_some() {
@@ -688,7 +745,7 @@ impl App {
             Subscription::none()
         };
         Subscription::batch([
-            closed, events, frames, devices, network, appearance, menubar,
+            closed, events, frames, folder, devices, appearance, menubar, network,
         ])
     }
 
@@ -725,7 +782,12 @@ impl App {
 
     /// Name of the current folder, for the title bar and the search.
     pub fn location_name(&self) -> String {
-        match &self.location {
+        self.name_of(&self.location)
+    }
+
+    /// Name of a location: « Accueil », « Corbeille », « Disque », or its folder's name.
+    pub fn name_of(&self, location: &Location) -> String {
+        match location {
             Location::Trash => texts::TRASH.into(),
             Location::Folder(dir) if *dir == self.config.home => texts::HOME.into(),
             Location::Folder(dir) => dir
@@ -815,6 +877,7 @@ impl App {
             || spring(&self.highlight, motion::GEOMETRY_PRECISION)
             || fade(&self.content_fade)
             || fade(&self.preview_fade)
+            || fade(&self.tabs.fade)
             || fade(&self.login_fade)
             || fade(&self.preview_slide)
             || fade(&self.look_fade)
@@ -911,8 +974,18 @@ impl App {
                 self.always = false;
             }
         }
+        let reread = if self.folder_changed
+            && self.menu.is_none()
+            && self.renaming.is_none()
+            && self.lasso.is_none()
+        {
+            self.folder_changed = false;
+            self.load(&[])
+        } else {
+            Task::none()
+        };
         let popups = self.sync_popups();
-        Task::batch([task, self.preview_task(), popups])
+        Task::batch([task, self.preview_task(), reread, popups])
     }
 
     /// Requests the preview of the selected item, if it changed.
@@ -941,6 +1014,8 @@ impl App {
             in_trash: self.location == Location::Trash,
             show_hidden: self.show_hidden,
             show_preview: self.show_preview,
+            can_undo: !self.steps.undo.is_empty(),
+            can_redo: !self.steps.redo.is_empty(),
             can_back: self.can_go_back(),
             can_forward: self.can_go_forward(),
             places: self
@@ -1066,6 +1141,7 @@ impl App {
                 self.lasso = Some(Lasso::new(at, base));
             }
             Message::Released => {
+                self.tabs.dragging = None;
                 self.dnd_release();
                 self.lasso = None;
                 self.lasso_frame = None;
@@ -1104,6 +1180,16 @@ impl App {
                 return self.empty_trash();
             }
             Message::CancelEmpty => self.confirm_empty = false,
+            Message::Stepped(outcome, step, how) => {
+                if let (Ok(_), Some(step)) = (&outcome, step) {
+                    match how {
+                        Recorded::Done => self.steps.done(step),
+                        Recorded::Undone => self.steps.undone(step),
+                        Recorded::Redone => self.steps.redone(step),
+                    }
+                }
+                return self.handle(Message::Done(outcome));
+            }
             Message::Taken(sources, dest, moving, names) => {
                 if names.is_empty() {
                     return self.transfer(
@@ -1213,6 +1299,26 @@ impl App {
                 self.open_menu(self.pointer);
             }
             Message::DeviceDone(action, result) => return self.device_done(action, result),
+            Message::NewTab => {
+                let here = self.location.clone();
+                return self.open_tabs(vec![here], true);
+            }
+            Message::CloseTab(index) => return self.close_tab(index),
+            Message::SwitchTab(index) => return self.switch_tab(index),
+            Message::PressTab(index) => {
+                self.tabs.dragging = Some(index);
+                return self.switch_tab(index);
+            }
+            Message::OverTab(index) => self.drag_tab(index),
+            Message::MiddleClick(index) => {
+                if let Some(entry) = self.entries.get(index)
+                    && entry.kind == Kind::Folder
+                    && self.location != Location::Trash
+                {
+                    let folder = Location::Folder(entry.path.clone());
+                    return self.open_tabs(vec![folder], false);
+                }
+            }
             Message::Servers(servers) => self.servers = servers,
             Message::OpenServer(host) => return self.open_server(&host),
             Message::EjectServer(host) => return self.eject_server(&host),
@@ -1241,6 +1347,11 @@ impl App {
             Message::OpenSearch => {
                 self.search_open = true;
                 return operation::focus(SEARCH);
+            }
+            Message::FolderChanged(dir) => {
+                if self.location == Location::Folder(dir) {
+                    self.folder_changed = true;
+                }
             }
             Message::Loaded(generation, result) => {
                 crate::startup::first(&LISTED, "folder listed");
@@ -1624,12 +1735,18 @@ impl App {
 
     /// Top left corner of the listing's rows in the window, below its column headers.
     fn list_origin(&self) -> Point {
+        // The tab bar, when shown, pushes the listing down (D-27b).
+        let tabs = match self.tab_bar_level() {
+            level if level > 0.0 => (more::TAB_BAR_HEIGHT * level).round() + metrics::BORDER_WIDTH,
+            _ => 0.0,
+        };
         Point::new(
             self.panes().sidebar_width() + metrics::LIST_PADDING,
             metrics::TITLE_BAR_HEIGHT
                 + metrics::TOOLBAR_HEIGHT
                 + metrics::LIST_HEADER_HEIGHT
-                + 3.0 * metrics::BORDER_WIDTH,
+                + 3.0 * metrics::BORDER_WIDTH
+                + tabs,
         )
     }
 
@@ -2163,6 +2280,8 @@ impl App {
         let shift = modifiers.shift();
         let last = self.entries.len().saturating_sub(1);
         match key.as_ref() {
+            // Ctrl+Tab and Ctrl+Maj+Tab go from tab to tab (D-27b).
+            Key::Named(Named::Tab) if ctrl => self.cycle_tab(shift),
             Key::Named(Named::Tab) => focus::advance(direction(modifiers)),
             Key::Named(Named::ArrowLeft) if modifiers.alt() => self.update(Message::Back),
             Key::Named(Named::ArrowRight) if modifiers.alt() => self.update(Message::Forward),
@@ -2217,6 +2336,13 @@ impl App {
                 ("n", true) => self.run(Command::NewFolder),
                 ("h", _) => self.run(Command::ToggleHidden),
                 ("a", _) => self.run(Command::SelectAll),
+                ("t", _) => self.update(Message::NewTab),
+                ("w", _) => {
+                    let active = self.tabs.active;
+                    self.close_tab(active)
+                }
+                ("z", false) => self.run(Command::Undo),
+                ("z", true) | ("y", _) => self.run(Command::Redo),
                 ("f", _) => {
                     self.search_open = true;
                     operation::focus(SEARCH)
@@ -2257,7 +2383,7 @@ impl App {
             Command::Rename if !in_trash => return self.start_rename(),
             Command::Duplicate if !in_trash && !selected.is_empty() => {
                 let text = texts::copying(selected.len());
-                return self.spawn(text, move || done(ops::duplicate(&selected)?));
+                return self.spawn_step(text, move || made(ops::duplicate(&selected)?));
             }
             Command::CopyPath if !selected.is_empty() => {
                 let paths: Vec<String> = selected.iter().map(|p| p.display().to_string()).collect();
@@ -2288,11 +2414,16 @@ impl App {
                     return Task::none();
                 };
                 let count = selected.len();
-                return self.spawn(texts::MOVE_TO_TRASH.into(), move || {
-                    for path in &selected {
-                        trash.put(path)?;
-                    }
-                    Ok((texts::trashed(count), Vec::new()))
+                return self.spawn_step(texts::MOVE_TO_TRASH.into(), move || {
+                    let ids = selected
+                        .iter()
+                        .map(|path| trash.put(path))
+                        .collect::<ops::Result<Vec<_>>>()?;
+                    Ok((
+                        texts::trashed(count),
+                        Vec::new(),
+                        Some(Undoable::Trashed(ids)),
+                    ))
                 });
             }
             Command::Restore if in_trash => return self.restore(),
@@ -2311,6 +2442,8 @@ impl App {
                 self.refilter();
             }
             Command::ViewList => {}
+            Command::Undo => return self.undo(false),
+            Command::Redo => return self.undo(true),
             Command::QuickLook => self.quick_look(!self.looking),
             Command::EditPath => return self.start_path_edit(false, None),
             Command::GoToFolder => return self.start_path_edit(true, None),
@@ -2347,6 +2480,63 @@ impl App {
         Task::none()
     }
 
+    /// Runs an operation off the interface thread, and keeps its step for Ctrl+Z (lot E-10).
+    fn spawn_step(
+        &mut self,
+        text: String,
+        job: impl FnOnce() -> ops::Result<(String, Vec<PathBuf>, Option<Undoable>)> + Send + 'static,
+    ) -> Task<Message> {
+        self.spawn_recorded(text, Recorded::Done, job)
+    }
+
+    fn spawn_recorded(
+        &mut self,
+        text: String,
+        how: Recorded,
+        job: impl FnOnce() -> ops::Result<(String, Vec<PathBuf>, Option<Undoable>)> + Send + 'static,
+    ) -> Task<Message> {
+        self.busy += 1;
+        self.notice = (!text.is_empty()).then_some(Notice { text, error: false });
+        Task::perform(
+            async move {
+                match job() {
+                    Ok((text, select, step)) => (Ok((text, select)), step),
+                    Err(error) => {
+                        tracing::warn!(%error, "operation refused");
+                        (Err(error.to_string()), None)
+                    }
+                }
+            },
+            move |(outcome, step)| Message::Stepped(outcome, step, how),
+        )
+    }
+
+    /// Undoes the last step (Ctrl+Z), or redoes the last undone (Ctrl+Maj+Z, Ctrl+Y).
+    fn undo(&mut self, redo: bool) -> Task<Message> {
+        let list = if redo {
+            &mut self.steps.redo
+        } else {
+            &mut self.steps.undo
+        };
+        let Some(step) = list.pop() else {
+            self.notice = Some(Notice {
+                text: texts::NOTHING_TO_UNDO.into(),
+                error: false,
+            });
+            return Task::none();
+        };
+        let trash = self.config.trash.clone();
+        let (text, how) = if redo {
+            (texts::REDONE, Recorded::Redone)
+        } else {
+            (texts::UNDONE, Recorded::Undone)
+        };
+        self.spawn_recorded(String::new(), how, move || {
+            let back = step.undo(trash.as_ref())?;
+            Ok((text.to_owned(), back.shown(), Some(back)))
+        })
+    }
+
     /// Runs an operation off the interface thread: big copies do not block it.
     fn spawn(
         &mut self,
@@ -2371,6 +2561,11 @@ impl App {
             return Task::none();
         };
         if entry.kind == Kind::Folder && self.location != Location::Trash {
+            // Several folders selected: each in a tab of its own, the first shown (D-27b).
+            let folders = self.selected_folders();
+            if folders.len() > 1 {
+                return self.open_tabs(folders, true);
+            }
             let path = entry.path.clone();
             return self.go(Location::Folder(path));
         }
@@ -2465,13 +2660,23 @@ impl App {
         } else {
             texts::copying(sources.len())
         };
-        self.spawn(text, move || {
-            let report = if moving {
-                crate::transfer_job::move_(&sources, &dest, taken, trash.as_ref(), progress)?
+        // Kept for Ctrl+Z (E-10): a move goes back, a copy goes to the trash.
+        self.spawn_step(text, move || {
+            if moving {
+                let report =
+                    crate::transfer_job::move_(&sources, &dest, taken, trash.as_ref(), progress)?;
+                let step = crate::undo::moved(&sources, &report);
+                let (text, select) = done(report)?;
+                Ok((text, select, Some(step)))
             } else {
-                crate::transfer_job::copy(&sources, &dest, taken, trash.as_ref(), progress)?
-            };
-            done(report)
+                made(crate::transfer_job::copy(
+                    &sources,
+                    &dest,
+                    taken,
+                    trash.as_ref(),
+                    progress,
+                )?)
+            }
         })
     }
 
@@ -2483,9 +2688,13 @@ impl App {
         // reread listing has selected it.
         self.search.clear();
         self.pending_rename = true;
-        self.spawn(String::new(), move || {
+        self.spawn_step(String::new(), move || {
             let path = ops::new_folder(&dir)?;
-            Ok((String::new(), vec![path]))
+            Ok((
+                String::new(),
+                vec![path.clone()],
+                Some(Undoable::Made(vec![path])),
+            ))
         })
     }
 
@@ -2517,9 +2726,13 @@ impl App {
         let Some((path, name)) = self.renaming.take() else {
             return Task::none();
         };
-        self.spawn(String::new(), move || {
+        self.spawn_step(String::new(), move || {
             let renamed = ops::rename(&path, &name)?;
-            Ok((String::new(), vec![renamed]))
+            let step = (renamed != path).then(|| Undoable::Renamed {
+                from: path,
+                to: renamed.clone(),
+            });
+            Ok((String::new(), vec![renamed], step))
         })
     }
 
@@ -2629,6 +2842,13 @@ fn read_location(
                 .collect())
         }
     }
+}
+
+/// A copy as a step: what it made, which an undo puts in the trash.
+fn made(report: ops::Report) -> ops::Result<(String, Vec<PathBuf>, Option<Undoable>)> {
+    let step = Undoable::Made(report.paths.clone());
+    let (text, select) = done(report)?;
+    Ok((text, select, Some(step)))
 }
 
 /// Starts a program without waiting for it; a thread reaps it when it ends.

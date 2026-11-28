@@ -70,7 +70,7 @@ then `image-path` (also `image_path`), then `app_icon`.
 | --- | --- |
 | Raw pixels `(iiibiiay)` | Yes: 8 bits per sample, RGB or RGBA, 256 per side at most (`notifications::MAX_PIXELS_SIDE`; more is refused) |
 | An absolute path or a `file://` URI | PNG and SVG, read by the daemon when the notification comes (below). A URI with `%` escapes is not decoded |
-| An icon name of the theme (`firefox`) | Not yet: the initial of the application on a blue tile. The lookup will come from the shared icon theme crate of batch D-22b |
+| An icon name of the theme (`firefox`) | Looked up in the user's theme by `icon-theme` (D-23d), at 40 px, then read with the same checks as a path; not found or refused, the initial of the application on a blue tile |
 
 The picture shows in the 20 px tile of the header, as on the board.
 
@@ -92,7 +92,8 @@ and a blur as wide as can be asked 36 ms, measured by `tests/svg_cost.rs`). Anyt
 the history holds much, whatever a client sends: the application name to 48 characters, the
 title to 120, the body to 300 after markup (only its first 16 KiB are read), an action label to
 24; 32 actions at most, a key longer than 256 bytes dropping its action (a cut key would no
-longer be the application's), three buttons shown; an icon name to 255 bytes. The limits of
+longer be the application's), ten buttons shown (two and « Options » on the row, eight in its
+list); an icon name to 255 bytes. The limits of
 what shows are in `sherlock_ui::notifications`, the others are named constants of `model.rs`
 and `picture.rs`. Control characters and the invisible bidirectional formatting characters
 (U+200E, U+200F, U+061C, U+202A to U+202E, U+2066 to U+2069) are dropped from every text: they
@@ -134,8 +135,24 @@ passing its target never squeezes the last bubble, and plus 480 (`MEASURE_ROOM`)
 bubble is being laid out out of sight: in a surface of the stack's height, it would be measured
 squeezed. It shrinks back once everything settled.
 
+**Text and actions** (D-23c). The application name and the title stay on one line each,
+ending with « … » (`sherlock_ui::ellipsis`). The body wraps on words, and a word wider than the
+bubble (an address) breaks where it must (`Wrapping::WordOrGlyph`); four lines show at most
+(`notifications::BODY_LINES`), the rest is cut by the card. Up to three actions share the row
+of buttons in equal widths, each label on one line with « … »; with more, the first two stay and
+« Options » opens the others in a list under the row, as on macOS (`notifications::action_row`,
+shared with the notification centre of the bar). The bubble grows with the list, its neighbours
+moving down on their spring.
+
+![A crowded bubble: name and title cut, an address broken, two actions and « Options »](../desktop/notifications/screenshots/crowded.png)
+![« Options » open](../desktop/notifications/screenshots/options.png)
+
 **Stack.** The newest on top, 8 apart (the board's gap), four at most
-(`notifications::MAX_VISIBLE`); the others wait, in the order they came, and show as room
+(`notifications::MAX_VISIBLE`), fewer on a short screen: the daemon learns the logical height
+of its screen from iced_exwlshell and shows as many as fit between the bar and the dock
+(`notifications::visible_for`: 128 a bubble, 100 kept for the dock), one at least. 1280 × 800
+at 1.5 shows two, 1366 × 768 at 1.25 three, 1920 × 1080 at 1.5 four. A taller screen shows the
+waiting ones at once; a shorter one lets those shown finish. The others wait, in the order they came, and show as room
 frees up. Their timer starts when they show. At most 50 wait (`notifications::MAX_WAITING`):
 beyond, the oldest waiting one closes (reason 4, critical ones last) and stays in the history.
 Open notifications are thus never more than 54, and every walk over them stays short.
@@ -150,7 +167,27 @@ right edge; it slides out the same way, and the bubbles below close up. Both fol
 34, 2 % overshoot, settled in under 300 ms). Frames are asked for only while something moves.
 
 **Pointer.** A click closes the bubble or runs its default action; a button runs its action. The
-pointer over a bubble holds its timer, which goes on with the time it had left once it leaves;
+click counts on release, after a press on the bubble, and the press darkens it: the hover and
+press veils of `animated::hoverable` fade in over the glass, under the text (D-23d).
+
+**Closing** (D-23d). Under the pointer a bubble shows « × » at the right end of its header
+(`notifications::close_button`, the size of the tile, so that nothing moves): it closes the
+notification, dismissed (reason 2), with no action. Swiped to the right with two fingers, the
+bubble follows them, held back to a quarter of the way to the left; once they rest 120 ms
+(`SWIPE_END`), past a third of its width (`SWIPE_DISMISS`) it slides on out and is dismissed,
+else it springs back.
+
+**Piles** (D-23d). The bubbles of one application pile up behind its newest one, as on macOS:
+each one behind is an empty card the height of the one in front, 6 lower (`PILE_STEP`), two
+levels showing (`PILE_DEPTH`), so that no text shows through the glass. The newest says
+« 2 autres notifications »; a click on it, or on an edge of the pile, opens it into a plain
+stack, its newest bubble then saying « Afficher moins ». A pile of one closes by itself.
+
+![A pile of three bubbles above another application](../desktop/notifications/screenshots/pile.png)
+![The pile opened](../desktop/notifications/screenshots/pile-open.png)
+![« × » under the pointer](../desktop/notifications/screenshots/hover.png)
+
+The pointer over a bubble holds its timer, which goes on with the time it had left once it leaves;
 a replacement meanwhile does not restart it. A bubble on its way out takes no click: its
 messages name the bubble, not the id, which a replacement may already have reused.
 
@@ -205,6 +242,7 @@ same well-known name, `org.freedesktop.Notifications`, at `/org/sherlockos/Notif
 | --- | --- |
 | `List() → a(usssa(ss)bxb)` | The history, newest first: id, application, title, body as plain text (markup spans joined), actions as key and label, whether it is still open, the time it came (seconds since 1970), whether it is critical |
 | `Clear()` | Empties the history (« Tout effacer »). Open notifications stay on screen |
+| `Remove(au ids)` | Takes these notifications out of the history (« × » in the centre, D-23d); those still on screen close, dismissed (reason 2). 100 ids read at most |
 | `InvokeAction(u id, s key)` | Runs the action of a notification still open, as its button would: `ActionInvoked`, then it closes (reason 2) unless it is resident. An id no longer open, or a key it does not have, gets `org.freedesktop.DBus.Error.Failed` |
 | `Changed` (signal) | The history changed: a notification came or was replaced, closed, or the history was emptied. A listener reads `List` again |
 
@@ -290,7 +328,7 @@ with the bar and the dock.
   history, the hidden ones closed with reason 4, switched off at once); `CloseNotification` of
   an unknown id is an error; two clients: the second cannot replace nor close the first one's
   notification; the name already taken.
-- **Core**: four bubbles at most, the next one shows when one closes; at most 50 waiting, the
+- **Core**: four bubbles at most, two on a screen 533 high, the next one shows when one closes; at most 50 waiting, the
   oldest non-critical closing first; the pointer holds the timer and gives back the time left,
   a replacement keeps it held; only the sender replaces or closes; the history keeps 100, a
   replacement takes its entry.
@@ -326,7 +364,6 @@ with the bar and the dock.
 
 ## What this batch does not do
 
-- Theme icon names: after the shared icon lookup of D-22b.
 - Muting in game mode: there is no game mode yet; it will set Do not disturb, or a state of its
   own in the same file.
 - Sound, `ActivationToken` (specification 1.2, optional), `x-` and `category` hints: read and

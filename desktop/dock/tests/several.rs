@@ -87,6 +87,7 @@ fn mixed() -> Windows {
         ],
         controllable: true,
         expose: true,
+        force: false,
         ..Windows::default()
     }
 }
@@ -308,9 +309,14 @@ fn the_menu_lists_the_windows_then_the_actions() {
             ("Notes de réunion — Example Browser", true, false),
             ("Nouvelle fenêtre", true, false),
             ("Nouvelle fenêtre de navigation privée", true, false),
-            ("Retirer du Dock", true, false),
+            ("Options", false, false),
+            ("Garder dans le Dock", true, true),
+            ("Ouvrir à l’ouverture de session", true, false),
+            ("Afficher dans Evidence", true, false),
             ("Afficher toutes les fenêtres", true, false),
+            ("Masquer", true, false),
             ("Quitter", true, false),
+            ("Forcer à quitter", false, false),
         ]
     );
     // An untitled window takes the application's name.
@@ -327,6 +333,11 @@ fn the_menu_lists_the_windows_then_the_actions() {
     open_menu(&mut dock, BROWSER);
     let _ = dock.update(Message::MenuPick(Entry::Quit));
     assert_eq!(recorder.requests(), [Request::Close]);
+    settle(&mut dock);
+    // « Masquer » minimizes them (lot D-21i).
+    open_menu(&mut dock, BROWSER);
+    let _ = dock.update(Message::MenuPick(Entry::Hide));
+    assert_eq!(recorder.requests(), [Request::Close, Request::Minimize]);
     // While it folds back, it takes no other pick.
     let _ = dock.update(Message::MenuPick(Entry::Window(11)));
     assert_eq!(recorder.targeted().len(), 1);

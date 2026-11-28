@@ -18,10 +18,11 @@ To try it without touching your own settings, give it a configuration folder of 
 ## Pages
 
 D-26a1 brought the appearance and touchpad pages; D-26a2 sound, lock and default applications;
-D-26c the keyboard page and the gestures of the touchpad page. Displays come with D-26b.
+D-26b the screens; D-26c the keyboard page and the gestures of the touchpad page.
 
 | Page | Setting | File | Read by |
 | --- | --- | --- | --- |
+| « Écrans » | Arrangement (dragged), resolution, refresh, scale (100 to 200 %), rotation, main screen, on or off | `$XDG_CONFIG_HOME/sherlockos/displays.conf`, per screen (EDID), written by the compositor | Compositor, through `wlr-output-management` (ADR 0025) |
 | « Apparence » | Theme: Sombre, Clair, Auto, and the hours of Auto (half-hour steps) | `$XDG_CONFIG_HOME/appearance/appearance.conf` | Every program (`appearance-config`) |
 | « Apparence » | Wallpaper among the installed ones, « Suivre le thème » | `$XDG_CONFIG_HOME/sherlockos/wallpaper.conf` | Compositor |
 | « Apparence » | Dock: size, magnification and its strength, hiding, edge | `$XDG_CONFIG_HOME/dock/dock.conf` | Dock |
@@ -56,6 +57,30 @@ goes to a task (`Writes::run`), one batch at a time, in the order of the changes
 made meanwhile wait for the next batch and stay shown. The wallpapers installed are found by
 the same task that reduces their thumbnails, once: drawing the page never looks at the disk.
 
+**Screens.** The page does not write a file: it is a client of `wlr-output-management`
+(ADR 0025), on a Wayland connection of its own, in a thread that runs only while the page is
+open or a change waits (`displays::run`). The compositor sends every screen with its modes and
+state; what it sends is bounded (16 screens, 256 modes, names of 64 characters). Each change is
+sent as a whole configuration and shown once the compositor has taken it. A change of
+resolution, refresh, scale, rotation or of a screen on or off asks « Garder ces réglages
+d'affichage ? » with « Revenir » and « Garder »; without an answer the previous configuration
+comes back after `CONFIRM_DELAY` (15 seconds), as on macOS and Windows. Moving a screen needs no
+confirmation. In the arrangement, the screens are drawn to scale; a screen dropped goes to the
+nearest place along the edge of another, where it covers none (`arrangement::snap`), and the
+main screen (the one at the origin, with the bar drawn on top) stays at the origin: dragging it
+moves the others. « En faire l'écran principal » moves the origin to the chosen screen. The last
+screen on cannot be switched off. The compositor keeps the setting of each screen under its
+EDID names and gives it back when the screen comes back; it writes it only once a change has
+held for 20 seconds, so that a change never confirmed is not kept. Under `--nested`, a screen
+is a slice of the host window: its resolution cannot change and it cannot turn.
+
+| Captures | |
+| --- | --- |
+| Wide, dark | ![Screens](control-room/displays-wide-dark.png) |
+| Narrow, dark | ![Screens, narrow](control-room/displays-narrow-dark.png) |
+| Waiting for « Garder », light | ![Confirmation](control-room/displays-confirm-light.png) |
+| In the nested compositor, two screens of its window | ![Nested](control-room/displays-nested.png) |
+
 **Network (lot D-26n).** The « Réseau » page switches the Wi-Fi on or off, lists the networks
 around (read again every 5 seconds while the page is open, « Rechercher » asks for a new scan),
 and joins one: an open network at once; a protected one through its saved connection, else
@@ -67,8 +92,8 @@ network in use, with its secrets. Every call goes to NetworkManager on the syste
 interface thread (`system_services::network`, shared with the bar), and polkit asks where its
 policy wants it; the secrets are bounded (256 bytes, 32 for a name) and never logged.
 
-**One window (lot D-26n).** `control-room --page <id>` opens a page: `network`, `bluetooth`,
-`sound`, `appearance`, `keyboard`, `touchpad`, `lock`, `clipboard`, `apps`. The first Control Room listens on
+**One window (lot D-26n).** `control-room --page <id>` opens a page: `displays`, `network`,
+`bluetooth`, `sound`, `appearance`, `keyboard`, `touchpad`, `lock`, `clipboard`, `apps`. The first Control Room listens on
 `$XDG_RUNTIME_DIR/sherlockos-control-room.sock`; a second one hands it its page (one line of at
 most 64 bytes) and leaves, and the window shows that page and takes the focus. The bar's
 « Ouvrir les Réglages », under a network it cannot join, runs `control-room --page network`.
@@ -187,6 +212,8 @@ fades out over `SPOTLIGHT`. Escape empties the field. Ctrl+F puts the keyboard i
 | `thumbnails` | The installed wallpapers and their thumbnails | no |
 | `sound` | Outputs, microphones and volumes through `pactl` | no |
 | `apps` | The kinds of default applications, their choices, writing them | no |
+| `displays` | The compositor's screens through `wlr-output-management`, in a thread | no |
+| `arrangement` | The screens drawn to scale, where a dropped screen lands | no |
 | `app` | State, messages, saving, animations | yes |
 | `view` | Window, title bar, sidebar, page and its transition, cards and rows | yes |
 | `pages` | One module per page | yes |
