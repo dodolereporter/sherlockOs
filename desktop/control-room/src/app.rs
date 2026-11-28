@@ -24,6 +24,7 @@ use system_services::Problem;
 use system_services::audio::{Device, Pactl};
 
 use crate::apps::{self, Choice, Kind};
+use crate::pages::network::{Change as NetworkChange, Net};
 use crate::search::{self, Hit, Page, Setting};
 use crate::settings::{File, Paths, Settings};
 use crate::sound::{self, Audio};
@@ -194,6 +195,10 @@ pub enum Message {
     SoundSet(Result<Audio, Problem>),
     Catalog(Arc<Catalog>),
     SetApp(Kind, Choice),
+    /// The « Réseau » page.
+    Network(NetworkChange),
+    /// Another `control-room` asked for a page: this window shows it.
+    Show(Page),
     /// Text typed in the field where the keyboard is tried.
     TryKeys(String),
     /// Whether the default application of a kind was written.
@@ -303,6 +308,8 @@ pub struct App {
     closing: bool,
     pub(crate) theme: ThemeFade,
     origin: Instant,
+    /// The Wi-Fi, while the « Réseau » page is open.
+    pub(crate) network: Net,
 }
 
 impl App {
@@ -338,6 +345,7 @@ impl App {
             closing: false,
             theme: ThemeFade::default(),
             origin: Instant::now(),
+            network: Net::default(),
         };
         let load = Task::perform(async move { thumbnails::load(&dirs) }, |found| {
             Message::Thumbnails(Arc::new(found))
@@ -350,7 +358,11 @@ impl App {
             Page::Bluetooth => app.bluetooth.open().map(Message::Bluetooth),
             _ => Task::none(),
         };
-        (app, Task::batch([load, audio, catalog, bluetooth]))
+        let network = match app.page == Page::Network {
+            true => app.open_network(),
+            false => Task::none(),
+        };
+        (app, Task::batch([load, audio, catalog, bluetooth, network]))
     }
 
     fn pactl(&self) -> Pactl {
@@ -431,7 +443,15 @@ impl App {
         } else {
             Subscription::none()
         };
-        Subscription::batch([frames, tab, keys, appearance, bluetooth])
+        // The networks around, read again while their page is open; the pages other
+        // `control-room` ask for.
+        let network = match self.page == Page::Network {
+            true => Subscription::run_with((), crate::network::ticks)
+                .map(|()| Message::Network(NetworkChange::Tick)),
+            false => Subscription::none(),
+        };
+        let asked = Subscription::run(crate::instance::asked).map(Message::Show);
+        Subscription::batch([frames, tab, keys, appearance, bluetooth, network, asked])
     }
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
@@ -452,7 +472,13 @@ impl App {
             Message::Bluetooth(message) => {
                 return self.bluetooth.update(message).map(Message::Bluetooth);
             }
-            Message::Go(page) => self.go(page),
+            Message::Go(page) => return self.go(page),
+            Message::Show(page) => {
+                let shown = self.go(page);
+                let raise = window::latest().and_then(window::gain_focus);
+                return Task::batch([shown, raise]);
+            }
+            Message::Network(change) => return self.update_network(change),
             Message::Search(query) => {
                 let hits = search::search(&query);
                 // A new list of results comes in, one after the other.
@@ -472,11 +498,12 @@ impl App {
                 }
             }
             Message::Open(setting) => {
-                self.go(setting.page());
+                let opened = self.go(setting.page());
                 let fade = Fade::new(1.0, 0.0, now, cr::SPOTLIGHT);
                 self.spotlight = Some((setting, fade));
                 // The page scrolls to the setting, once it is laid out.
-                return crate::scroll::find(setting).map(Message::ScrollTo);
+                let scroll = crate::scroll::find(setting).map(Message::ScrollTo);
+                return Task::batch([opened, scroll]);
             }
             Message::ScrollTo(found) => {
                 if let Some((from, to)) = found {
@@ -667,8 +694,9 @@ impl App {
         )
     }
 
-    /// Opens `page`: it comes in, and the folded sidebar goes.
-    fn go(&mut self, page: Page) {
+    /// Opens `page`: it comes in, and the folded sidebar goes. The « Réseau » page reads the
+    /// Wi-Fi: the task returned.
+    fn go(&mut self, page: Page) -> Task<Message> {
         let now = self.now();
         if page != self.page {
             // The page left fades out under the one coming in.
@@ -677,8 +705,13 @@ impl App {
             self.page_slide = Slide::coming(now);
             self.spotlight = None;
             self.scroll = None;
+            if page == Page::Network {
+                self.sidebar.show(now, false);
+                return self.open_network();
+            }
         }
         self.sidebar.show(now, false);
+        Task::none()
     }
 
     /// The message of `change`, none when its file is locked: the control is disabled.

@@ -15,6 +15,7 @@ use zbus::Connection;
 use zbus::message::Header;
 use zbus::zvariant::{ObjectPath, OwnedObjectPath, OwnedValue, Value};
 
+use crate::bus::set;
 use crate::{Problem, Result};
 
 pub const SERVICE: &str = "org.bluez";
@@ -31,28 +32,6 @@ pub const AGENT_PATH: &str = "/org/sherlockos/agent";
 const CAPABILITY: &str = "KeyboardDisplay";
 /// Devices found by a scan listed at most, besides the paired ones.
 pub const MAX_FOUND: usize = 12;
-
-const PROPERTIES: &str = "org.freedesktop.DBus.Properties";
-
-/// Writes a property with `org.freedesktop.DBus.Properties.Set`.
-async fn set(
-    bus: &Connection,
-    service: &str,
-    path: &str,
-    interface: &str,
-    name: &str,
-    value: Value<'_>,
-) -> Result<()> {
-    bus.call_method(
-        Some(service),
-        path,
-        Some(PROPERTIES),
-        "Set",
-        &(interface, name, value),
-    )
-    .await?;
-    Ok(())
-}
 
 /// What a device is, from its BlueZ `Icon` (a freedesktop icon name).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
