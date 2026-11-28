@@ -500,6 +500,7 @@ pub(crate) fn push_items(
                 scale,
                 background: bg,
                 color: fg,
+                icon: None,
             },
             alpha: 1.0,
         });

@@ -54,6 +54,12 @@ under Plasma): the compositor never changes the sound of the session it runs in.
   the volume, or of the brightness, waiting together are merged: their sum is set at once. A
   key held 4 s against a `pactl` that hangs leaves at most one action after its release
   (`tests/media_keys.rs`), instead of a hundred.
+- **No step lost** (lot Q-46). The repeats follow how long the key is held, not how often the
+  event loop runs nor how fast the worker answers: a repeat timer that fires late counts every
+  interval that passed (`media_keys::due`), and the repeats due while the worker is at work are
+  kept, 8 at most (`REPEATS_OWED`), then sent together, merged into one step, when it is free or
+  when the key is released. Before, a repeat that came while logind answered was dropped: on a
+  loaded machine a held key gave two or three steps instead of six.
 
 ## The on-screen display
 

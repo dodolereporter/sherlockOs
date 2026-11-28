@@ -90,6 +90,12 @@ pub const SEARCH_COMPACT_WIDTH: f32 = 1000.0;
 /// Width of the « Aller au dossier » sheet.
 pub const GO_TO_WIDTH: f32 = 460.0;
 
+/// The large preview of Space (lot E-12): it zooms in and out in this time, from this scale,
+/// and takes this share of the window.
+pub const QUICK_LOOK_ZOOM: std::time::Duration = std::time::Duration::from_millis(200);
+pub const QUICK_LOOK_FROM: f32 = 0.85;
+pub const QUICK_LOOK_SHARE: f32 = 0.8;
+
 /// Entries of the right-click menu that Evidence does not offer yet: shown greyed.
 pub const COMPRESS: &str = "Compresser";
 pub const PROPERTIES: &str = "Propriétés";

@@ -2600,6 +2600,10 @@ lot (`sherlock_ui::mission_control`), to review with the design.
 | --- | --- |
 | Super alone, pressed then released with nothing in between | Opens, or closes |
 | Super + Tab | Opens, or closes |
+| Ctrl + Up, F3 alone, or the Mission Control key (`XF86LaunchA`) | Opens, or closes, as on macOS (lot D-33c) |
+| Ctrl + Down | App Expose of the application in front (its windows of the active workspace), or closes (lot D-33c) |
+| An arrow, in the view | Moves the selection, drawn as under the pointer: the first one selects the window in front, the next ones the nearest window or thumbnail that way (lot D-33c) |
+| Enter or Return, in the view | Chooses the selection, as a click would |
 | Escape | Closes |
 | Three fingers up | Opens; the view follows the fingers |
 | Three fingers down | Closes; the view follows the fingers |
@@ -2614,14 +2618,23 @@ shortcuts, do not reach the client.
 
 **Following the fingers.** Once a three finger swipe picks the vertical direction (see
 "Touchpad"), the view is held where the fingers put it: 300 units up open it fully
-(`gestures::OVERVIEW_DISTANCE`), from closed, or from open going down. When the fingers lift
-past the trigger of the vertical swipe (100 units, `VERTICAL_DISTANCE`), up opens and down
-closes; short of it, or cancelled by libinput, the view goes back to where it was. Either way it
-leaves from where the fingers left it, on `mission_control::SPRING` (the snap spring). Three
+(`gestures::OVERVIEW_DISTANCE`), from closed, or from open going down. When the fingers lift,
+their velocity over the last 100 ms decides (lot D-33c): past 2 openings a second
+(`mission_control::FLICK`), the way they flicked wins, so a quick short swipe opens or closes;
+slower, the view goes where that velocity carries it in 0.2 s (`gestures::PROJECTION`, as for
+the workspaces), open past half way, closed short of it. Fingers that came back past where they
+started close it, whatever way they first went. Cancelled by libinput, the view goes back to
+where it was. It leaves from where the fingers left it, at their speed, on
+`mission_control::SPRING` (the snap spring): no stop at the release. Three
 fingers down on the desktop open nothing: they do what `swipe-down` says, nothing by default.
 
 **What it may not do.** It does not open during a move or resize gesture, nor while an anchored
 surface keeps the keyboard (a lock screen).
+
+**Since the D-33 review (lot D-33c).** Escape, or a click, while three fingers hold the view
+closes it for the rest of that swipe. A scroll or a three finger swipe while Super is held makes
+Super no longer alone. A decoration button held down when the view opens no longer acts when
+released after it. A window without content gets no miniature in a thumbnail.
 
 ### The view
 
@@ -2637,8 +2650,12 @@ surface keeps the keyboard (a lock screen).
   Nothing overlaps, and each window travels little: what is above stays above, what is on the
   left stays on the left.
 - **Each window** is drawn with its title bar (lot D-08), its border, its corners and a shadow
-  at its scale; its title is written below it, in a pill of menu glass. Under the pointer, it
-  has a border of the accent color, 3 px outside its frame (`HIGHLIGHT_WIDTH`). A maximized
+  at its scale. Under the pointer (or selected with the arrows), it has a border of the accent
+  color, 3 px outside its frame (`HIGHLIGHT_WIDTH`), its title below it in a pill of menu glass,
+  and a « × » of 24 (`CLOSE_SIZE`) on its top left corner, as in Sequoia (lot D-33c): both fade
+  in and out in 150 ms (`HOVER_FADE`); the other windows show no title. The « × » turns the red
+  of the close buttons under the pointer; a click on it asks the window to close (as its title
+  bar's button), and the view stays open: the window leaves the grid once gone. A maximized
   window gets its corners back as it shrinks.
 - **The wallpaper** is dimmed by the scrim of the theme (`palette().scrim`), more as the view
   opens. No blur: the compositor has none yet (see "What rendering does not do yet").
@@ -2647,6 +2664,14 @@ surface keeps the keyboard (a lock screen).
   workspace in small, and its name below (« Bureau 2 », `strings::mission_control`). The active
   workspace has a border of the accent color, 2 px; so has the thumbnail a dragged window is
   over. The strip comes down from above the screen as the view opens.
+- **Adding and removing workspaces** (lot D-33c). A « + » of 32 (`ADD_SIZE`) follows the
+  thumbnails, 16 after the last one, while there are fewer than 9: a click adds a workspace at
+  the end, whose thumbnail fades in over 250 ms (`ARRIVAL`). The thumbnail under the pointer
+  shows a « × » on its top left corner while another workspace remains: a click removes that
+  workspace (`State::remove_workspace`). Its windows go to the workspace before it (after it
+  for the first one), the next ones take its place and its number, and the active one stays
+  (or becomes the one the windows went to). The bar follows through `ext-workspace-v1`. The
+  number is the session's until it ends: the session's `--workspaces` is not rewritten.
 - **Animation.** Each window goes from where it is drawn on the desktop to its slot in the grid
   as the view opens, and back as it closes; the titles, the strip and the dim fade with it. A
   window chosen by a click is raised first, then every window goes back to its place.
@@ -2687,6 +2712,16 @@ everything, without its title. Dropped on a thumbnail, it moves to that workspac
 goes back to its slot. A click on a thumbnail goes to that workspace without the slide of the
 row (`State::stop_workspace_slide`): the view closes on the windows of the arriving workspace.
 The bar follows through `ext-workspace-v1`, as for any switch.
+
+**Textures (lot D-33c).** A window's title is drawn at the size it has in the grid, so its
+texture is made once, not at every frame of the opening; the textures are kept per scale (a
+thumbnail's name on two screens of different scales no longer makes its texture again at each
+frame), and Mission Control's are freed as soon as the view is no longer shown. A window shrunk
+past 1.5 texels per pixel (the grid, the thumbnails) is sampled 4 × 4 times over each pixel's
+footprint by the clip shader (`shaders/clip.frag`, with `GL_OES_standard_derivatives`; one
+sample without it): the thumbnails of the strip, shrunk some 10 times, no longer shimmer.
+
+![Mission Control at 1920 × 1080, the pointer on « Firefox »](../desktop/compositor/screenshots/mission-control-1920-dark.png)
 
 ### Input while it is open
 
