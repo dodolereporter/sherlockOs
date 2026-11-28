@@ -297,7 +297,7 @@ fn kind(mode: u32) -> &'static str {
 }
 
 /// `seconds` since 1970 as a date and time, UTC.
-fn date(seconds: i64) -> String {
+pub(crate) fn date(seconds: i64) -> String {
     let (days, rest) = (seconds.div_euclid(86_400), seconds.rem_euclid(86_400));
     // Days to a civil date (Howard Hinnant's algorithm).
     let z = days + 719_468;
