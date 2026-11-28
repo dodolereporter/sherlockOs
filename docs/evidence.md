@@ -183,7 +183,7 @@ are built once (`sherlock_ui::component::icon` caches the SVG handles).
 - The window follows its width (lot E-05, after the Finder and Nautilus). The name of a file
   always keeps `NAME_MIN_WIDTH` (220): when the room runs short, the Git column folds first,
   then Type, the preview, Size, Modified, and last the sidebar (`layout::Panes`). The preview
-  folds at half a 1080p screen; Space brings it back at that width, and the columns fold
+  folds at half a 1080p screen; « Aperçu » brings it back at that width, and the columns fold
   instead. Names, the origin of a trash item and the preview's title end with « … » where the
   shaped text stops fitting (`sherlock_ui::ellipsis`), not after an estimated count of
   characters.
@@ -254,6 +254,14 @@ are built once (`sherlock_ui::component::icon` caches the SVG handles).
   closes it. Each tab keeps its folder, its history, its selection and its search; one listing
   is live, the active tab's, and switching reads the other folder again off the interface
   thread. At most 24 tabs.
+- Space opens a large preview of the item under the cursor, after the Finder's Quick Look
+  (lot E-12): its name and its content (the text, the picture fitted to the room, or its
+  information) on a glass panel of 80 % of the window, over a dimmed window. It zooms in from
+  0.85 and fades in 200 ms, and zooms out the same way. The arrows go to the item before or
+  after, and the preview follows; Space, Escape or a click outside close it. It opens on one
+  item only. The side panel is shown or hidden from « Aperçu » in the bar's menu.
+
+  ![](evidence/quick-look.png)
 - Copies and moves (lot E-11, `transfer_job`): a paste first looks, off the interface
   thread, for the names already taken where it goes. If any, a dialog asks once for all of them:
   « Remplacer » (the item there goes to the trash, never deleted for good), « Garder les deux »
