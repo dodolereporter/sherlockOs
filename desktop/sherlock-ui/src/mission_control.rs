@@ -36,6 +36,12 @@ pub const THUMBNAIL_RADIUS: f32 = 8.0;
 /// active workspace and for the one a dragged window is over.
 pub const THUMBNAIL_BORDER: f32 = metrics::BORDER_WIDTH;
 pub const THUMBNAIL_ACTIVE_BORDER: f32 = 2.0;
+/// The « × » that closes the window under the pointer (lot D-33c): its diameter, its center
+/// this far inside the top left corner of the window (most of it outside, as on macOS), and
+/// how long the title and it take to fade in or out.
+pub const CLOSE_SIZE: f32 = 24.0;
+pub const CLOSE_INSET: f32 = 2.0;
+pub const HOVER_FADE: std::time::Duration = std::time::Duration::from_millis(150);
 
 /// The colors of the view in a palette.
 #[derive(Debug, Clone, Copy, PartialEq)]
