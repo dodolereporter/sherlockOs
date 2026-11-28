@@ -63,6 +63,7 @@ mod tests {
 
     const MANAGER: &str = "sherlock_shell_manager_v1";
     const WORKSPACES: &str = "ext_workspace_manager_v1";
+    const LAYER_SHELL: &str = "zwlr_layer_shell_v1";
     const BTN_LEFT: u32 = 0x110;
     // xkb codes (evdev + 8): left Super, Shift and Ctrl, the arrows, and 1 to 3 of the top row.
     const KEY_SUPER: u32 = 133;
@@ -668,6 +669,15 @@ mod tests {
             .cloned()
             .unwrap();
         let _: SherlockShellManagerV1 = h.app.registry.bind(name, 1, &h.app.queue.handle(), ());
+        assert_bind_refused(&mut h);
+        assert!(h.app.client.toplevels.is_empty());
+        // The shell client is not affected.
+        h.bind_manager();
+        assert!(h.shell.conn.protocol_error().is_none());
+    }
+
+    /// The application's connection ended on its bind of a global it cannot see.
+    fn assert_bind_refused(h: &mut Harness) {
         for _ in 0..50 {
             h.turn();
         }
@@ -685,10 +695,58 @@ mod tests {
             Some(22),
             "not EINVAL: the bind was not refused as invalid"
         );
-        assert!(h.app.client.toplevels.is_empty());
-        // The shell client is not affected.
-        h.bind_manager();
+    }
+
+    /// Lot D-46: an application could cover every screen with an overlay surface that takes the
+    /// keyboard, and imitate the lock screen or a password dialog.
+    #[test]
+    fn an_ordinary_client_neither_sees_nor_binds_the_layer_shell() {
+        let mut h = Harness::start();
+        assert!(
+            h.shell.sees(LAYER_SHELL),
+            "the shell does not see layer-shell"
+        );
+        assert!(!h.app.sees(LAYER_SHELL), "the application sees layer-shell");
+
+        let (name, _, _) = h
+            .shell
+            .client
+            .globals
+            .iter()
+            .find(|g| g.1 == LAYER_SHELL)
+            .cloned()
+            .unwrap();
+        let _: ZwlrLayerShellV1 = h.app.registry.bind(name, 1, &h.app.queue.handle(), ());
+        assert_bind_refused(&mut h);
+        // The shell client still anchors its surfaces.
+        let _dock = h.dock();
         assert!(h.shell.conn.protocol_error().is_none());
+    }
+
+    #[test]
+    fn the_login_screen_shares_the_layer_shell() {
+        let event_loop = EventLoop::try_new().unwrap();
+        let mut state = State::new(&event_loop).unwrap();
+        state.add_output((800, 600).into(), 1.0);
+        state.share_layer_shell();
+        let (server, app) = UnixStream::pair().unwrap();
+        state.insert_client(server);
+        let (server, shell) = UnixStream::pair().unwrap();
+        state.insert_shell_client(server);
+        let mut h = Harness {
+            event_loop,
+            state,
+            app: Side::new(app),
+            shell: Side::new(shell),
+        };
+        h.run_until("the globals", |h| {
+            h.app.sees("wl_shm") && h.shell.sees("wl_shm")
+        });
+        assert!(
+            h.app.sees(LAYER_SHELL),
+            "the greeter does not see layer-shell"
+        );
+        assert!(!h.app.sees(MANAGER), "the shell's own globals stay hidden");
     }
 
     #[test]
@@ -713,8 +771,8 @@ mod tests {
         h.run_until("the globals", |h| {
             h.app.sees("wl_shm") && h.shell.sees("wl_shm")
         });
-        assert!(h.shell.sees(MANAGER) && h.shell.sees(WORKSPACES));
-        assert!(!h.app.sees(MANAGER) && !h.app.sees(WORKSPACES));
+        assert!(h.shell.sees(MANAGER) && h.shell.sees(WORKSPACES) && h.shell.sees(LAYER_SHELL));
+        assert!(!h.app.sees(MANAGER) && !h.app.sees(WORKSPACES) && !h.app.sees(LAYER_SHELL));
         h.state.shutdown();
         assert!(!path.exists() && !shell_path.exists());
     }

@@ -13,6 +13,7 @@ members = [
     "desktop/dock",
     "desktop/dock-config",
     "desktop/evidence",
+    "desktop/greeter",
     "desktop/icon-theme",
     "desktop/launcher",
     "desktop/lock",
