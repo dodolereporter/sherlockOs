@@ -313,6 +313,27 @@ impl Request {
     }
 }
 
+/// Hands the activation `token` of a click to the item at `path` of `service`
+/// (`ProvideXdgActivationToken`, KDE's extension, which Chromium, Electron and Qt answer), just
+/// before `Activate`: the application may bring its window forward with it (lot Q-52).
+pub async fn provide_token(
+    bus: &zbus::Connection,
+    service: &str,
+    path: &str,
+    token: &str,
+) -> zbus::Result<()> {
+    let token = token.chars().take(MAX_TEXT).collect::<String>();
+    bus.call_method(
+        Some(service),
+        path,
+        Some(ITEM),
+        "ProvideXdgActivationToken",
+        &token,
+    )
+    .await
+    .map(|_| ())
+}
+
 /// The bus name and the object path of an item, from what it registered: a bus name (the path
 /// is then `/StatusNotifierItem`), or an object path on the connection that called (`sender`),
 /// as libappindicator does.

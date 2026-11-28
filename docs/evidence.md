@@ -163,6 +163,12 @@ are built once (`sherlock_ui::component::icon` caches the SVG handles).
     swings that die out) and says why in the status bar; the field stays open;
   - Escape, a click in the listing, or a navigation give the breadcrumb back.
 
+  « … » opens a menu of the folders it folds, as Finder's path bar does. The sheet lists the
+  last 10 folders reached by the field while nothing completes (for the session). The arrows
+  scroll the completion list to keep the picked folder in sight. Below 1000 px, the search
+  folds to its icon until it is used (a click, or Ctrl+F); Escape or a new folder folds it
+  back, and the path bar takes its room (lot E-04c).
+
   The breadcrumb and the field cross-fade (160 ms each way); the list fades and slides in and
   out; the sheet comes down and fades, over a dimmed window.
 
@@ -239,6 +245,13 @@ are built once (`sherlock_ui::component::icon` caches the SVG handles).
   | ![Menu on the background, Trier par open](evidence/menu-background-dark.png) | ![Menu on the background, light](evidence/menu-background-light.png) |
 
   Halfway through unfolding, software renderer: ![Menu unfolding](evidence/menu-opening.png)
+- Copies and moves (lot E-11, `transfer_job`): a paste first looks, off the interface
+  thread, for the names already taken where it goes. If any, a dialog asks once for all of them:
+  « Remplacer » (the item there goes to the trash, never deleted for good), « Garder les deux »
+  (« nom (copie) »), « Ignorer », or « Annuler ». While it runs, the status bar shows its share
+  done and an « Arrêter » button: the size is counted first (200 000 entries at most), the
+  files are copied by chunks of 1 MB that count and check for a stop, and a copy stopped or
+  failed leaves nothing half-written behind.
 - Network (lot E-07): a « Réseau » section of the sidebar lists the file servers of the local
   network, found without any tool installed (`network`): a multicast DNS question for
   `_smb._tcp.local` (Samba, macOS and NAS boxes, announced by Avahi or mDNSResponder) and a

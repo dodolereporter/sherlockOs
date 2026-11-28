@@ -51,6 +51,9 @@ pub struct Window {
     /// When it last got the keyboard, counted by the source: higher is more recent, 0 for a
     /// window not seen active since the source started.
     pub recency: u64,
+    /// Asked to come forward without the right to take the keyboard (lot Q-52): its icon
+    /// bounces a few times.
+    pub attention: bool,
 }
 
 impl Window {
@@ -632,6 +635,7 @@ impl Toplevels {
                     activated: t.activated,
                     minimized: t.minimized,
                     recency: t.recency,
+                    attention: false,
                 })
                 .collect(),
             controllable: true,
