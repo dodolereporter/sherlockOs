@@ -489,6 +489,14 @@ server, directly or through the agent loop obeying an injection, while the read 
 each decision is journaled. A consent runs exactly that call, once, after a reinforced request
 that showed its arguments, journaled with its outcome.
 
+**From end to end** (`desktop/compositor/tests/sherlock_end_to_end.rs`, lot A-11d): the real
+`sherlockd --proxy --consent`, as Claude Code starts it, in front of the compositor's consent
+window, in a process named `compositor` so that both peer checks pass as in the session. The test
+plays Claude Code and asks twice for `vider_corbeille`; the compositor shows the window each time
+and answers through the input entry points of the session's backend: Escape, then « Autoriser »
+held. The refused call runs nothing, the granted one runs, and the journal has the refusal, the
+consent and the outcome. It needs the `sherlockd` binary, which the workspace's tests build.
+
 ## The windows server (lot A-12, ADR 0032, proposed)
 
 `sherlockd --windows-server <socket>` is one of Sherlock's own servers (`ServerConfig::ours`),
@@ -595,8 +603,6 @@ the outcome; refused, nothing is called.
 
 - A-11b: the consent window drawn by the compositor, its private socket, its reserved input and
   the reinforced consent (ADR 0031).
-- An end-to-end test with the real compositor and the real `sherlockd` (each side is tested
-  against a fake of the other: `tests/window.rs` here, `tests/mission_control.rs` there).
 - The setting through which the user grants another level to a tool of a third-party server
   (ADR 0015).
 
