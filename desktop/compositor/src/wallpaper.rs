@@ -157,10 +157,18 @@ impl Wallpaper {
     fn reload(&mut self) {
         self.stamp = self.file.as_deref().and_then(stamp);
         let setting = match &self.file {
-            Some(file) => Config::read(file).unwrap_or_else(|err| {
-                tracing::warn!("wallpaper: {}: {err}", file.display());
-                Config::default()
-            }),
+            Some(file) => match Config::read_lenient(file) {
+                Ok((config, problems)) => {
+                    for problem in problems {
+                        tracing::warn!("wallpaper: {}: {problem}, line ignored", file.display());
+                    }
+                    config
+                }
+                Err(err) => {
+                    tracing::warn!("wallpaper: {}: {err}", file.display());
+                    Config::default()
+                }
+            },
             None => Config::default(),
         };
         self.mode = setting.mode;

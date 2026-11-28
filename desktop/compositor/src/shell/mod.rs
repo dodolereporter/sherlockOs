@@ -89,7 +89,7 @@ fn is_shell_client(client: &Client) -> bool {
 #[derive(Debug, Clone, Copy)]
 struct WindowId(u32);
 
-fn window_id(window: &Window) -> u32 {
+pub(crate) fn window_id(window: &Window) -> u32 {
     static NEXT: AtomicU32 = AtomicU32::new(1);
     window
         .user_data()
@@ -145,6 +145,7 @@ impl State {
     pub fn insert_shell_client(&mut self, stream: UnixStream) {
         let data = Arc::new(ClientState {
             shell: true,
+            capture: self.capture_allowed(&stream),
             ..ClientState::default()
         });
         if let Err(err) = self.display_handle.insert_client(stream, data) {
@@ -431,7 +432,7 @@ impl State {
     }
 
     /// The window of id `id`, shown or hidden.
-    fn window_by_id(&self, id: u32) -> Option<Window> {
+    pub(crate) fn window_by_id(&self, id: u32) -> Option<Window> {
         self.space.elements().find(|w| window_id(w) == id).cloned()
     }
 
@@ -473,6 +474,14 @@ impl State {
                 manager.update(&dh, &outputs, &self.shell.workspace_model);
             }
         }
+        // The windows a screen share may show (lot D-28c), as the shell sees them.
+        let windows: Vec<_> = self
+            .space
+            .elements()
+            .filter(|w| !is_override_redirect(w) && window_data(w).shown.get())
+            .map(|w| (window_id(w), State::title(w).unwrap_or_default(), app_id(w)))
+            .collect();
+        self.refresh_toplevel_list(&windows);
     }
 
     /// Name and origin of a screen. Without any screen, an empty name and the origin of the

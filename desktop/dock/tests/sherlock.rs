@@ -63,6 +63,19 @@ fn read(path: &Path) -> String {
     std::fs::read_to_string(path).unwrap_or_default()
 }
 
+/// The file once the dock's thread that saves wrote it: its text when it is no longer `before`.
+fn changed(path: &Path, before: &str) -> String {
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let text = read(path);
+        if text != before {
+            return text;
+        }
+        assert!(std::time::Instant::now() < deadline, "never written");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
 fn center(dock: &Dock, index: usize) -> Point {
     dock.layout(dock.now()).icons[index].center()
 }
@@ -124,7 +137,7 @@ fn sherlock_moves_among_the_pinned_applications_and_its_place_is_written() {
         "example-browser",
     ];
     assert_eq!(dock.pinned, order);
-    let (written, _) = DockConfig::parse(&read(&path));
+    let (written, _) = DockConfig::parse(&changed(&path, OLD));
     assert_eq!(written.pinned, Some(order.map(String::from).to_vec()));
     assert!(written.sherlock && !written.magnification);
     settle(&mut dock);
@@ -178,7 +191,8 @@ fn sherlock_leaves_the_dock_and_comes_back() {
         1,
         "it leaves with the others closing up"
     );
-    let (written, _) = DockConfig::parse(&read(&path));
+    let left = changed(&path, OLD);
+    let (written, _) = DockConfig::parse(&left);
     assert!(!written.sherlock);
     assert!(
         !written
@@ -200,7 +214,8 @@ fn sherlock_leaves_the_dock_and_comes_back() {
     let _ = dock.update(Message::MenuPick(Entry::ShowSherlock));
     assert!(dock.sherlock);
     assert_eq!(names(&dock)[SHERLOCK], "Sherlock");
-    let (written, _) = DockConfig::parse(&read(&path));
+    let back = changed(&path, &left);
+    let (written, _) = DockConfig::parse(&back);
     assert!(written.sherlock);
     assert_eq!(
         written.pinned.as_deref().map(|p| p[SHERLOCK].as_str()),
@@ -214,7 +229,7 @@ fn sherlock_leaves_the_dock_and_comes_back() {
     let _ = dock.update(Message::Gesture(Gesture::Released));
     assert!(!dock.sherlock && dock.items.len() == 4);
     assert!(dock.leaving.iter().any(|l| l.dropped.is_some()));
-    assert!(!DockConfig::parse(&read(&path)).0.sherlock);
+    assert!(!DockConfig::parse(&changed(&path, &back)).0.sherlock);
     settle(&mut dock);
 }
 
@@ -222,9 +237,9 @@ fn sherlock_leaves_the_dock_and_comes_back() {
 fn a_change_made_by_another_program_meanwhile_is_kept() {
     let (mut dock, path) = dock("meanwhile", OLD);
     // Control Room changes the icon size before the dock reads the file again.
-    let changed = "[Dock]\n# by hand\nPinned=org.example.Files;org.example.Terminal;\
+    let changed_by_hand = "[Dock]\n# by hand\nPinned=org.example.Files;org.example.Terminal;\
                    example-editor;example-browser;\nMagnification=false\nIconSize=64\n";
-    assert!(std::fs::write(&path, changed).is_ok());
+    assert!(std::fs::write(&path, changed_by_hand).is_ok());
     let sherlock = center(&dock, SHERLOCK);
     let end = dock.layout(dock.now()).icons[4];
     drag(
@@ -233,7 +248,7 @@ fn a_change_made_by_another_program_meanwhile_is_kept() {
         Point::new(end.x + end.width + 4.0, sherlock.y),
     );
     let _ = dock.update(Message::Gesture(Gesture::Released));
-    let text = read(&path);
+    let text = changed(&path, changed_by_hand);
     assert!(
         text.contains("# by hand") && text.contains("IconSize=64"),
         "{text}"
