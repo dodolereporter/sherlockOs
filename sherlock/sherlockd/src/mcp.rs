@@ -723,12 +723,12 @@ impl ToolHost for McpServers {
         let server = server.ok_or_else(|| McpError::UnknownTool(tool.to_owned()))?;
         tracing::debug!(server = server.name(), tool, "tools/call");
         let result = server.call_tool(tool, arguments).await;
-        let outcome = match &result {
-            Ok(output) if output.is_error => "error",
-            Ok(_) => "ok",
-            Err(_) => "failed",
+        let (outcome, error) = match &result {
+            Ok(output) if output.is_error => ("error", Some(output.text.as_str())),
+            Ok(_) => ("ok", None),
+            Err(_) => ("failed", None),
         };
-        self.broker.outcome(permit.id(), tool, outcome);
+        self.broker.outcome(permit.id(), tool, outcome, error);
         result
     }
 

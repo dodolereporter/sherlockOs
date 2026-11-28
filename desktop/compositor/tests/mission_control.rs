@@ -44,7 +44,7 @@ mod tests {
     };
     use wayland_protocols::xdg::shell::client::{
         xdg_surface::{self, XdgSurface},
-        xdg_toplevel::XdgToplevel,
+        xdg_toplevel::{self, XdgToplevel},
         xdg_wm_base::{self, XdgWmBase},
     };
 
@@ -59,6 +59,8 @@ mod tests {
         /// The pointer, then the keyboard, is on one of its surfaces.
         pointer_in: bool,
         keyboard_in: bool,
+        /// The compositor asked a window to close.
+        closes: usize,
     }
 
     impl Dispatch<wl_registry::WlRegistry, ()> for Client {
@@ -151,7 +153,20 @@ mod tests {
         }
     }
 
-    delegate_noop!(Client: ignore XdgToplevel);
+    impl Dispatch<XdgToplevel, ()> for Client {
+        fn event(
+            client: &mut Self,
+            _: &XdgToplevel,
+            event: xdg_toplevel::Event,
+            _: &(),
+            _: &Connection,
+            _: &QueueHandle<Self>,
+        ) {
+            if let xdg_toplevel::Event::Close = event {
+                client.closes += 1;
+            }
+        }
+    }
     delegate_noop!(Client: ignore ZxdgToplevelDecorationV1);
     delegate_noop!(Client: ZxdgDecorationManagerV1);
     delegate_noop!(Client: WlCompositor);
@@ -187,6 +202,14 @@ mod tests {
     const KEY_TAB: u32 = 23;
     const KEY_ESCAPE: u32 = 9;
     const KEY_A: u32 = 38;
+    // xkb codes (evdev + 8) of left Ctrl, the arrows, Return and F3.
+    const KEY_CTRL: u32 = 37;
+    const KEY_UP: u32 = 111;
+    const KEY_LEFT: u32 = 113;
+    const KEY_RIGHT: u32 = 114;
+    const KEY_DOWN: u32 = 116;
+    const KEY_RETURN: u32 = 36;
+    const KEY_F3: u32 = 69;
 
     /// A window of the client; its buffer lives as long as it does.
     struct Shown {
@@ -392,8 +415,6 @@ mod tests {
     // Sherlock's consent window (lot A-11b, ADR 0031) shares this harness: a client with
     // windows, and a fake sherlockd on the consent socket.
 
-    const KEY_RETURN: u32 = 36;
-
     /// The consent socket of `h`, open to this test's process, and a connection to it.
     fn consent(h: &mut Harness) -> (std::path::PathBuf, UnixStream) {
         static NEXT: AtomicUsize = AtomicUsize::new(0);
@@ -583,6 +604,211 @@ mod tests {
         h.tap(KEY_SUPER);
         h.tap(KEY_SUPER);
         assert!(!h.state.overview_open());
+    }
+
+    /// Lot D-33c: the keys of macOS, and the arrows and Enter in the open view.
+    #[test]
+    fn ctrl_up_f3_and_ctrl_down_open_the_views_and_the_arrows_choose_a_window() {
+        let (mut h, _shown) = two_windows();
+        // Ctrl + Up opens Mission Control, and again closes it.
+        h.key(KEY_CTRL, true);
+        h.tap(KEY_UP);
+        assert!(h.state.overview_open() && h.state.overview_only().is_none());
+        h.tap(KEY_UP);
+        assert!(!h.state.overview_open());
+        // Ctrl + Down: App Expose, the windows of the application in front.
+        h.tap(KEY_DOWN);
+        assert!(h.state.overview_open() && h.state.overview_only().is_some());
+        h.tap(KEY_DOWN);
+        h.key(KEY_CTRL, false);
+        assert!(!h.state.overview_open());
+        // F3 alone opens it too.
+        h.tap(KEY_F3);
+        assert!(h.state.overview_open() && h.state.overview_only().is_none());
+        // Away from the pointer, the first arrow selects the window in front, the next ones
+        // go to their side; Enter chooses, as a click would.
+        h.state.pointer_motion((1435.0, 895.0).into(), 20);
+        assert_eq!(h.state.overview_selected(), None);
+        h.tap(KEY_RIGHT);
+        let front = Target::Window(h.window("Front"));
+        assert_eq!(h.state.overview_selected(), Some(&front));
+        h.tap(KEY_LEFT);
+        let back = Target::Window(h.window("Back"));
+        assert_eq!(h.state.overview_selected(), Some(&back));
+        // Up, to the strip of the workspaces: a thumbnail.
+        h.tap(KEY_UP);
+        assert!(matches!(
+            h.state.overview_selected(),
+            Some(Target::Workspace(_))
+        ));
+        h.tap(KEY_DOWN);
+        assert!(matches!(
+            h.state.overview_selected(),
+            Some(Target::Window(_))
+        ));
+        h.tap(KEY_LEFT);
+        h.tap(KEY_RETURN);
+        assert!(!h.state.overview_open());
+        assert_eq!(h.focused_title().as_deref(), Some("Back"));
+    }
+
+    /// D-33 review: Escape while three fingers hold the view closes it for good, and the gesture
+    /// key held during a swipe is not alone.
+    #[test]
+    fn escape_during_the_swipe_closes_the_view_for_the_rest_of_it() {
+        let (mut h, _shown) = two_windows();
+        h.state.gesture_swipe_begin(3, 0);
+        for i in 1..=10 {
+            h.state.gesture_swipe_update(i * 10, (0.0, -15.0).into());
+        }
+        assert!(h.state.overview_open());
+        h.tap(KEY_ESCAPE);
+        assert!(!h.state.overview_open());
+        for i in 11..=20 {
+            h.state.gesture_swipe_update(i * 10, (0.0, -15.0).into());
+        }
+        assert!(!h.state.overview_open(), "the same swipe opens nothing");
+        h.state.gesture_swipe_end(300, false);
+        assert!(!h.state.overview_open());
+        assert_eq!(h.focused_title().as_deref(), Some("Front"));
+        // Super held while three fingers swipe sideways, then released: no toggle.
+        h.key(KEY_SUPER, true);
+        h.state.gesture_swipe_begin(3, 400);
+        h.state.gesture_swipe_update(410, (-40.0, 0.0).into());
+        h.state.gesture_swipe_end(420, true);
+        h.key(KEY_SUPER, false);
+        assert!(!h.state.overview_open());
+    }
+
+    /// Lot D-33c: a window's title, and its « × », only under the pointer, fading; a click on
+    /// the « × » asks the window to close, and the view stays open.
+    #[test]
+    fn the_title_and_the_close_button_show_on_hover_and_the_button_closes_the_window() {
+        let (mut h, _shown) = two_windows();
+        h.state.open_overview();
+        let back = h.slot("Back");
+        h.state.pointer_motion(back, 20);
+        let window = h.window("Back");
+        assert_eq!(
+            h.state.overview_selected(),
+            Some(&Target::Window(window.clone()))
+        );
+        // Its « × » sits on its top left corner.
+        let outputs: Vec<_> = h.state.space.outputs().cloned().collect();
+        let slot = outputs
+            .iter()
+            .flat_map(|o| h.state.overview_tiles(o, None))
+            .find(|t| t.window == window)
+            .unwrap()
+            .slot;
+        let corner: Point<f64, Logical> = (slot.loc.x + 2.0, slot.loc.y + 2.0).into();
+        assert_eq!(
+            h.state.overview_target(corner),
+            Some(Target::Close(window.clone()))
+        );
+        // The other window has no « × » while the pointer is not on it.
+        let front = h.window("Front");
+        let other = outputs
+            .iter()
+            .flat_map(|o| h.state.overview_tiles(o, None))
+            .find(|t| t.window == front)
+            .unwrap()
+            .slot;
+        let other_corner: Point<f64, Logical> = (other.loc.x + 2.0, other.loc.y + 2.0).into();
+        assert_ne!(
+            h.state.overview_target(other_corner),
+            Some(Target::Close(front))
+        );
+        let closes = h.client.closes;
+        h.click(corner);
+        h.sync();
+        assert_eq!(h.client.closes, closes + 1, "the window is asked to close");
+        assert!(h.state.overview_open(), "the view stays open");
+        // The titles fade: a frame is due while they do, none once done.
+        assert!(h.state.overview_shown(h.state.now()));
+    }
+
+    /// Lot D-33c: the « + » after the thumbnails adds a workspace, which fades in; the « × » of
+    /// the thumbnail under the pointer removes it, its windows going to the one before.
+    #[test]
+    fn the_strip_adds_and_removes_workspaces() {
+        let (mut h, _shown) = two_windows();
+        let back = h.window("Back");
+        h.state.move_to_workspace(&back, "3");
+        h.state.open_overview();
+        let output = h.output(0);
+        assert_eq!(h.state.workspaces().list().len(), 3);
+        // « + »: a fourth workspace, its thumbnail fading in.
+        let add = h.state.overview_add_button(&output).unwrap();
+        let at = add.loc + add.size.downscale(2.0).to_point();
+        assert_eq!(h.state.overview_target(at), Some(Target::AddWorkspace));
+        h.click(at);
+        assert_eq!(h.state.workspaces().list().len(), 4);
+        assert!(h.state.overview_open());
+        assert!(h.state.overview_animating(h.state.now()) || h.state.overview_shown(h.state.now()));
+        // The « × » of the second thumbnail, once the pointer is on it.
+        let strip = h.state.overview_strip(&output);
+        let second = strip[1];
+        let inside = second.loc + second.size.downscale(2.0).to_point();
+        h.state.pointer_motion(inside, 20);
+        let corner: Point<f64, Logical> = (second.loc.x + 2.0, second.loc.y + 2.0).into();
+        assert_eq!(
+            h.state.overview_target(corner),
+            Some(Target::RemoveWorkspace(1))
+        );
+        h.click(corner);
+        // Three left: « Back », on the third, is now on the second; « Front » stays on the first.
+        assert_eq!(h.state.workspaces().list().len(), 3);
+        assert_eq!(h.state.workspace_of(&back), "2");
+        assert_eq!(h.state.workspace_of(&h.window("Front")), "1");
+        assert!(h.state.overview_open());
+        // Down to one workspace, it has no « × ».
+        for _ in 0..2 {
+            assert!(h.state.remove_workspace(1));
+        }
+        assert!(!h.state.remove_workspace(0), "the last one stays");
+        assert_eq!(h.state.workspace_of(&back), "1");
+        // Up to nine: no « + » any more.
+        for _ in 0..8 {
+            assert!(h.state.add_workspace());
+        }
+        assert!(!h.state.add_workspace());
+        assert!(h.state.overview_add_button(&output).is_none());
+    }
+
+    /// Lot D-33c: the fingers' velocity decides, and the view leaves at their speed.
+    #[test]
+    fn a_quick_flick_opens_the_view_and_fingers_back_past_their_start_close_it() {
+        let (mut h, _shown) = two_windows();
+        let s = &mut h.state;
+        // Up 60 units in 15 ms: short of half way, but quick: it opens.
+        s.gesture_swipe_begin(3, 1000);
+        for i in 1..=3 {
+            s.gesture_swipe_update(1000 + i * 5, (0.0, -20.0).into());
+        }
+        let held = s.overview_progress(s.now());
+        assert!(held > 0.0 && held < 0.5, "{held}");
+        s.gesture_swipe_end(1016, false);
+        assert!(s.overview_open());
+        // It goes on at the fingers' speed: no stop at the release.
+        let soon = s.now() + std::time::Duration::from_millis(16);
+        assert!(s.overview_progress(soon) > held + 0.05);
+        let later = s.now() + std::time::Duration::from_secs(5);
+        assert_eq!(s.overview_progress(later), 1.0);
+        h.tap(KEY_ESCAPE);
+        // Up 150, then slowly back down past where the fingers started: it stays closed.
+        let s = &mut h.state;
+        s.gesture_swipe_begin(3, 5000);
+        for i in 1..=10 {
+            s.gesture_swipe_update(5000 + i * 10, (0.0, -15.0).into());
+        }
+        for i in 11..=40 {
+            s.gesture_swipe_update(5000 + i * 50, (0.0, 7.0).into());
+        }
+        s.gesture_swipe_end(7100, false);
+        assert!(!s.overview_open());
+        let later = s.now() + std::time::Duration::from_secs(5);
+        assert!(!s.overview_shown(later));
     }
 
     #[test]
@@ -816,8 +1042,12 @@ mod tests {
         // SAFETY: the context was just made and is used by this renderer alone.
         let mut renderer = unsafe { GlesRenderer::new(context) }.unwrap();
         let scene = Scene::new(&mut renderer).unwrap();
-        let (w, h) = (1440, 900);
-        for (theme, name) in [(Theme::Dark, "dark"), (Theme::Light, "light")] {
+        let cases = [
+            ((1440, 900), Theme::Dark, "dark"),
+            ((1440, 900), Theme::Light, "light"),
+            ((1920, 1080), Theme::Dark, "1920-dark"),
+        ];
+        for ((w, h), theme, name) in cases {
             color::set_active(theme);
             let p = theme.palette();
             let mut harness = Harness::start(&[(w, h)]);
