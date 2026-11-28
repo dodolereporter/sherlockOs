@@ -601,6 +601,8 @@ pub mod sherlock {
     pub const PADDING: f32 = 12.0;
     pub const GAP: f32 = 10.0;
     pub const STEP_GAP: f32 = 6.0;
+    /// The column of the times in the journal (lot A-19d).
+    pub const JOURNAL_TIME: f32 = 44.0;
     /// A step: its number's disc, the radius of its card, its padding.
     pub const STEP_NUMBER: f32 = 22.0;
     pub const STEP_RADIUS: f32 = 10.0;
@@ -623,6 +625,8 @@ pub mod sherlock {
         pub const EMPTY: &str = "Pose ta question à Sherlock. Échap pour revenir.";
         pub const THINKING: &str = "Sherlock réfléchit…";
         pub const PLAN: &str = "Le plan de Sherlock";
+        /// A step of the plan no call has taken yet (lot A-19e).
+        pub const PLANNED: &str = "Prévue";
         /// The states of a step, as the board says them.
         pub const WAITING: &str = "Attend ton accord";
         pub const FREE: &str = "Libre";
@@ -636,6 +640,20 @@ pub mod sherlock {
         pub const NO_SHERLOCKD: &str =
             "Sherlock ne répond pas : son service (sherlockd) est introuvable.";
         pub const FAILED_ANSWER: &str = "Sherlock n'a pas pu répondre.";
+        /// The journal (lot A-19d), as on the board, its filters, and its lines: « A lu : x »,
+        /// « x, avec ton accord », « x : refusé ».
+        pub const JOURNAL: &str = "Journal";
+        pub const JOURNAL_SUBTITLE: &str = "Tout ce que Sherlock fait est noté";
+        pub const CONVERSATION: &str = "Conversation";
+        pub const THIS_CONVERSATION: &str = "Cette conversation";
+        pub const EVERYTHING: &str = "Tout";
+        pub const JOURNAL_EMPTY: &str = "Rien de noté pour l'instant.";
+        pub const JOURNAL_READ: &str = "A lu :";
+        pub const JOURNAL_CONSENTED: &str = ", avec ton accord";
+        pub const JOURNAL_REFUSED: &str = " : refusé";
+        pub const JOURNAL_TIMED_OUT: &str = " : pas de réponse, refusé";
+        pub const JOURNAL_NOBODY: &str = " : refusé, personne pour donner l'accord";
+        pub const JOURNAL_ERROR: &str = " (erreur)";
     }
 
     /// The line of a step's state: the level it ran at, and whether it is done.
