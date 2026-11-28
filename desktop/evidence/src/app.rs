@@ -39,7 +39,11 @@ mod hint;
 mod path;
 mod popup;
 pub use hint::HintTarget;
+mod columns;
 mod tabs;
+mod view_mode;
+pub use crate::views::ViewMode;
+pub use columns::DirColumn;
 pub use path::{FoldedMenu, PathEdit};
 pub use popup::Popups;
 use std::collections::HashMap;
@@ -195,7 +199,8 @@ pub enum Command {
     /// The large preview of the item under the cursor, opened or closed (lot E-12).
     QuickLook,
     /// The list view, from the « Vue » submenu: the only view so far.
-    ViewList,
+    /// A view of the folder (lot E-13), from the « Vue » submenu.
+    View(ViewMode),
     /// The path bar as a field (Ctrl+L), and the « Aller au dossier » sheet (Maj+Ctrl+G).
     EditPath,
     GoToFolder,
@@ -319,6 +324,17 @@ pub enum Message {
     Inert,
     /// Click on the background of the listing.
     Blank,
+    /// A view of the folder, from the toolbar's buttons (lot E-13).
+    SetView(ViewMode),
+    /// The slider of the icons' size, moved, then let go (it is remembered then).
+    IconSize(u8),
+    IconSizeDone,
+    /// The columns view (lot E-13b): the folders above the one shown, read for the listing of
+    /// this generation; the content of the folder selected; a click in either.
+    Columns(u64, Vec<DirColumn>),
+    Peeked(DirColumn),
+    ColumnClick(usize, usize),
+    PeekClick(usize),
     Key(keyboard::Event),
     Modifiers(Modifiers),
     /// The pointer, in the window, read by the view itself: it arrives before a press in the
@@ -487,6 +503,13 @@ pub struct App {
     /// The preview sliding in or out (lot E-08), and the file that remembers it.
     pub(crate) preview_slide: Option<Fade>,
     prefs: Option<PathBuf>,
+    /// The view shown, the views remembered for each folder, and their file (lot E-13).
+    pub(crate) view_mode: ViewMode,
+    pub(crate) view_memory: crate::views::Memory,
+    views_file: Option<PathBuf>,
+    /// The columns above the folder shown, and the one on its right (lot E-13b).
+    pub(crate) column_dirs: Vec<DirColumn>,
+    pub(crate) peek: Option<DirColumn>,
     /// The large preview is open, and its zoom in or out (lot E-12).
     pub(crate) looking: bool,
     pub(crate) look_fade: Option<Fade>,
@@ -618,6 +641,11 @@ impl App {
             show_preview: true,
             preview_slide: None,
             prefs: None,
+            view_mode: ViewMode::List,
+            view_memory: crate::views::Memory::default(),
+            views_file: None,
+            column_dirs: Vec::new(),
+            peek: None,
             looking: false,
             look_fade: None,
             preview_pinned: false,
@@ -693,6 +721,16 @@ impl App {
         if let Some(shown) = app.prefs.as_deref().and_then(crate::prefs::read_preview) {
             app.show_preview = shown;
         }
+        // The views chosen folder by folder (lot E-13), read the same way.
+        app.views_file = app
+            .config
+            .xdg
+            .as_ref()
+            .map(|dirs| crate::views::path(&dirs.config_home));
+        if let Some(file) = &app.views_file {
+            app.view_memory = crate::views::read(file);
+        }
+        app.recall_view();
         let task = app.load(&[]);
         let devices = app.refresh_devices();
         let catalog = app.load_catalog();
@@ -822,7 +860,9 @@ impl App {
 
     /// The panes and columns the window's width leaves room for (lot E-05).
     pub fn panes(&self) -> crate::layout::Panes {
-        crate::layout::Panes::at(self.size.width, self.show_preview, self.preview_pinned)
+        // The columns show the preview in their last column (lot E-13b): no pane beside.
+        let preview = self.show_preview && self.view_mode != ViewMode::Columns;
+        crate::layout::Panes::at(self.size.width, preview, self.preview_pinned)
     }
 
     pub fn can_go_back(&self) -> bool {
@@ -981,8 +1021,9 @@ impl App {
         } else if self.closing.is_some() && self.menu_motion.gone(now) {
             self.closing = None;
         }
-        // The highlight follows the item when it is selected alone.
-        let target = self.selection.single().map(|i| {
+        // The highlight follows the item when it is selected alone, in the list.
+        let list = self.view_mode == ViewMode::List;
+        let target = self.selection.single().filter(|_| list).map(|i| {
             f64::from(metrics::LIST_TOP_GAP) + i as f64 * f64::from(metrics::LIST_ROW_HEIGHT)
         });
         match (target, &mut self.highlight) {
@@ -1014,7 +1055,8 @@ impl App {
             Task::none()
         };
         let popups = self.sync_popups();
-        Task::batch([task, self.preview_task(), reread, popups])
+        let peek = self.peek_task();
+        Task::batch([task, self.preview_task(), reread, popups, peek])
     }
 
     /// Requests the preview of the selected item, if it changed.
@@ -1080,6 +1122,13 @@ impl App {
                 return self.update(message);
             }
             Message::Go(location) => return self.go(location),
+            Message::SetView(mode) => return self.set_view(mode),
+            Message::IconSize(value) => self.set_icon_slider(value),
+            Message::IconSizeDone => return self.save_views(),
+            Message::Columns(generation, columns) => self.columns_read(generation, columns),
+            Message::Peeked(column) => self.peeked(column),
+            Message::ColumnClick(depth, index) => return self.column_click(depth, index),
+            Message::PeekClick(index) => return self.peek_click(index),
             Message::Back => {
                 if let Some(previous) = self.history.pop() {
                     let current = std::mem::replace(&mut self.location, previous);
@@ -1616,6 +1665,7 @@ impl App {
         self.notice = None;
         self.fresh = true;
         self.scroll.0 = 0.0;
+        self.recall_view();
         let load = self.load(select);
         Task::batch([
             load,
@@ -1661,7 +1711,9 @@ impl App {
             async move { places.iter().map(|p| p.is_dir()).collect() },
             Message::Places,
         );
-        Task::batch([listing, git, check])
+        // The folders above it, in the columns view (lot E-13b).
+        let columns = self.load_columns();
+        Task::batch([listing, git, check, columns])
     }
 
     /// The content of the location has arrived.
@@ -1758,8 +1810,7 @@ impl App {
         } else {
             self.select_only(index);
         }
-        let row = metrics::LIST_ROW_HEIGHT;
-        let top = metrics::LIST_TOP_GAP + index as f32 * row;
+        let (top, row) = self.item_span(index);
         let (offset, height) = self.scroll;
         let y = if top < offset {
             top
@@ -1813,6 +1864,10 @@ impl App {
 
     /// The pointer is on the row `index` but past its icon and name.
     fn beside_name(&self, index: usize) -> bool {
+        // A tile of the grid is all name and icon.
+        if self.view_mode == ViewMode::Icons {
+            return false;
+        }
         let Some(entry) = self.entries.get(index) else {
             return false;
         };
@@ -1833,7 +1888,14 @@ impl App {
         lasso.dragging |= dx.hypot(dy) > sherlock_ui::evidence::LASSO_THRESHOLD;
         if lasso.dragging {
             let (top, row) = (metrics::LIST_TOP_GAP, metrics::LIST_ROW_HEIGHT);
-            self.selection = lasso.selection(top, row, count);
+            self.selection = match self.view_mode {
+                ViewMode::Icons => {
+                    let rect = lasso.rect();
+                    let lasso = lasso.clone();
+                    lasso.selection_with(&self.tiles_in(rect))
+                }
+                _ => lasso.selection(top, row, count),
+            };
         }
     }
 
@@ -1845,7 +1907,7 @@ impl App {
         }
         let y = self.pointer.y - self.list_origin().y;
         let (offset, height) = (self.scroll.0, self.list_height());
-        let content = metrics::LIST_TOP_GAP + self.entries.len() as f32 * metrics::LIST_ROW_HEIGHT;
+        let content = self.content_height();
         let speed = edge_scroll(
             y,
             height,
@@ -1994,17 +2056,22 @@ impl App {
                     })
                     .collect()
             }
-            Sub::View => vec![
-                MenuItem::Action {
-                    label: more::VIEW_LIST,
-                    keys: None,
-                    command: Command::ViewList,
-                    danger: false,
-                    checked: true,
-                },
-                MenuItem::Disabled(more::VIEW_GRID),
-                MenuItem::Disabled(more::VIEW_COLUMNS),
-            ],
+            Sub::View => ViewMode::ALL
+                .into_iter()
+                .map(|mode| {
+                    let label = view_label(mode);
+                    if !self.view_available(mode) {
+                        return MenuItem::Disabled(label);
+                    }
+                    MenuItem::Action {
+                        label,
+                        keys: None,
+                        command: Command::View(mode),
+                        danger: false,
+                        checked: self.view_mode == mode,
+                    }
+                })
+                .collect(),
         }
     }
 
@@ -2189,9 +2256,8 @@ impl App {
         if !inside || y >= origin.y + self.list_height() {
             return Task::none();
         }
-        let (_, in_list) = self.in_list(self.pointer);
-        let row = ((in_list - metrics::LIST_TOP_GAP) / metrics::LIST_ROW_HEIGHT).floor();
-        let index = (row >= 0.0 && (row as usize) < self.entries.len()).then_some(row as usize);
+        let (x, y) = self.in_list(self.pointer);
+        let index = self.item_at(x, y);
         self.handle(Message::RightClick(index))
     }
 
@@ -2338,15 +2404,18 @@ impl App {
             Key::Named(Named::ArrowLeft) if modifiers.alt() => self.update(Message::Back),
             Key::Named(Named::ArrowRight) if modifiers.alt() => self.update(Message::Forward),
             Key::Named(Named::ArrowUp) if modifiers.alt() => self.update(Message::Up),
+            // A line of the grid holds several tiles: down and up go a whole line (lot E-13).
             Key::Named(Named::ArrowDown) => {
-                let to = self.selection.cursor().map_or(0, |c| c + 1);
+                let step = self.line_step();
+                let to = self.selection.cursor().map_or(0, |c| c + step);
                 self.move_cursor(to, shift)
             }
             Key::Named(Named::ArrowUp) => {
+                let step = self.line_step();
                 let to = self
                     .selection
                     .cursor()
-                    .map_or(last, |c| c.saturating_sub(1));
+                    .map_or(last, |c| c.saturating_sub(step));
                 self.move_cursor(to, shift)
             }
             Key::Named(Named::Home) => self.move_cursor(0, shift),
@@ -2374,6 +2443,29 @@ impl App {
                 self.refilter();
                 self.clear_selection();
                 Task::none()
+            }
+            // As Cmd+1 to Cmd+4 in the Finder (lot E-13).
+            Key::Character(c) if ctrl && let Some(mode) = ViewMode::from_digit(c) => {
+                self.set_view(mode)
+            }
+            // In the columns, right opens the folder selected and left goes up (lot E-13b).
+            Key::Named(Named::ArrowRight)
+                if self.view_mode == ViewMode::Columns
+                    && self.single().is_some_and(|e| e.kind == Kind::Folder) =>
+            {
+                self.run(Command::Open)
+            }
+            Key::Named(Named::ArrowLeft) if self.view_mode == ViewMode::Columns => {
+                self.update(Message::Up)
+            }
+            // In the grid, the arrows go from tile to tile, a line up or down.
+            Key::Named(Named::ArrowRight) if self.view_mode == ViewMode::Icons => {
+                let to = self.selection.cursor().map_or(0, |c| c + 1);
+                self.move_cursor(to, shift)
+            }
+            Key::Named(Named::ArrowLeft) if self.view_mode == ViewMode::Icons => {
+                let to = self.selection.cursor().map_or(0, |c| c.saturating_sub(1));
+                self.move_cursor(to, shift)
             }
             // As Alt+Cmd+P in the Finder (lot E-08).
             Key::Character(c) if ctrl && modifiers.alt() && c.eq_ignore_ascii_case("p") => {
@@ -2493,7 +2585,7 @@ impl App {
                 self.sort = self.sort.toggle(column);
                 self.refilter();
             }
-            Command::ViewList => {}
+            Command::View(mode) => return self.set_view(mode),
             Command::Undo => return self.undo(false),
             Command::Redo => return self.undo(true),
             Command::QuickLook => self.quick_look(!self.looking),
@@ -2956,4 +3048,14 @@ fn locales() -> Vec<String> {
         }
     }
     out
+}
+
+/// The name of a view, in the « Vue » submenu and on the toolbar's buttons (lot E-13).
+pub fn view_label(mode: ViewMode) -> &'static str {
+    match mode {
+        ViewMode::List => more::VIEW_LIST,
+        ViewMode::Icons => more::VIEW_ICONS,
+        ViewMode::Columns => more::VIEW_COLUMNS,
+        ViewMode::Gallery => more::VIEW_GALLERY,
+    }
 }

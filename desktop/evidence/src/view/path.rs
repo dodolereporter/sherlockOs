@@ -35,7 +35,11 @@ fn label_width(label: &str, current: bool) -> f32 {
 impl App {
     /// Left edge and width of the path bar in the toolbar, for this window.
     pub(crate) fn path_bar_span(&self) -> (f32, f32) {
-        let left = metrics::TOOLBAR_PADDING + 2.0 * (metrics::ICON_BUTTON + metrics::GAP_ICON);
+        // Back, forward, and the views' buttons (lot E-13).
+        let left = metrics::TOOLBAR_PADDING
+            + 2.0 * (metrics::ICON_BUTTON + metrics::GAP_ICON)
+            + ui::icon_segmented_width(crate::views::ViewMode::ALL.len())
+            + metrics::GAP_ICON;
         let search = if self.search_folded() {
             metrics::ICON_BUTTON
         } else {
