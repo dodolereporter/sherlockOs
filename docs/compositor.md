@@ -877,6 +877,39 @@ reads and sets both. Exchanges with X11 go through `X11Wm`:
   Wayland client, X11, or the compositor). `is_secret` recognizes a secret copied by a password
   manager (`x-kde-passwordManagerHint`). From X11, smithay passes on only the types with a `/`:
   that hint does not cross from an X11 application.
+## Sherlock's consent window (lot A-11b, ADR 0031, proposed)
+
+Before a tool of Sherlock that is not a read runs, `sherlockd` asks the compositor, which draws
+the window itself and answers (`consent.rs`):
+
+- **The socket**: `<Wayland socket>-consent` (`$XDG_RUNTIME_DIR/wayland-1-consent`), next to the
+  Wayland one. Only `sherlockd` of the same user may ask: the peer's uid (`SO_PEERCRED`) and its
+  executable (`/proc/<pid>/exe` named `sherlockd`); anything else is closed at once. One JSON
+  object per line: `{"id", "tool", "level": "action" | "destructive", "arguments"}` asked,
+  `{"id", "decision": "granted" | "denied"}` answered. A malformed line, a line past 8 KiB, a
+  level that is not one of the two closes the connection. Four requests wait per connection,
+  sixteen in all: more are refused at once.
+- **Drawn in front of everything**, the overlay layer, the screenshot tool and the clicks
+  included: a scrim over each screen and a panel in its middle, its title, the tool, its
+  arguments (control characters dropped, 4 lines of 56 characters at most, « … » after), what
+  the action does, « Refuser » and « Autoriser ». Its texts are ours; nothing a client draws is
+  shown in it. Hidden while the session is locked.
+- **Its input is reserved**: while it is shown, no client has the keyboard (not even an
+  exclusive layer), nor the pointer; popups are dismissed; every key goes to it, but the console
+  switch. A click on a window or a key reaches no client.
+- **Refused by default**: Escape and « Refuser » refuse. Its buttons do nothing for 0.6 s
+  after it appears (`consent::ARMING`): a click or a key already on its way grants nothing.
+  An action is granted by a click on « Autoriser » or by Enter; a destructive tool only by
+  « Autoriser » held 1.5 s (`consent::HOLD`), a bar filling along its edge, Enter doing nothing.
+  When the asking process goes away (its socket closes), its requests are withdrawn and the
+  window goes; `sherlockd` refuses on its side when nobody answers within 60 s.
+- **Tests** (`tests/mission_control.rs`, which shares its harness): the window is the first item
+  drawn; with it, a click on a window and a key reach no client; Enter before 0.6 s grants
+  nothing, after it grants an action, and the keyboard goes back; Escape and « Refuser »
+  refuse; a destructive tool refuses Enter and a click, and is granted by a hold; an asker gone
+  withdraws its request; a malformed request closes the connection; a process that is not
+  `sherlockd` cannot ask.
+
 ## Activation (lot Q-52)
 
 An application brings its window forward: a click on its icon in the bar's notification area,
