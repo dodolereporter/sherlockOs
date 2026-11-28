@@ -31,7 +31,7 @@ use smithay::{
     input::keyboard::Keysym,
     output::Output,
     reexports::wayland_server::Resource as _,
-    utils::{Logical, Point, Rectangle},
+    utils::{IsAlive as _, Logical, Point, Rectangle},
     wayland::seat::WaylandFocus as _,
 };
 
@@ -58,6 +58,40 @@ pub enum Target {
     Window(Window),
     /// A thumbnail of the strip, by the index of its workspace.
     Workspace(usize),
+    /// The « × » of a window under the pointer, which closes it (lot D-33c).
+    Close(Window),
+}
+
+impl Target {
+    /// The window it is on, its « × » included.
+    pub fn window(&self) -> Option<&Window> {
+        match self {
+            Self::Window(window) | Self::Close(window) => Some(window),
+            Self::Workspace(_) => None,
+        }
+    }
+}
+
+/// The title and the « × » of a window fade in when the pointer comes on it, and out when it
+/// leaves (lot D-33c): `mc::HOVER_FADE`, linear, from where it was.
+#[derive(Debug, Clone)]
+struct TitleFade {
+    window: Window,
+    from: f32,
+    shown: bool,
+    start: Duration,
+}
+
+impl TitleFade {
+    fn value(&self, now: Duration) -> f32 {
+        let t = now.saturating_sub(self.start).as_secs_f32() / mc::HOVER_FADE.as_secs_f32();
+        let to = if self.shown { 1.0 } else { 0.0 };
+        self.from + (to - self.from) * t.clamp(0.0, 1.0)
+    }
+
+    fn running(&self, now: Duration) -> bool {
+        now < self.start + mc::HOVER_FADE
+    }
 }
 
 /// A press of the left button in the view.
@@ -81,6 +115,8 @@ pub struct Overview {
     /// Progress when the three finger swipe in progress started.
     swipe: Option<f64>,
     hovered: Option<Target>,
+    /// The titles shown or fading, one per window the pointer was on.
+    titles: Vec<TitleFade>,
     press: Option<Press>,
     /// App Expose: only the windows of these ids, without the strip of the workspaces. Kept
     /// while the view closes, so that they go back the way they came.
@@ -111,6 +147,47 @@ impl Overview {
 
     fn animating(&self, now: Duration) -> bool {
         self.held.is_none() && self.motion.is_some_and(|m| !m.is_done(now, PRECISION))
+    }
+
+    /// A title is fading in or out at `now`.
+    fn titles_fading(&self, now: Duration) -> bool {
+        self.titles.iter().any(|t| t.running(now))
+    }
+
+    /// How much of the title and the « × » of `window` is shown at `now`.
+    fn title(&self, window: &Window, now: Duration) -> f32 {
+        let fade = self.titles.iter().find(|t| &t.window == window);
+        fade.map_or(0.0, |t| t.value(now))
+    }
+
+    /// The pointer, or the keyboard, is now on `target`: the title of its window fades in, the
+    /// one it left fades out.
+    fn hover(&mut self, target: Option<Target>, now: Duration) {
+        let window = target.as_ref().and_then(Target::window).cloned();
+        self.hovered = target;
+        self.titles
+            .retain(|t| t.window.alive() && (t.shown || t.running(now)));
+        for fade in &mut self.titles {
+            let shown = Some(&fade.window) == window.as_ref();
+            if fade.shown != shown {
+                *fade = TitleFade {
+                    from: fade.value(now),
+                    shown,
+                    start: now,
+                    window: fade.window.clone(),
+                };
+            }
+        }
+        if let Some(window) = window
+            && !self.titles.iter().any(|t| t.window == window)
+        {
+            self.titles.push(TitleFade {
+                window,
+                from: 0.0,
+                shown: true,
+                start: now,
+            });
+        }
     }
 
     fn shown(&self, now: Duration) -> bool {
@@ -179,6 +256,12 @@ fn lerp(a: RectF, b: RectF, t: f64) -> RectF {
         (at(a.loc.x, b.loc.x), at(a.loc.y, b.loc.y)).into(),
         (at(a.size.w, b.size.w), at(a.size.h, b.size.h)).into(),
     )
+}
+
+/// Where the « × » of a window drawn in `frame` is centered: inside its top left corner.
+fn close_center(frame: RectF) -> (f64, f64) {
+    let offset = f64::from(mc::CLOSE_INSET);
+    (frame.loc.x + offset, frame.loc.y + offset)
 }
 
 fn center(r: RectF) -> (f64, f64) {
@@ -323,7 +406,7 @@ impl State {
         let now = self.now();
         let overview = &mut self.overview;
         overview.open = false;
-        overview.hovered = None;
+        overview.hover(None, now);
         overview.press = None;
         // Closed by a key while the fingers held it: they no longer move it.
         overview.swipe_closed |= overview.swipe.is_some() && overview.held.is_some();
@@ -443,6 +526,23 @@ impl State {
     /// What is at `at` in the open view: a thumbnail, or a window in its slot.
     pub fn overview_target(&self, at: Point<f64, Logical>) -> Option<Target> {
         let outputs: Vec<Output> = self.space.outputs().cloned().collect();
+        // The « × » of the window under the pointer, over its corner.
+        let shown = self.overview.hovered.as_ref().and_then(Target::window);
+        if let Some(window) = shown.filter(|_| self.overview.press.is_none()) {
+            let slot = outputs.iter().find_map(|o| {
+                let tiles = self.overview_tiles(o, None);
+                tiles
+                    .into_iter()
+                    .find(|t| &t.window == window)
+                    .map(|t| t.slot)
+            });
+            if let Some(slot) = slot {
+                let (x, y) = close_center(slot);
+                if (at.x - x).hypot(at.y - y) <= f64::from(mc::CLOSE_SIZE) / 2.0 {
+                    return Some(Target::Close(window.clone()));
+                }
+            }
+        }
         for output in &outputs {
             let strip = self.overview_strip(output);
             if let Some(index) = strip.iter().position(|r| r.contains(at)) {
@@ -497,7 +597,11 @@ impl State {
     pub(crate) fn overview_key(&mut self, sym: Keysym) {
         self.queue_redraw();
         let choices = self.overview_choices();
-        let current = self.overview.hovered.clone();
+        // The « × » under the pointer stands for its window.
+        let current = (self.overview.hovered.as_ref()).map(|t| match t {
+            Target::Close(window) => Target::Window(window.clone()),
+            other => other.clone(),
+        });
         let at = current
             .as_ref()
             .and_then(|c| choices.iter().find(|(t, _)| t == c))
@@ -509,7 +613,9 @@ impl State {
             Keysym::Down => (0.0, 1.0),
             _ => {
                 match current {
-                    Some(Target::Window(window)) => self.leave_overview(Some(window)),
+                    Some(Target::Window(window) | Target::Close(window)) => {
+                        self.leave_overview(Some(window));
+                    }
                     Some(Target::Workspace(index)) => {
                         if let Some(id) = self.workspaces().id_at(index).map(str::to_owned) {
                             self.activate_workspace(&id);
@@ -526,13 +632,14 @@ impl State {
             // Nothing selected yet: the window in front, or the first choice.
             let front = self.top_window().map(Target::Window);
             let first = choices.iter().find(|(t, _)| matches!(t, Target::Window(_)));
-            self.overview.hovered = front
+            let chosen = front
                 .filter(|f| choices.iter().any(|(t, _)| t == f))
                 .or_else(|| first.or(choices.first()).map(|(t, _)| t.clone()));
+            self.overview.hover(chosen, self.now());
             return;
         };
         if let Some(next) = nearest(&choices, at, direction) {
-            self.overview.hovered = Some(next);
+            self.overview.hover(Some(next), self.now());
         }
     }
 
@@ -545,7 +652,11 @@ impl State {
             let far = delta.x.hypot(delta.y) >= f64::from(ui_window::DRAG_THRESHOLD);
             press.dragging |= far && matches!(press.target, Some(Target::Window(_)));
         }
-        self.overview.hovered = self.overview_target(at);
+        let target = self.overview_target(at);
+        if target != self.overview.hovered {
+            self.queue_redraw();
+            self.overview.hover(target, self.now());
+        }
     }
 
     /// A press or release of `button` at `at` in the open view. A click on a window chooses it,
@@ -587,10 +698,18 @@ impl State {
                 }
                 self.leave_overview(None);
             }
+            // The « × »: the window is asked to close; the view stays open, and the window
+            // leaves the grid once gone.
+            (Some(Target::Close(window)), _, Some(Target::Close(over))) if over == window => {
+                State::close(&window);
+            }
             (None, _, None) => self.leave_overview(None),
             _ => {}
         }
-        self.overview.hovered = self.overview_target(at);
+        if self.overview.open {
+            let target = self.overview_target(at);
+            self.overview.hover(target, self.now());
+        }
     }
 
     /// Three fingers moved `travel` units up (negative) or down since the swipe started: the
@@ -650,7 +769,7 @@ pub(crate) fn push_items(
     let progress = overview.progress(now);
     let fade = progress.clamp(0.0, 1.0) as f32;
     let colors = Colors::of(color::palette());
-    let mut animating = overview.animating(now);
+    let mut animating = overview.animating(now) || overview.titles_fading(now);
     let tiles = state.overview_tiles(output, Some(now));
     let dragged = overview
         .press
@@ -669,11 +788,20 @@ pub(crate) fn push_items(
         if let Some((_, delta)) = drag {
             frame.loc += delta;
         }
-        let hovered = overview.hovered == Some(Target::Window(tile.window.clone()));
+        let hovered = overview.hovered.as_ref().and_then(Target::window) == Some(&tile.window);
+        let title = overview.title(&tile.window, now);
+        let close = overview.hovered == Some(Target::Close(tile.window.clone()));
         let look = TileLook {
             frame,
+            slot: tile.slot,
             highlight: hovered && dragged.is_none(),
-            label: if drag.is_some() { 0.0 } else { fade },
+            // Titles on hover only, as in Sequoia (lot D-33c).
+            label: if drag.is_some() || dragged.is_some() {
+                0.0
+            } else {
+                fade * title
+            },
+            close,
             opacity: tile.opacity,
             decoration: tile.decoration + (1.0 - tile.decoration) * fade,
         };
@@ -709,9 +837,14 @@ pub(crate) fn push_items(
 struct TileLook {
     /// The whole window, title bar included, in the space.
     frame: RectF,
+    /// Its place in the grid once open: its title is drawn at the size it has there, so that
+    /// the texture is made once, not at every frame of the animation (lot D-33c).
+    slot: RectF,
     highlight: bool,
-    /// Opacity of its title below it.
+    /// Opacity of its title below it, and of its « × ».
     label: f32,
+    /// The pointer is on its « × ».
+    close: bool,
     opacity: f32,
     decoration: f32,
 }
@@ -742,15 +875,51 @@ fn push_tile(
     let rect = view.rect(frame);
     let radius = corner_radius(real.size) * scale * zoom as f32 * look.decoration;
     let title = State::title(window).unwrap_or_default();
+    if look.label > 0.0 {
+        let side = f64::from(mc::CLOSE_SIZE);
+        let (x, y) = close_center(frame);
+        let at = view.rect(Rectangle::new(
+            (x - side / 2.0, y - side / 2.0).into(),
+            (side, side).into(),
+        ));
+        let pixels = (side * view.scale).round().max(1.0) as u32;
+        // Under the pointer, the red of the close buttons of the title bars.
+        let background = match look.close {
+            true => BarColors::of(color::palette()).close_hover,
+            false => colors.label,
+        };
+        items.push(Item::Label {
+            key: Key::of(owner.clone(), Part::CloseButton),
+            rect: at,
+            label: Label {
+                text: String::new(),
+                size: (pixels, pixels),
+                scale,
+                background,
+                color: colors.label_text,
+                close: true,
+            },
+            alpha: look.label,
+        });
+    }
     if look.label > 0.0 && !title.is_empty() {
-        let width = f64::from(label::width(&title));
-        let at = view.rect(label_rect(frame, width));
+        let width = f64::from(label::width(&title))
+            .min(look.slot.size.w)
+            .max(f64::from(mc::LABEL_RADIUS) * 2.0);
+        let x = frame.loc.x + (frame.size.w - width) / 2.0;
+        let y = frame.loc.y + frame.size.h + f64::from(mc::LABEL_GAP);
+        let height = f64::from(mc::LABEL_HEIGHT);
+        let at = view.rect(Rectangle::new((x, y).into(), (width, height).into()));
         let label = Label {
             text: title,
-            size: (at.size.w.max(1) as u32, at.size.h.max(1) as u32),
+            size: (
+                (width * view.scale).round().max(1.0) as u32,
+                (height * view.scale).round().max(1.0) as u32,
+            ),
             scale,
             background: colors.label,
             color: colors.label_text,
+            close: false,
         };
         items.push(Item::Label {
             key: Key::of(owner.clone(), Part::Label),
@@ -863,6 +1032,7 @@ fn push_strip(
                 scale,
                 background: colors.label,
                 color: colors.label_text,
+                close: false,
             },
             alpha: fade,
         });
