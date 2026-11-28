@@ -93,7 +93,7 @@ pub fn open_trash() -> Result<u32, LaunchError> {
         .map(|dir| Path::new(&dir).join("evidence"))
         .filter(|path| path.is_file())
         .unwrap_or_else(|| "evidence".into());
-    spawn(&program, &[String::from("trash:///")], None)
+    spawn(&program, &[String::from("trash:///")], None, None)
 }
 
 /// Program of the launcher, Super + Space (`docs/launcher.md`).
