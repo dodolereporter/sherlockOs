@@ -39,6 +39,8 @@ pub(crate) struct OpenMenu {
     pub(crate) target: Option<Target>,
     pub(crate) entries: Vec<Line>,
     pub(crate) cursor: Option<usize>,
+    /// The grid of a stack instead of entries (lot D-21k): how many items it was opened for.
+    pub(crate) grid: Option<usize>,
     /// Opening, open, or closing before its popup goes.
     pub(crate) unfold: Unfold,
 }
@@ -59,6 +61,12 @@ pub enum Pointer {
 pub enum Message {
     /// The trash filled or emptied (lot D-21j).
     Trash(bool),
+    /// The downloads stack read again, or none (lot D-21k).
+    Stack(Option<crate::stack::Stack>),
+    /// An item of the open stack picked: opened with its application.
+    StackOpen(usize),
+    /// « Ouvrir dans Evidence » in the open stack.
+    StackFolder,
     /// The applications that open with the session, read (lot D-21i).
     Autostart(std::collections::BTreeSet<String>),
     /// The Wayland handles of the dock's surface, for the applications dragged from the
@@ -147,6 +155,8 @@ pub struct Dock {
     pub geometry: Geometry,
     /// The trash at the end of the dock, full or empty, once its watcher said (lot D-21j).
     pub trash: Option<bool>,
+    /// The downloads stack, once its watcher read it (lot D-21k).
+    pub stack: Option<crate::stack::Stack>,
     /// « Vider la corbeille » clicked once, and when: a second click empties it.
     trash_armed: Option<Instant>,
     /// The applications that open with the session, read off the interface thread (lot
@@ -225,6 +235,7 @@ impl Dock {
             glyphs: HashMap::new(),
             geometry,
             trash: None,
+            stack: None,
             trash_armed: None,
             autostart: std::collections::BTreeSet::new(),
             base: geometry,
@@ -450,6 +461,10 @@ impl Dock {
             applications: self.sources.applications,
             sherlock: self.sherlock,
             trash: self.trash,
+            stack: self
+                .stack
+                .as_ref()
+                .map(|s| (s.folder.as_path(), s.name.as_str())),
             catalog: &self.sources.catalog,
             lookup: &self.sources.lookup,
             icon_size,
@@ -608,6 +623,15 @@ impl Dock {
             Some(path) => Subscription::run_with(path, |path| appearance(path)).map(Message::Theme),
             None => Subscription::none(),
         };
+        let stack = match (std::env::home_dir(), config_home()) {
+            (Some(home), Some(config)) => {
+                Subscription::run_with((home, config), |(home, config)| {
+                    crate::stack::watch(home.clone(), config.clone())
+                })
+                .map(Message::Stack)
+            }
+            _ => Subscription::none(),
+        };
         let trash = match crate::trash::folder() {
             Some(folder) => {
                 Subscription::run_with(folder, |folder| crate::trash::watch(folder.clone()))
@@ -637,6 +661,7 @@ impl Dock {
             frames,
             sherlock_ui::raster::drawn().map(|()| Message::IconDrawn),
             trash,
+            stack,
         ])
     }
 
@@ -732,6 +757,28 @@ impl Dock {
                     self.read_autostart(),
                     dnd,
                 ]);
+            }
+            Message::Stack(stack) => {
+                // The same folder read again: only the grid changes, the dock stays.
+                let moved = self.stack.as_ref().map(|s| (&s.folder, &s.name))
+                    != stack.as_ref().map(|s| (&s.folder, &s.name));
+                self.stack = stack;
+                if !moved {
+                    return Task::none();
+                }
+                self.clock();
+                let previous = self.geometry;
+                return self.refresh(previous);
+            }
+            Message::StackOpen(index) => {
+                if let Some(item) = self.stack.as_ref().and_then(|s| s.items.get(index)) {
+                    crate::stack::open(item.path.clone(), item.folder);
+                }
+                return self.close_menu();
+            }
+            Message::StackFolder => {
+                self.open_stack_folder();
+                return self.close_menu();
             }
             Message::Trash(full) => {
                 self.trash = Some(full);
@@ -1230,7 +1277,7 @@ impl Dock {
             if self.modifiers.control() {
                 self.new_window(index);
             } else {
-                self.click(index);
+                return self.press_icon(index);
             }
             return Task::none();
         }
@@ -1421,7 +1468,7 @@ impl Dock {
             return Task::none();
         }
         match (key, self.focus) {
-            (Key::Activate, Some(index)) => self.click(index),
+            (Key::Activate, Some(index)) => return self.press_icon(index),
             (Key::Menu, Some(index)) => return self.open_menu(index),
             (Key::Close, _) => self.focus = None,
             (Key::Next, Some(_)) => self.move_focus(Direction::Next),
@@ -1544,6 +1591,9 @@ impl Dock {
     /// The entries of the menu of icon `index`: its windows in the order they came, as on
     /// macOS, an untitled one under the application's name, then its actions.
     pub fn menu_lines(&self, index: usize) -> Vec<Line> {
+        if let Some(Kind::Stack(_)) = self.items.get(index).map(|i| &i.kind) {
+            return menu::stack_entries();
+        }
         if let Some(Kind::Trash(full)) = self.items.get(index).map(|i| &i.kind) {
             return menu::trash_entries(*full, self.trash_armed.is_some());
         }
@@ -1587,6 +1637,19 @@ impl Dock {
 
     /// A click on icon `index`: brings its windows forward (`windows::click`), minimizes them
     /// when they already are, or starts the application.
+    /// A click on icon `index`: the grid of a stack opens (lot D-21k), anything else `click`s.
+    pub fn press_icon(&mut self, index: usize) -> Task<Message> {
+        if self
+            .items
+            .get(index)
+            .is_some_and(|i| matches!(i.kind, Kind::Stack(_)))
+        {
+            return self.open_grid(index);
+        }
+        self.click(index);
+        Task::none()
+    }
+
     pub fn click(&mut self, index: usize) {
         if self
             .items
@@ -1706,7 +1769,28 @@ impl Dock {
             return self.drop_menu();
         };
         let target = self.items.get(index).map(Item::target);
-        self.show_menu(target, entries, icon)
+        self.show_menu(target, entries, icon, None)
+    }
+
+    /// Opens the grid of the stack of icon `index` over it, as a menu (lot D-21k).
+    fn open_grid(&mut self, index: usize) -> Task<Message> {
+        let count = self.stack.as_ref().map_or(0, |s| s.items.len());
+        let Some(icon) = self.layout(self.now).icons.get(index).copied() else {
+            return Task::none();
+        };
+        let target = self.items.get(index).map(Item::target);
+        self.show_menu(target, Vec::new(), icon, Some(count))
+    }
+
+    /// Opens the downloads folder in Evidence.
+    fn open_stack_folder(&self) {
+        let Some(stack) = &self.stack else {
+            return;
+        };
+        match launch::open_in_evidence(&stack.folder.to_string_lossy()) {
+            Ok(pid) => tracing::info!(pid, "stack folder opened"),
+            Err(error) => tracing::warn!(%error, "cannot open the stack folder"),
+        }
     }
 
     /// The dock's own menu, from `point` on its bar, as if an icon of no width were there.
@@ -1717,7 +1801,7 @@ impl Dock {
         } else {
             iced::Rectangle::new(Point::new(point.x, bar.y), Size::new(0.0, bar.height))
         };
-        self.show_menu(None, menu::dock_entries(self.sherlock), at)
+        self.show_menu(None, menu::dock_entries(self.sherlock), at, None)
     }
 
     /// Opens the menu of `target` with `entries`, against `icon` on the side away from the
@@ -1727,13 +1811,20 @@ impl Dock {
         target: Option<Target>,
         entries: Vec<Line>,
         icon: iced::Rectangle,
+        grid: Option<usize>,
     ) -> Task<Message> {
         let close = self.drop_menu();
         let Some(surface) = self.surface else {
             tracing::warn!("dock surface unknown: the menu cannot open");
             return close;
         };
-        let (width, height) = menu::surface_size(&entries);
+        let (width, height) = match grid {
+            Some(count) => {
+                let (width, height) = dock::stack_size(count);
+                (width.ceil() as u32, height.ceil() as u32)
+            }
+            None => menu::surface_size(&entries),
+        };
         let layout = self.layout(self.now);
         // Off the bar, 12 away from it, centered on the icon. The gap is not part of the menu
         // surface: it would be drawn black over the magnified icons (opaque software
@@ -1785,6 +1876,7 @@ impl Dock {
             target,
             entries,
             cursor: None,
+            grid,
             unfold: Unfold::opening(self.now),
         });
         Task::batch([close, Task::done(Message::NewPopUp { settings, id })])
@@ -1841,6 +1933,12 @@ impl Dock {
                 open_trash();
             }
             return close;
+        }
+        if target == Some(crate::items::Target::Stack) {
+            if entry == Entry::Open {
+                self.open_stack_folder();
+            }
+            return self.close_menu();
         }
         let close = self.close_menu();
         if entry == Entry::ShowSherlock {
@@ -2199,6 +2297,14 @@ fn open_trash() {
         Ok(pid) => tracing::info!(pid, "trash opened"),
         Err(error) => tracing::warn!(%error, "cannot open the trash"),
     }
+}
+
+/// `$XDG_CONFIG_HOME`, else `~/.config`.
+fn config_home() -> Option<std::path::PathBuf> {
+    std::env::var_os("XDG_CONFIG_HOME")
+        .map(std::path::PathBuf::from)
+        .filter(|p| p.is_absolute())
+        .or_else(|| std::env::home_dir().map(|home| home.join(".config")))
 }
 
 /// Runs blocking `work` (a folder, a file) on a thread of its own, never on the interface's.
