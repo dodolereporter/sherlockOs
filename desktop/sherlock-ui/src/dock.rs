@@ -274,6 +274,67 @@ pub fn stack_icon() -> String {
     stroked_tile(folder, &arrow)
 }
 
+/// A card of the stack of the downloads, as macOS draws a stack (lot D-21k2): a picture's PNG,
+/// or the glyph of its kind.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PileCard {
+    Png(Vec<u8>),
+    Glyph(crate::icon::Icon),
+}
+
+/// The stack of the downloads as its newest items, up to three cards, the newest in front, the
+/// others behind it, turned a little and shifted as a stack of photos.
+pub fn stack_pile(cards: &[PileCard]) -> String {
+    // Back to front: the oldest of the three first.
+    const PLACES: [(f32, f32, f32); 3] = [(-9.0, -1.2, 0.6), (7.0, 1.2, -0.2), (0.0, 0.0, 0.0)];
+    let shown = &cards[..cards.len().min(3)];
+    let start = PLACES.len() - shown.len();
+    let mut body = String::new();
+    for (card, (angle, dx, dy)) in shown.iter().rev().zip(&PLACES[start..]) {
+        let inner = match card {
+            PileCard::Png(bytes) => format!(
+                "<image x=\"4.6\" y=\"4.6\" width=\"14.8\" height=\"14.8\" \
+                 preserveAspectRatio=\"xMidYMid slice\" href=\"data:image/png;base64,{}\"/>",
+                base64(bytes)
+            ),
+            PileCard::Glyph(icon) => format!(
+                "<g transform=\"translate(6.6 6.6) scale(.45)\" fill=\"none\" stroke=\"{}\" \
+                 stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\">\
+                 <path d=\"{}\"/></g>",
+                hex(crate::color::TILE_APPLICATIONS),
+                icon.path()
+            ),
+        };
+        body.push_str(&format!(
+            "<g transform=\"translate({dx} {dy}) rotate({angle} 12 12)\"><rect x=\"4\" y=\"4\" \
+             width=\"16\" height=\"16\" rx=\"2\" fill=\"{paper}\" stroke=\"black\" \
+             stroke-opacity=\".18\" stroke-width=\".3\"/>{inner}</g>",
+            paper = hex(crate::color::CREAM),
+        ));
+    }
+    format!("<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\">{body}</svg>")
+}
+
+/// Standard base64 of `bytes`, for a picture written in a document.
+fn base64(bytes: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let n = chunk
+            .iter()
+            .enumerate()
+            .fold(0u32, |n, (i, b)| n | (u32::from(*b) << (16 - 8 * i)));
+        for i in 0..4 {
+            if i <= chunk.len() {
+                out.push(char::from(TABLE[(n >> (18 - 6 * i) & 63) as usize]));
+            } else {
+                out.push('=');
+            }
+        }
+    }
+    out
+}
+
 /// A dock tile with `path` stroked in cream over it, then `extra` (lots D-21j, D-21k).
 fn stroked_tile(path: &str, extra: &str) -> String {
     format!(
@@ -296,11 +357,58 @@ pub const STACK_ICON: f32 = 44.0;
 pub const STACK_GAP: f32 = 4.0;
 pub const STACK_PADDING: f32 = 12.0;
 pub const STACK_FOOTER: f32 = 40.0;
+/// Rows of the grid shown at once; past them it scrolls (lot D-21k2).
+pub const STACK_ROWS: usize = 4;
+
+// The fan of a stack, as macOS's (lot D-21k2): `FAN_MAX` items at most, rising in an arc over
+// the icon, the first at the bottom: a row each, its icon, its name in a pill on its left. The
+// arc leans `FAN_ARC` to the right at its top. The rows come out of the icon one after the
+// other, `FAN_STAGGER` of the opening apart, on the spring of the menus.
+pub const FAN_MAX: usize = 10;
+pub const FAN_ROW: f32 = 56.0;
+pub const FAN_ICON: f32 = 48.0;
+/// Half the width of the fan: its surface is centred on the icon, the items' icons over it, their
+/// names on the left, the arc on the right.
+pub const FAN_HALF: f32 = 260.0;
+/// Width of a name, at most: longer, it ends with « … ».
+pub const FAN_LABEL_MAX: f32 = 200.0;
+pub const FAN_ARC: f32 = 44.0;
+pub const FAN_LABEL_GAP: f32 = 10.0;
+pub const FAN_STAGGER: f32 = 0.07;
+
+/// Size of the fan of `count` items: width, then height.
+pub fn fan_size(count: usize) -> (f32, f32) {
+    let rows = count.clamp(1, FAN_MAX) as f32;
+    (
+        2.0 * FAN_HALF,
+        STACK_FOOTER + rows * FAN_ROW + STACK_PADDING,
+    )
+}
+
+/// How far right the row `from_bottom` of `rows` sits, on the arc: nothing at the bottom,
+/// `FAN_ARC` at the top, bending more as it rises.
+pub fn fan_offset(from_bottom: usize, rows: usize) -> f32 {
+    let top = rows.saturating_sub(1).max(1) as f32;
+    let t = from_bottom as f32 / top;
+    FAN_ARC * t * t
+}
+
+/// Size of the list of a stack of `count` items, as a menu: width, then height.
+pub fn list_size(count: usize) -> (f32, f32) {
+    let rows = (count + 1) as f32;
+    let separator = crate::metrics::BORDER_WIDTH + 2.0 * crate::metrics::MENU_SEPARATOR_MARGIN.0;
+    let height = 2.0 * crate::metrics::MENU_PADDING
+        + MENU_HEADER_HEIGHT
+        + rows * crate::metrics::MENU_ITEM_HEIGHT
+        + separator;
+    (OWN_MENU_WIDTH, height)
+}
 
 /// Size of the grid of a stack of `count` items: width, then height.
 pub fn stack_size(count: usize) -> (f32, f32) {
     let columns = count.clamp(1, STACK_COLUMNS);
-    let rows = count.div_ceil(STACK_COLUMNS).max(1);
+    // Past `STACK_ROWS` rows, the grid scrolls (lot D-21k2).
+    let rows = count.div_ceil(STACK_COLUMNS).clamp(1, STACK_ROWS);
     let width =
         2.0 * STACK_PADDING + columns as f32 * STACK_CELL.0 + (columns - 1) as f32 * STACK_GAP;
     let height = 2.0 * STACK_PADDING
@@ -389,6 +497,19 @@ mod styles {
     }
 
     /// Label above the hovered icon, cream like Sherlock's bubbles, faded by `opacity`.
+    /// The tile of an item of the fan (lot D-21k2): a card of glass under its glyph.
+    pub fn fan_tile(theme: &Theme) -> container::Style {
+        let p = crate::theme::palette(theme);
+        container::Style {
+            background: Some(Background::Color(p.card.into())),
+            border: Border::default()
+                .rounded(crate::metrics::CARD_RADIUS)
+                .width(crate::metrics::BORDER_WIDTH)
+                .color(p.card_border),
+            ..container::Style::default()
+        }
+    }
+
     pub fn label(opacity: f32) -> impl Fn(&Theme) -> container::Style {
         move |theme| {
             let p = palette(theme);
@@ -455,6 +576,31 @@ mod styles {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_fan_leans_right_as_it_rises_and_the_grid_scrolls_past_four_rows() {
+        assert_eq!(super::fan_offset(0, 5), 0.0);
+        assert_eq!(super::fan_offset(4, 5), super::FAN_ARC);
+        assert!(
+            super::fan_offset(2, 5) < super::FAN_ARC / 2.0,
+            "bending as it rises"
+        );
+        assert_eq!(super::stack_size(48), super::stack_size(16));
+        assert!(super::fan_size(3).1 < super::fan_size(10).1);
+        assert_eq!(super::fan_size(30), super::fan_size(10));
+    }
+
+    #[test]
+    fn a_picture_goes_in_base64_and_the_pile_has_three_cards_at_most() {
+        assert_eq!(super::base64(b"Man"), "TWFu");
+        assert_eq!(super::base64(b"Ma"), "TWE=");
+        assert_eq!(super::base64(b"M"), "TQ==");
+        let glyph = super::PileCard::Glyph(crate::icon::Icon::Document);
+        let pile = super::stack_pile(&[glyph.clone(), glyph.clone(), glyph.clone(), glyph]);
+        assert_eq!(pile.matches("<rect").count(), 3);
+        let png = super::PileCard::Png(b"abc".to_vec());
+        assert!(super::stack_pile(&[png]).contains("base64,YWJj"));
+    }
+
     use super::*;
     use crate::motion::Animation;
     use std::time::Duration;

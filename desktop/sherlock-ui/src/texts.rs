@@ -162,6 +162,9 @@ pub mod evidence {
     pub fn token(name: &str, chosen: &str) -> String {
         format!("{name} : {chosen}")
     }
+    /// On a server of the « Réseau » section: choose the name and the password, even when
+    /// the guest gets in (lot Q-56).
+    pub const LOGIN_AS: &str = "Se connecter en tant que…";
     pub const SYSTEM_DISK: &str = "Disque système";
     pub const MOUNT: &str = "Monter";
     pub const UNMOUNT: &str = "Démonter";

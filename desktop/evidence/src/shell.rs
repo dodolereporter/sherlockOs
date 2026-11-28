@@ -84,6 +84,7 @@ pub fn run(config: impl Fn() -> Config + 'static) -> Result<(), iced_exwlshell::
     iced_exwlshell::daemon(boot, namespace, App::update, App::view_window)
         .title(|app: &App, _| Some(app.title()))
         .theme(|_: &App, _| Some(theme::window_theme()))
+        .style(surface_style)
         .subscription(App::subscription)
         .settings(Settings {
             fonts: typography::FONTS.map(std::borrow::Cow::Borrowed).to_vec(),
@@ -102,6 +103,35 @@ pub fn run(config: impl Fn() -> Config + 'static) -> Result<(), iced_exwlshell::
         .run()
 }
 
+/// Every surface starts transparent (lot Q-57): the window paints its own body, and a popup
+/// keeps the room of its shadow clear around the menu. The theme's background, iced's default,
+/// filled that room in black.
+fn surface_style<State>(_: &State, _: &iced::Theme) -> iced::theme::Style {
+    iced::theme::Style {
+        background_color: sherlock_ui::color::TRANSPARENT.into(),
+        text_color: sherlock_ui::color::palette().text_primary.into(),
+    }
+}
+
 fn namespace() -> String {
     APP_ID.to_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Lot Q-57: the surfaces start transparent, and the window paints its body in the color
+    /// iced used to clear it with, so that nothing changes for the window itself.
+    #[test]
+    fn surfaces_start_transparent_and_the_window_paints_its_body() {
+        let shown = theme::window_theme();
+        let style = surface_style(&(), &shown);
+        assert_eq!(style.background_color.a, 0.0);
+        let body = theme::window(&shown).background;
+        assert_eq!(
+            body,
+            Some(iced::Background::Color(shown.palette().background))
+        );
+    }
 }

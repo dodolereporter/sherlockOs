@@ -62,8 +62,22 @@ impl App {
         )
     }
 
+    /// The connected server whose folder holds the location shown.
+    pub(super) fn server_of_location(&self) -> Option<String> {
+        let Location::Folder(dir) = &self.location else {
+            return None;
+        };
+        self.mounted
+            .iter()
+            .find(|(_, folder)| dir.starts_with(folder))
+            .map(|(host, _)| host.clone())
+    }
+
     /// The sheet for `host`, its name prefilled from the last try.
-    fn ask_login(&mut self, host: String) {
+    pub(super) fn ask_login(&mut self, host: String) {
+        if self.login.as_ref().is_some_and(|l| l.host == host) {
+            return;
+        }
         let server = self
             .server(&host)
             .map(|s| s.name.clone())
@@ -114,11 +128,17 @@ impl App {
             password: login.password,
         };
         let (uri, host, remember) = (server.uri(), login.host.clone(), login.remember);
+        // Connected already, as a guest or as someone else: gvfs would keep that connection
+        // (« already mounted »), so it goes first (lot Q-56).
+        let connected = self.mounted.remove(&login.host).is_some();
         let target = login.host;
         // The name is kept to prefill the sheet if it has to ask again.
         self.login_user = login.user;
         Task::perform(
             async move {
+                if connected && let Err(error) = smb::unmount(&uri) {
+                    tracing::info!(?error, "the guest connection stays");
+                }
                 let result = smb::mount(&uri, Some(&credentials));
                 if result.is_ok() && remember && !crate::keyring::keep(&host, &credentials) {
                     tracing::info!("the password is not kept: no keyring, or a locked one");

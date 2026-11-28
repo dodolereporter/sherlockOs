@@ -39,8 +39,9 @@ pub(crate) struct OpenMenu {
     pub(crate) target: Option<Target>,
     pub(crate) entries: Vec<Line>,
     pub(crate) cursor: Option<usize>,
-    /// The grid of a stack instead of entries (lot D-21k): how many items it was opened for.
-    pub(crate) grid: Option<usize>,
+    /// The content of a stack instead of entries (lots D-21k, D-21k2): how it is presented, and
+    /// how many items it was opened for.
+    pub(crate) stack: Option<(crate::stack::Presentation, usize)>,
     /// Opening, open, or closing before its popup goes.
     pub(crate) unfold: Unfold,
 }
@@ -67,6 +68,10 @@ pub enum Message {
     StackOpen(usize),
     /// « Ouvrir dans Evidence » in the open stack.
     StackFolder,
+    /// The pointer went over an item of the stack's content, or off it (lot D-21k2).
+    StackHover(Option<usize>),
+    /// A press, a move, a release on the popup `Id` of the stack's content: the start of a drag.
+    StackGesture(Id, crate::stack::Gesture),
     /// The applications that open with the session, read (lot D-21i).
     Autostart(std::collections::BTreeSet<String>),
     /// The Wayland handles of the dock's surface, for the applications dragged from the
@@ -220,6 +225,9 @@ pub struct Dock {
     saver: crate::save::Saver,
     /// The thread of the drags from the Applications view, kept alive with its link.
     dnd: Option<crate::dnd::Link>,
+    /// The item of the stack's content under the pointer, the press on one of them, and whether
+    /// one is dragged out (lot D-21k2).
+    stack_drag: crate::stack::DragOut,
 }
 
 impl Dock {
@@ -272,6 +280,7 @@ impl Dock {
             placed: Vec::new(),
             saver: crate::save::Saver::default(),
             dnd: None,
+            stack_drag: crate::stack::DragOut::default(),
         };
         dock.rebuild(false);
         dock
@@ -466,7 +475,13 @@ impl Dock {
                 .stack
                 .as_ref()
                 .filter(|_| self.sources.config.stack.shown)
-                .map(|s| (s.folder.as_path(), s.name.as_str())),
+                .map(|s| {
+                    let shown_as_stack =
+                        self.sources.config.stack.display == dock_config::stack::Display::Stack;
+                    let pile: &[sherlock_ui::dock::PileCard] =
+                        if shown_as_stack { &s.pile } else { &[] };
+                    (s.folder.as_path(), s.name.as_str(), pile)
+                }),
             catalog: &self.sources.catalog,
             lookup: &self.sources.lookup,
             icon_size,
@@ -643,6 +658,13 @@ impl Dock {
             }
             None => Subscription::none(),
         };
+        // A press on the stack's content may become a drag (lot D-21k2).
+        let stack_gesture = if self.menu.as_ref().is_some_and(|m| m.stack.is_some()) {
+            iced::event::listen_with(crate::stack::gesture)
+                .map(|(id, gesture)| Message::StackGesture(id, gesture))
+        } else {
+            Subscription::none()
+        };
         let gesture = if self.press.is_some() {
             iced::event::listen_with(drag::gesture).map(Message::Gesture)
         } else {
@@ -655,6 +677,7 @@ impl Dock {
                 events.listen().filter_map(on_screen)
             });
         Subscription::batch([
+            stack_gesture,
             appearance,
             screens,
             Subscription::run(|| windows::watch(windows::source)).map(Message::Windows),
@@ -764,8 +787,9 @@ impl Dock {
             }
             Message::Stack(stack) => {
                 // The same folder read again: only the grid changes, the dock stays.
-                let moved = self.stack.as_ref().map(|s| (&s.folder, &s.name))
-                    != stack.as_ref().map(|s| (&s.folder, &s.name));
+                // Its icon follows its newest items too (lot D-21k2).
+                let moved = self.stack.as_ref().map(|s| (&s.folder, &s.name, &s.pile))
+                    != stack.as_ref().map(|s| (&s.folder, &s.name, &s.pile));
                 self.stack = stack;
                 if !moved {
                     return Task::none();
@@ -779,6 +803,16 @@ impl Dock {
                     crate::stack::open(item.path.clone(), item.folder);
                 }
                 return self.close_menu();
+            }
+            Message::StackHover(index) => self.stack_drag.hover(index),
+            Message::StackGesture(id, gesture) => {
+                let ours = self
+                    .menu
+                    .as_ref()
+                    .is_some_and(|m| m.id == id && m.stack.is_some());
+                if let Some(index) = ours.then(|| self.stack_drag.gesture(gesture)).flatten() {
+                    self.drag_out(index);
+                }
             }
             Message::StackFolder => {
                 self.open_stack_folder();
@@ -1780,11 +1814,46 @@ impl Dock {
     /// Opens the grid of the stack of icon `index` over it, as a menu (lot D-21k).
     fn open_grid(&mut self, index: usize) -> Task<Message> {
         let count = self.stack.as_ref().map_or(0, |s| s.items.len());
+        // A fresh content: nothing under the pointer until it says so.
+        self.stack_drag = crate::stack::DragOut::default();
+        let bottom = self.geometry.position == Edge::Bottom;
+        let shown = crate::stack::presentation(self.sources.config.stack.view, count, bottom);
+        let count = match shown {
+            crate::stack::Presentation::Fan => count.min(dock::FAN_MAX),
+            _ => count,
+        };
         let Some(icon) = self.layout(self.now).icons.get(index).copied() else {
             return Task::none();
         };
         let target = self.items.get(index).map(Item::target);
-        self.show_menu(target, Vec::new(), icon, Some(count))
+        self.show_menu(target, Vec::new(), icon, Some((shown, count)))
+    }
+
+    /// Drags item `index` of the stack out to an application (lot D-21k2), its picture or the
+    /// glyph of its kind under the pointer. Its content stays until the drop.
+    fn drag_out(&mut self, index: usize) {
+        let (Some(link), Some(item)) = (
+            &self.dnd,
+            self.stack.as_ref().and_then(|s| s.items.get(index)),
+        ) else {
+            return;
+        };
+        let png = item
+            .path
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("png"));
+        let icon = if png {
+            crate::dnd::DragIcon::File(item.path.clone())
+        } else {
+            crate::dnd::DragIcon::Document(item.icon.svg())
+        };
+        link.send(crate::dnd::Command::DragFile {
+            uri: crate::stack::uri(&item.path),
+            icon,
+            side: (dock::FAN_ICON * 2.0) as u32,
+            scale: 2,
+        });
+        self.stack_drag.started();
     }
 
     /// Opens the downloads folder in Evidence.
@@ -1817,16 +1886,20 @@ impl Dock {
         target: Option<Target>,
         entries: Vec<Line>,
         icon: iced::Rectangle,
-        grid: Option<usize>,
+        stack: Option<(crate::stack::Presentation, usize)>,
     ) -> Task<Message> {
         let close = self.drop_menu();
         let Some(surface) = self.surface else {
             tracing::warn!("dock surface unknown: the menu cannot open");
             return close;
         };
-        let (width, height) = match grid {
-            Some(count) => {
-                let (width, height) = dock::stack_size(count);
+        let (width, height) = match stack {
+            Some((shown, count)) => {
+                let (width, height) = match shown {
+                    crate::stack::Presentation::Fan => dock::fan_size(count),
+                    crate::stack::Presentation::Grid => dock::stack_size(count),
+                    crate::stack::Presentation::List => dock::list_size(count),
+                };
                 (width.ceil() as u32, height.ceil() as u32)
             }
             None => menu::surface_size(&entries),
@@ -1882,7 +1955,7 @@ impl Dock {
             target,
             entries,
             cursor: None,
-            grid,
+            stack,
             unfold: Unfold::opening(self.now),
         });
         Task::batch([close, Task::done(Message::NewPopUp { settings, id })])
@@ -2195,6 +2268,8 @@ impl Dock {
             Event::Over(x, y) => self.hole_at(Point::new(x, y)),
             Event::Left => self.close_hole(),
             Event::Dropped(id) => self.drop_app(&id),
+            // A file dragged out of the stack: its content closes once it is dropped.
+            Event::DragEnded(_) if self.stack_drag.ended() => self.close_menu(),
             Event::DragEnded(_) => Task::none(),
         }
     }
