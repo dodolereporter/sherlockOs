@@ -318,6 +318,14 @@ are built once (`sherlock_ui::component::icon` caches the SVG handles).
   the next connection reads them first (lot E-07b, `keyring`). Without a keyring, or with a
   locked one, nothing is kept and the sheet asks again; every call to the keyring has a 5 s
   limit and runs off the interface thread. The password never reaches a log.
+  « Se connecter en tant que… » (lot Q-56), in a server's right-click menu (with « Ouvrir » and,
+  once connected, « Éjecter ») and as the button beside it, opens the sheet even when the guest
+  gets in; a guest connection is closed first, since gvfs would keep it. The sheet also opens
+  when a folder of a connected server cannot be read (a share the guest may not open), and the
+  refusals `gio mount` reports are read in the words of more versions of gvfs and Samba: the
+  question it could not ask on its closed input (« User [ »), an NT status
+  (`NT_STATUS_ACCESS_DENIED`, `NT_STATUS_LOGON_FAILURE`), « Operation not permitted », a refused
+  anonymous access.
 - Trash: deleting moves to the freedesktop trash (shared with Plasma, GNOME, `gio trash`).
   The trash view lists the original name, the deletion date read from the record, and the
   origin. Emptying asks first and deletes only what was listed when the question was asked.
