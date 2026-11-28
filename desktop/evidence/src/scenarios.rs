@@ -1812,6 +1812,103 @@ fn path_bar_captures() {
     }
 }
 
+/// Tabs (lot D-27b): Ctrl+T opens one on this folder, each keeps its folder, Ctrl+Tab goes
+/// from one to the other, the middle button opens a folder in a tab behind, Enter on several
+/// folders opens each in a tab, a tab dragged moves, Ctrl+W closes.
+#[test]
+fn tabs_keep_their_folders() {
+    let mut bench = Bench::new("tabs");
+    fs::create_dir_all(bench.path("projet/docs")).expect("folder");
+    bench.press(Named::F5);
+    let projet = Location::Folder(bench.path("projet"));
+    bench.ctrl("t");
+    assert_eq!(bench.app.tab_list().len(), 2);
+    assert!(bench.app.tab_bar_level() > 0.0);
+    bench.select("src");
+    bench.press(Named::Enter);
+    let src = Location::Folder(bench.path("projet/src"));
+    assert_eq!(bench.app.tab_list(), [projet.clone(), src.clone()]);
+    bench.key(Key::Named(Named::Tab), Modifiers::CTRL);
+    assert_eq!(bench.app.location, projet);
+    // The middle button on a folder: a tab behind, the folder shown stays.
+    let docs = bench
+        .names()
+        .iter()
+        .position(|n| *n == "docs")
+        .expect("docs");
+    bench.send(Message::MiddleClick(docs));
+    assert_eq!(bench.app.tab_list().len(), 3);
+    assert_eq!(bench.app.location, projet);
+    // Enter on two folders: each in a tab, the first shown.
+    bench.click("docs");
+    click_with(&mut bench, "src", Modifiers::CTRL);
+    bench.press(Named::Enter);
+    assert_eq!(bench.app.tab_list().len(), 5);
+    // A tab dragged over another takes its place.
+    let before = bench.app.tab_list();
+    bench.send(Message::PressTab(0));
+    bench.send(Message::OverTab(1));
+    bench.send(Message::Released);
+    let after = bench.app.tab_list();
+    assert_eq!(
+        (after[0].clone(), after[1].clone()),
+        (before[1].clone(), before[0].clone())
+    );
+    // Ctrl+W closes the active one.
+    bench.ctrl("w");
+    assert_eq!(bench.app.tab_list().len(), 4);
+    let _ = bench.app.view();
+}
+
+/// Ctrl+Z undoes a rename, a move to the trash and a new folder, Ctrl+Maj+Z redoes them
+/// (lot E-10).
+#[test]
+fn undo_and_redo_with_the_keyboard() {
+    let mut bench = Bench::new("undo");
+    bench.select("a.txt");
+    bench.press(Named::F2);
+    bench.send(Message::RenameInput("notes.txt".into()));
+    bench.send(Message::RenameSubmit);
+    assert!(bench.path("projet/notes.txt").exists());
+    bench.ctrl("z");
+    assert!(bench.path("projet/a.txt").exists() && !bench.path("projet/notes.txt").exists());
+    assert_eq!(bench.selected(), ["a.txt"]);
+    bench.key(
+        Key::Character("Z".into()),
+        Modifiers::CTRL | Modifiers::SHIFT,
+    );
+    assert!(bench.path("projet/notes.txt").exists());
+
+    // To the trash, and back to its place.
+    bench.select("notes.txt");
+    bench.press(Named::Delete);
+    assert!(!bench.path("projet/notes.txt").exists());
+    bench.ctrl("z");
+    assert_eq!(read(&bench.path("projet/notes.txt")), "contenu de a");
+
+    // A new folder undone goes to the trash, never deleted for good.
+    bench.key(
+        Key::Character("N".into()),
+        Modifiers::CTRL | Modifiers::SHIFT,
+    );
+    bench.press(Named::Escape);
+    assert!(bench.path("projet/Nouveau dossier").is_dir());
+    bench.ctrl("z");
+    assert!(!bench.path("projet/Nouveau dossier").exists());
+    // A new step forgets what was undone.
+    bench.select("notes.txt");
+    bench.ctrl("d");
+    assert!(bench.app.steps.redo.is_empty());
+    // Nothing left to undo says so.
+    let mut left = bench.app.steps.undo.len();
+    while left > 0 {
+        bench.ctrl("z");
+        left -= 1;
+    }
+    bench.ctrl("z");
+    assert!(bench.app.notice.as_ref().is_some_and(|n| !n.error));
+}
+
 /// A change made by another program shows without F5 (lot E-09): the listing is read again,
 /// the selection kept, but not while a menu is open.
 #[test]

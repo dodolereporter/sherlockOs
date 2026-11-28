@@ -108,6 +108,8 @@ pub(crate) struct Consents {
     shown_at: Option<Duration>,
     /// « Autoriser » held down since.
     held: Option<Duration>,
+    /// The button a press began on, once armed: a release grants or refuses only there.
+    pressed: Option<Choice>,
     hovered: Option<Choice>,
 }
 
@@ -140,6 +142,25 @@ pub(crate) fn allowed(stream: &UnixStream, peers: Peers) -> bool {
     }
 }
 
+/// Whether `c` would show a text other than the one used: the control characters, the line
+/// and paragraph separators, the zero-width and bidirectional marks. `sherlockd` escapes them
+/// (`\u202e`); one that still comes is shown as « ? », never dropped nor applied.
+fn hidden(c: char) -> bool {
+    c.is_control()
+        || matches!(
+            c,
+            '\u{2028}' | '\u{2029}' | '\u{200b}'..='\u{200f}' | '\u{feff}' | '\u{061c}'
+        )
+        || matches!(c, '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+}
+
+/// `text` with every hidden character shown as « ? ».
+fn visible(text: &str) -> String {
+    text.chars()
+        .map(|c| if hidden(c) { '?' } else { c })
+        .collect()
+}
+
 /// `text` cut to `max` characters, « … » at the end when cut.
 fn cut(text: &str, max: usize) -> String {
     match text.char_indices().nth(max) {
@@ -150,7 +171,7 @@ fn cut(text: &str, max: usize) -> String {
 
 /// The arguments on lines of `ARGUMENT_COLUMNS` characters, `ARGUMENT_LINES` at most.
 fn argument_lines(arguments: &str) -> Vec<String> {
-    let chars: Vec<char> = arguments.chars().filter(|c| !c.is_control()).collect();
+    let chars: Vec<char> = visible(arguments).chars().collect();
     let mut lines: Vec<String> = chars
         .chunks(ui::ARGUMENT_COLUMNS)
         .map(|c| c.iter().collect())
@@ -271,7 +292,7 @@ impl State {
             conn,
             id: asked.id,
             // Shown as text, on one line: no control character from the asker.
-            tool: cut(&asked.tool.replace(char::is_control, " "), MAX_TOOL),
+            tool: cut(&visible(&asked.tool), MAX_TOOL),
             level: asked.level,
             arguments: asked.arguments,
         });
@@ -321,6 +342,7 @@ impl State {
     fn consent_next(&mut self) {
         self.consent.held = None;
         self.consent.hovered = None;
+        self.consent.pressed = None;
         if self.consent.queue.is_empty() {
             self.consent.shown_at = None;
             self.queue_redraw();
@@ -331,10 +353,13 @@ impl State {
         }
     }
 
-    /// The window appears: popups dismissed, the keyboard and the pointer taken from clients.
-    fn consent_appears(&mut self) {
+    /// The window appears, or shows again once the session is unlocked: popups dismissed, the
+    /// keyboard and the pointer taken from clients, the buttons armed again only after
+    /// `ARMING` (a key or a click meant for the lock screen grants nothing).
+    pub(crate) fn consent_appears(&mut self) {
         self.consent.shown_at = Some(self.now());
         self.consent.held = None;
+        self.consent.pressed = None;
         self.queue_redraw();
         self.dismiss_popups();
         self.set_keyboard_focus(None);
@@ -381,27 +406,31 @@ impl State {
         }
     }
 
-    /// A button of the mouse at `at`.
+    /// A button of the mouse at `at`. A press counts once the window is armed; its release
+    /// acts only on the button it began on: a press already under way when the window appeared
+    /// (a drag), released over « Autoriser », grants nothing.
     pub(crate) fn consent_button(&mut self, pressed: bool, at: Point<f64, Logical>) {
         let target = self.consent_target(at);
         let level = self.consent.queue.front().map(|p| p.level);
         let now = self.now();
-        match (pressed, target, level) {
-            (true, Some(Choice::Allow), Some(Level::Destructive)) if self.consent_armed() => {
-                self.consent.held = Some(now);
-            }
-            (false, Some(Choice::Allow), Some(Level::Destructive)) => {
-                let held = self.consent.held.take();
-                if held.is_some_and(|since| now.saturating_sub(since) >= ui::HOLD) {
-                    self.consent_answer(true);
+        if pressed {
+            self.consent.pressed = target.filter(|_| self.consent_armed());
+            self.consent.held = (self.consent.pressed == Some(Choice::Allow)
+                && level == Some(Level::Destructive))
+            .then_some(now);
+        } else {
+            let began = self.consent.pressed.take();
+            let held = self.consent.held.take();
+            match (target.filter(|t| began == Some(*t)), level) {
+                (Some(Choice::Allow), Some(Level::Destructive)) => {
+                    if held.is_some_and(|since| now.saturating_sub(since) >= ui::HOLD) {
+                        self.consent_answer(true);
+                    }
                 }
+                (Some(Choice::Allow), Some(Level::Action)) => self.consent_answer(true),
+                (Some(Choice::Deny), _) => self.consent_answer(false),
+                _ => {}
             }
-            (false, Some(Choice::Allow), Some(Level::Action)) if self.consent_armed() => {
-                self.consent_answer(true);
-            }
-            (false, Some(Choice::Deny), _) if self.consent_armed() => self.consent_answer(false),
-            (false, ..) => self.consent.held = None,
-            _ => {}
         }
         self.queue_redraw();
     }
@@ -562,6 +591,13 @@ pub(crate) fn push_items(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_hidden_character_is_shown_never_applied() {
+        let lines = argument_lines("{\"chemin\":\"facture\u{202e}txt.exe\u{200b}\u{2066}\"}");
+        assert_eq!(lines, ["{\"chemin\":\"facture?txt.exe??\"}"]);
+        assert_eq!(visible("vider\u{061c}\ncorbeille"), "vider??corbeille");
+    }
 
     #[test]
     fn the_arguments_are_cut_and_never_break_a_line() {

@@ -255,6 +255,22 @@ are built once (`sherlock_ui::component::icon` caches the SVG handles).
   | ![Menu on the background, Trier par open](evidence/menu-background-dark.png) | ![Menu on the background, light](evidence/menu-background-light.png) |
 
   Halfway through unfolding, software renderer: ![Menu unfolding](evidence/menu-opening.png)
+- Tabs (lot D-27b), as in the Finder. Ctrl+T opens a tab on the folder shown; Ctrl+W closes
+  the active one (the last one closes the window); Ctrl+Tab and Ctrl+Maj+Tab go from tab to
+  tab; the middle button on a folder opens it in a tab behind; Enter on several folders opens
+  each in a tab, the first shown. From two tabs on, a bar under the toolbar shows them, coming in
+  and out with a fade and its height: each with its folder's name (« … » when long) and a close
+  button; a press shows a tab and drags it over the others to reorder them; the middle button
+  closes it. Each tab keeps its folder, its history, its selection and its search; one listing
+  is live, the active tab's, and switching reads the other folder again off the interface
+  thread. At most 24 tabs.
+- Undo and redo (lot E-10, `undo`): Ctrl+Z undoes the last rename, move, move to the trash,
+  new folder, copy or duplicate; Ctrl+Maj+Z (or Ctrl+Y) redoes it; both are in the bar's
+  « Édition » menu, greyed when there is nothing to do. Each step undone gives the step that
+  redoes it: a rename or a move goes back, an item from the trash comes back to its place, and
+  what Evidence made goes to the trash, never deleted for good (without a trash it is not
+  undone). A new step forgets what was undone. Each list keeps 50 steps, for the session; the
+  work runs off the interface thread, and the items concerned are selected afterwards.
 - The folder shown is watched (lot E-09, `watch`): inotify on the folder, on a thread of its
   own, so that a file downloaded, made in a terminal or removed by another program shows or goes
   without F5. Changes closer than 100 ms are one, and the folder is read again at most every

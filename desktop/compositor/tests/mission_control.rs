@@ -546,6 +546,33 @@ mod tests {
     }
 
     #[test]
+    fn a_press_begun_before_the_window_was_armed_grants_nothing() {
+        let (mut h, _shown) = two_windows();
+        let (dir, mut stream) = consent(&mut h);
+        ask(&mut h, &mut stream, 4, "action");
+        // A drag under way when the window appears, released over « Autoriser » once armed.
+        let allow = button_at(&h, true);
+        h.state.pointer_motion(allow, 10);
+        h.button(true);
+        std::thread::sleep(sherlock_ui::consent::ARMING);
+        h.button(false);
+        assert!(h.state.consent_shown(), "a press begun unarmed granted");
+        // Pressed on « Refuser », released on « Autoriser »: nothing either.
+        let deny = button_at(&h, false);
+        h.state.pointer_motion(deny, 20);
+        h.button(true);
+        h.state.pointer_motion(allow, 30);
+        h.button(false);
+        assert!(h.state.consent_shown());
+        assert_eq!(answers(&mut h, &mut stream), "");
+        // A whole click on « Autoriser » does.
+        h.click(allow);
+        assert!(!h.state.consent_shown());
+        assert!(answers(&mut h, &mut stream).contains("granted"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn only_sherlockd_may_ask() {
         let (mut h, _shown) = two_windows();
         let dir = std::env::temp_dir().join(format!("consent-only-{}", std::process::id()));
