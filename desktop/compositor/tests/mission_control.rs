@@ -574,6 +574,54 @@ mod tests {
         assert!(h.state.overview_shown(h.state.now()));
     }
 
+    /// Lot D-33c: the « + » after the thumbnails adds a workspace, which fades in; the « × » of
+    /// the thumbnail under the pointer removes it, its windows going to the one before.
+    #[test]
+    fn the_strip_adds_and_removes_workspaces() {
+        let (mut h, _shown) = two_windows();
+        let back = h.window("Back");
+        h.state.move_to_workspace(&back, "3");
+        h.state.open_overview();
+        let output = h.output(0);
+        assert_eq!(h.state.workspaces().list().len(), 3);
+        // « + »: a fourth workspace, its thumbnail fading in.
+        let add = h.state.overview_add_button(&output).unwrap();
+        let at = add.loc + add.size.downscale(2.0).to_point();
+        assert_eq!(h.state.overview_target(at), Some(Target::AddWorkspace));
+        h.click(at);
+        assert_eq!(h.state.workspaces().list().len(), 4);
+        assert!(h.state.overview_open());
+        assert!(h.state.overview_animating(h.state.now()) || h.state.overview_shown(h.state.now()));
+        // The « × » of the second thumbnail, once the pointer is on it.
+        let strip = h.state.overview_strip(&output);
+        let second = strip[1];
+        let inside = second.loc + second.size.downscale(2.0).to_point();
+        h.state.pointer_motion(inside, 20);
+        let corner: Point<f64, Logical> = (second.loc.x + 2.0, second.loc.y + 2.0).into();
+        assert_eq!(
+            h.state.overview_target(corner),
+            Some(Target::RemoveWorkspace(1))
+        );
+        h.click(corner);
+        // Three left: « Back », on the third, is now on the second; « Front » stays on the first.
+        assert_eq!(h.state.workspaces().list().len(), 3);
+        assert_eq!(h.state.workspace_of(&back), "2");
+        assert_eq!(h.state.workspace_of(&h.window("Front")), "1");
+        assert!(h.state.overview_open());
+        // Down to one workspace, it has no « × ».
+        for _ in 0..2 {
+            assert!(h.state.remove_workspace(1));
+        }
+        assert!(!h.state.remove_workspace(0), "the last one stays");
+        assert_eq!(h.state.workspace_of(&back), "1");
+        // Up to nine: no « + » any more.
+        for _ in 0..8 {
+            assert!(h.state.add_workspace());
+        }
+        assert!(!h.state.add_workspace());
+        assert!(h.state.overview_add_button(&output).is_none());
+    }
+
     #[test]
     fn the_view_follows_three_fingers_up_and_down() {
         let (mut h, _shown) = two_windows();
