@@ -336,6 +336,17 @@ are built once (`sherlock_ui::component::icon` caches the SVG handles).
   `the_grid_renders_headless`, `the_columns_render_headless`,
   `the_gallery_renders_headless` and `the_unfolded_list_renders_headless`, at 1366 × 768 and
   720 × 460.
+- Search tokens (lot E-15a, `filter`, `app/search`), as the Finder's: while searching, a bar
+  under the toolbar offers « Type » (Images, Documents, Vidéos, Audio, Archives, Dossiers, by
+  extension, several at once: its menu stays open while they are checked), « Date »
+  (aujourd'hui from local midnight, 7 or 30 days, 12 months) and « Taille » (under 1 MB, 1 to
+  100 MB, over 100 MB, files only), each a chip whose label says what it keeps and whose menu
+  is the right-click menu's (a popup on Wayland), « Effacer », and where the search looks:
+  « Ce dossier » or « Sous-dossiers aussi ». The name typed filters as it is typed, and the
+  tokens with it. Through the subfolders, a walk runs off the interface thread: 50,000 items
+  looked at, 12 levels, 2000 results and 5 s at most, links never followed, hidden items only
+  when shown; a new letter stops the walk still running and starts another. Escape, or
+  another folder, forgets the search and its tokens.
 - Thumbnails (lot E-14, `thumbs`, `app/thumbnails`): the grid's tiles and the gallery's
   strip show a picture of what a file holds instead of its icon. Pictures (PNG, JPEG, WebP,
   GIF) are decoded with the bounds of the preview (lot E-06: size read from the header first,

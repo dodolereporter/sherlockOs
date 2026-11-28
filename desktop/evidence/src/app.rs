@@ -41,6 +41,8 @@ mod popup;
 pub use hint::HintTarget;
 mod columns;
 mod disclose;
+mod search;
+pub use search::Token;
 mod tabs;
 mod thumbnails;
 mod view_mode;
@@ -177,6 +179,10 @@ pub enum Location {
 /// The commands of the menu and of the shortcuts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Command {
+    /// The search's tokens (lot E-15): a kind kept or not, a date, a size.
+    FilterKind(crate::filter::KindFilter),
+    FilterDate(Option<crate::filter::DateFilter>),
+    FilterSize(Option<crate::filter::SizeFilter>),
     Open,
     OpenTerminal,
     Rename,
@@ -214,6 +220,14 @@ pub enum Command {
     /// The path bar as a field (Ctrl+L), and the « Aller au dossier » sheet (Maj+Ctrl+G).
     EditPath,
     GoToFolder,
+}
+
+impl Command {
+    /// A check box of a menu: the menu stays open after it (the "always" switch, a kind of the
+    /// search's « Type » token).
+    pub fn keeps_menu(self) -> bool {
+        matches!(self, Self::ToggleAlways | Self::FilterKind(_))
+    }
 }
 
 /// The submenus of the right-click menu.
@@ -355,6 +369,12 @@ pub enum Message {
         Option<std::time::SystemTime>,
         Option<iced::widget::image::Handle>,
     ),
+    /// The search's tokens (lot E-15): a token's menu, where it looks, all forgotten; what
+    /// the walk through the subfolders found.
+    TokenMenu(Token),
+    SetScope(crate::filter::Scope),
+    ClearFilters,
+    DeepFound(u64, Vec<Entry>),
     /// The gallery's strip scrolled sideways (lot E-13c).
     StripScrolled(f32),
     Key(keyboard::Event),
@@ -532,6 +552,13 @@ pub struct App {
     strip_offset: f32,
     /// The folders unfolded in the list (lot E-13d).
     unfolded: disclose::Unfolded,
+    /// The search's tokens, what the walk through the subfolders found, how to stop it, and
+    /// the token whose menu is open (lot E-15).
+    pub(crate) filters: crate::filter::Filters,
+    deep: Option<Vec<Entry>>,
+    deep_stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    deep_generation: u64,
+    token_menu: Option<Token>,
     /// The thumbnails of the grid and of the gallery (lot E-14).
     pub(crate) thumbnails: thumbnails::Thumbnails,
     /// The large preview is open, and its zoom in or out (lot E-12).
@@ -670,6 +697,11 @@ impl App {
             peek: None,
             strip_offset: 0.0,
             unfolded: disclose::Unfolded::new(),
+            filters: crate::filter::Filters::default(),
+            deep: None,
+            deep_stop: std::sync::Arc::default(),
+            deep_generation: 0,
+            token_menu: None,
             thumbnails: thumbnails::Thumbnails::default(),
             looking: false,
             look_fade: None,
@@ -1063,6 +1095,7 @@ impl App {
         }
         if self.menu.is_none() {
             self.device_menu = None;
+            self.token_menu = None;
             // Closing the menu (or the chooser) forgets the "always" switch.
             if self.chooser.is_none() {
                 self.always = false;
@@ -1230,10 +1263,27 @@ impl App {
             Message::Search(text) => {
                 self.search = text;
                 self.refilter();
+                if self.filters.scope == crate::filter::Scope::Subfolders {
+                    return self.walk_subfolders();
+                }
             }
+            Message::TokenMenu(token) => {
+                self.renaming = None;
+                self.token_menu = Some(token);
+                self.open_menu(self.pointer);
+            }
+            Message::SetScope(scope) => {
+                self.filters.scope = scope;
+                return self.walk_subfolders();
+            }
+            Message::ClearFilters => {
+                self.clear_filters();
+                self.refilter();
+            }
+            Message::DeepFound(generation, found) => self.deep_found(generation, found),
             Message::Run(command) => {
                 // The "always" switch stays in its open menu, like a check box.
-                if command != Command::ToggleAlways {
+                if !command.keeps_menu() {
                     self.menu = None;
                 }
                 return self.run(command);
@@ -1687,6 +1737,7 @@ impl App {
 
     fn reset_and_load(&mut self, select: &[PathBuf]) -> Task<Message> {
         self.search.clear();
+        self.clear_filters();
         self.search_open = false;
         self.clear_selection();
         self.repo = None;
@@ -1789,15 +1840,23 @@ impl App {
     fn refilter(&mut self) {
         let keep = self.selected_paths();
         let needle = self.search.to_lowercase();
-        self.entries = self
-            .all
+        // The subfolders' items too, once the walk found them (lot E-15).
+        let base = match &self.deep {
+            Some(found) if self.filters.scope == crate::filter::Scope::Subfolders => found,
+            _ => &self.all,
+        };
+        let now = std::time::SystemTime::now();
+        let midnight = crate::filter::midnight(now);
+        self.entries = base
             .iter()
             .filter(|e| needle.is_empty() || e.labels.lower.contains(&needle))
+            .filter(|e| self.filters.keep(e, now, midnight))
             .cloned()
             .collect();
         listing::sort(&mut self.entries, self.sort);
         // The unfolded folders' items under each (lot E-13d); not while searching.
-        if needle.is_empty() && self.view_mode == ViewMode::List && !self.unfolded.is_empty() {
+        let searching = !needle.is_empty() || self.filters.any();
+        if !searching && self.view_mode == ViewMode::List && !self.unfolded.is_empty() {
             let top = std::mem::take(&mut self.entries);
             self.entries = disclose::flatten(top, &self.unfolded);
         }
@@ -1878,7 +1937,8 @@ impl App {
                 + metrics::TOOLBAR_HEIGHT
                 + metrics::LIST_HEADER_HEIGHT
                 + 3.0 * metrics::BORDER_WIDTH
-                + tabs,
+                + tabs
+                + self.filter_bar_height(),
         )
     }
 
@@ -1975,6 +2035,9 @@ impl App {
     /// Menu entries: on the selection or on the background, in a folder or the trash.
     pub fn menu_items(&self, on_selection: bool) -> Vec<MenuItem> {
         use MenuItem::{Action, Separator, Submenu};
+        if let Some(token) = self.token_menu {
+            return self.token_items(token);
+        }
         if let Some(volume) = self.menu_volume() {
             let open = if volume.mount_point.is_some() {
                 texts::OPEN
@@ -2245,7 +2308,8 @@ impl App {
     }
 
     fn open_menu(&mut self, at: Point) {
-        let on_selection = !self.selection.is_empty() && self.device_menu.is_none();
+        let on_selection =
+            !self.selection.is_empty() && self.device_menu.is_none() && self.token_menu.is_none();
         let height = Self::menu_height(&self.menu_items(on_selection));
         // Inside the window; a submenu opens on the left when the right has no room. A popup
         // is placed by the compositor instead, which flips it at the screen's edges.
@@ -2341,7 +2405,7 @@ impl App {
             Key::Named(Named::Escape) => self.menu = None,
             Key::Named(Named::Enter | Named::Space) => match highlighted {
                 Some(MenuItem::Action { command, .. }) => {
-                    if command != Command::ToggleAlways {
+                    if !command.keeps_menu() {
                         self.menu = None;
                     }
                     return self.run(command);
@@ -2472,6 +2536,7 @@ impl App {
             }
             Key::Named(Named::Escape) => {
                 self.search_open = false;
+                self.clear_filters();
                 self.folded_menu(false);
                 self.search.clear();
                 self.notice = None;
@@ -2656,6 +2721,20 @@ impl App {
                     _ => DeviceAction::Open,
                 };
                 return self.device(action, id);
+            }
+            Command::FilterKind(kind) => {
+                if !self.filters.kinds.remove(&kind) {
+                    self.filters.kinds.insert(kind);
+                }
+                return self.filters_changed();
+            }
+            Command::FilterDate(date) => {
+                self.filters.date = date;
+                return self.filters_changed();
+            }
+            Command::FilterSize(size) => {
+                self.filters.size = size;
+                return self.filters_changed();
             }
             Command::ChooseApp => {
                 self.chooser = Some(String::new());

@@ -134,6 +134,10 @@ pub const GALLERY_STRIP_ICON: f32 = 48.0;
 pub const GALLERY_STRIP_PICTURE: f32 = 72.0;
 pub const GALLERY_ICON: f32 = 160.0;
 pub const GALLERY_TEXT_WIDTH: f32 = 720.0;
+/// The bar of the search's tokens, under the toolbar (lot E-15).
+pub const FILTER_BAR_HEIGHT: f32 = 44.0;
+/// Its choice of where the search looks.
+pub const SCOPE_WIDTH: f32 = 280.0;
 /// The list's triangles (lot E-13d): their side, and the step to the right of each level.
 pub const DISCLOSURE: f32 = 14.0;
 pub const DISCLOSURE_INDENT: f32 = 18.0;

@@ -2806,3 +2806,75 @@ fn the_grid_shows_the_thumbnails_of_what_is_in_sight() {
         assert!(snapshot.matches_image(&path).expect("writing the capture"));
     }
 }
+
+/// Lot E-15: the search's tokens keep a kind, a date, a size; the search reaches the
+/// subfolders when asked; Escape forgets it all. Captures at two sizes
+/// (`evidence-captures/tokens-*`).
+#[test]
+fn the_search_tokens_narrow_and_reach_the_subfolders() {
+    use crate::app::{Command, Token};
+    use crate::filter::{DateFilter, KindFilter, Scope, SizeFilter};
+    let _theme = crate::testing::in_theme(Theme::Dark);
+    let mut bench = views_bench("tokens", 0);
+    let project = bench.path("projet");
+    fs::write(project.join("vacances.jpg"), "x").expect("write");
+    fs::write(project.join("film.mkv"), "x").expect("write");
+    fs::write(project.join("rapport.pdf"), "x").expect("write");
+    fs::create_dir_all(project.join("dossier/archives")).expect("folders");
+    fs::write(project.join("dossier/archives/rapport-2025.pdf"), "x").expect("write");
+    bench.send(Message::Go(Location::Folder(project.join("dossier"))));
+    bench.send(Message::Back);
+    assert!(!bench.app.filter_bar_shown());
+    bench.ctrl("f");
+    assert!(bench.app.filter_bar_shown());
+    // The « Type » token: its menu stays open while kinds are checked.
+    bench.send(Message::TokenMenu(Token::Kind));
+    assert!(bench.app.menu.is_some());
+    bench.send(Message::Run(Command::FilterKind(KindFilter::Image)));
+    bench.send(Message::Run(Command::FilterKind(KindFilter::Video)));
+    assert!(bench.app.menu.is_some(), "a check box keeps the menu");
+    let mut names = bench.names();
+    names.sort_unstable();
+    assert_eq!(names, ["film.mkv", "vacances.jpg"]);
+    assert_eq!(bench.app.token_label(Token::Kind), "Type : Images, Vidéos");
+    bench.press(Named::Escape);
+    // Today, and small: both still there; large: none.
+    bench.send(Message::Run(Command::FilterDate(Some(DateFilter::Today))));
+    bench.send(Message::Run(Command::FilterSize(Some(SizeFilter::Small))));
+    assert_eq!(bench.names().len(), 2);
+    bench.send(Message::Run(Command::FilterSize(Some(SizeFilter::Large))));
+    assert!(bench.names().is_empty());
+    bench.send(Message::ClearFilters);
+    // « rapport », in the folder, then in the subfolders too.
+    bench.send(Message::Search("rapport".into()));
+    assert_eq!(bench.names(), ["rapport.pdf"]);
+    bench.send(Message::SetScope(Scope::Subfolders));
+    let mut names = bench.names();
+    names.sort_unstable();
+    assert_eq!(names, ["rapport-2025.pdf", "rapport.pdf"]);
+    bench.send(Message::Run(Command::FilterKind(KindFilter::Document)));
+    let settings = Settings {
+        fonts: typography::FONTS.map(Cow::Borrowed).to_vec(),
+        default_font: typography::UI,
+        default_text_size: Pixels(typography::UI_SIZE),
+        ..Settings::default()
+    };
+    let out = std::env::temp_dir().join("evidence-captures");
+    fs::create_dir_all(&out).expect("captures folder");
+    let renderer = std::env::var("ICED_TEST_BACKEND").unwrap_or_else(|_| "tiny-skia".into());
+    for (width, height) in [(1366.0, 768.0), (720.0, 460.0)] {
+        bench.send(Message::Resized(iced::Size::new(width, height)));
+        bench.app.settle();
+        let mut ui =
+            simulator::Simulator::with_size(settings.clone(), (width, height), bench.app.view());
+        let snapshot = ui.snapshot(&theme::window_theme()).expect("capture");
+        let path = out.join(format!("tokens-{width}.png"));
+        let _ = fs::remove_file(out.join(format!("tokens-{width}-{renderer}.png")));
+        assert!(snapshot.matches_image(&path).expect("writing the capture"));
+    }
+    // Escape forgets the search and its tokens.
+    bench.press(Named::Escape);
+    assert!(!bench.app.filter_bar_shown());
+    assert_eq!(bench.app.filters, crate::filter::Filters::default());
+    assert_eq!(bench.names().len(), 4);
+}

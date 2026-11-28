@@ -9,6 +9,7 @@ pub mod clock;
 pub mod devices;
 pub mod dnd;
 pub mod drag_image;
+pub mod filter;
 pub mod git;
 pub mod icons;
 pub mod keyring;

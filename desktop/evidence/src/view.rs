@@ -33,6 +33,7 @@ mod columns;
 mod gallery;
 mod grid;
 mod path;
+mod search;
 
 /// Vertical rule between two panels.
 fn vline<'a>() -> Element<'a, Message> {
@@ -115,6 +116,7 @@ impl App {
             self.toolbar(),
             ui::divider(),
             self.tab_bar(),
+            self.filter_bar(),
             body.height(Length::Fill),
             ui::divider(),
             self.status_bar(),
