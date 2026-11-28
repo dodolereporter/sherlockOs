@@ -76,6 +76,8 @@ pub fn shown(born: Duration, now: Duration) -> f32 {
 #[derive(Debug, Default)]
 pub struct Conversation {
     pub exchanges: Vec<Exchange>,
+    /// When its first request was asked, in seconds since 1970: the journal's filter.
+    pub started: Option<i64>,
     child: Option<Child>,
 }
 
@@ -111,6 +113,8 @@ impl Conversation {
         now: Duration,
     ) -> Option<mpsc::UnboundedReceiver<Value>> {
         let input = self.input(request);
+        self.started
+            .get_or_insert_with(appearance_config::epoch_now);
         self.exchanges.push(Exchange {
             request: request.to_owned(),
             born: now,
@@ -235,12 +239,10 @@ impl Drop for Conversation {
 /// its end), the field of the next request. `field` names the field, for the focus.
 pub fn view<'a, M: Clone + 'a>(
     conversation: &'a Conversation,
-    request: &'a str,
     model: Option<std::sync::Arc<sherlock_3d::Model>>,
     now: Duration,
-    on_input: impl Fn(String) -> M + 'a,
-    on_submit: M,
-    field: iced::widget::Id,
+    field: Field<'a, M>,
+    journal: Journal<'a, M>,
 ) -> iced::Element<'a, M> {
     use iced::widget::{Space, column, container, row, scrollable, text, text_input};
     use iced::{Alignment, Length};
@@ -267,11 +269,19 @@ pub fn view<'a, M: Clone + 'a>(
             .width(Length::Fill),
     ]
     .spacing(2);
-    let header = row![bubble, title]
-        .spacing(look::GAP)
-        .align_y(Alignment::Center)
-        .padding([0.0, look::SEARCH_PADDING])
-        .height(tokens::HEADER_HEIGHT);
+    let switch = match journal.entries {
+        Some(_) => tokens::text::CONVERSATION,
+        None => tokens::text::JOURNAL,
+    };
+    let header = row![
+        bubble,
+        title,
+        ui::secondary_button(switch, Some(journal.toggle))
+    ]
+    .spacing(look::GAP)
+    .align_y(Alignment::Center)
+    .padding([0.0, look::SEARCH_PADDING])
+    .height(tokens::HEADER_HEIGHT);
     let words = |said: &'a str, tint: color::Color| {
         text(said)
             .size(tokens::TEXT_SIZE)
@@ -337,17 +347,56 @@ pub fn view<'a, M: Clone + 'a>(
             body = body.push(words(tokens::text::THINKING, p.text_tertiary));
         }
     }
+    if let Some(entries) = journal.entries {
+        let all = journal.all;
+        let filters = row![
+            ui::chip(
+                tokens::text::THIS_CONVERSATION,
+                !all,
+                Some((journal.filter)(false))
+            ),
+            ui::chip(tokens::text::EVERYTHING, all, Some((journal.filter)(true))),
+        ]
+        .spacing(tokens::STEP_GAP);
+        let since = if all { None } else { conversation.started };
+        let mut list = column![ui::section_label(tokens::text::JOURNAL_SUBTITLE), filters]
+            .spacing(tokens::GAP)
+            .padding(tokens::PADDING);
+        let shown: Vec<_> = entries
+            .iter()
+            .filter(|e| since.is_none_or(|since| e.time >= since))
+            .collect();
+        if shown.is_empty() {
+            list = list.push(words(tokens::text::JOURNAL_EMPTY, p.text_secondary));
+        }
+        for entry in shown {
+            let line = row![
+                text(crate::journal::time(entry))
+                    .size(tokens::SMALL_SIZE)
+                    .color(p.text_tertiary)
+                    .width(tokens::JOURNAL_TIME),
+                ui::ellipsis(crate::journal::line(entry))
+                    .size(tokens::TEXT_SIZE)
+                    .width(Length::Fill),
+            ]
+            .spacing(look::GAP)
+            .align_y(Alignment::Center);
+            list = list.push(line);
+        }
+        let notes = scrollable(list).height(Length::Fill).width(Length::Fill);
+        return column![header, notes].height(Length::Fill).into();
+    }
     let talk = scrollable(body)
         .anchor_bottom()
         .height(Length::Fill)
         .width(Length::Fill);
-    let mut input = text_input(tokens::text::FIELD, request)
-        .id(field)
+    let mut input = text_input(tokens::text::FIELD, field.text)
+        .id(field.id)
         .size(look::QUERY_SIZE)
         .padding(0)
         .style(look::query);
     if !conversation.running() {
-        input = input.on_input(on_input).on_submit(on_submit);
+        input = input.on_input(field.on_input).on_submit(field.on_submit);
     }
     let ask = row![
         ui::icon(
@@ -363,6 +412,23 @@ pub fn view<'a, M: Clone + 'a>(
     .padding([0.0, look::SEARCH_PADDING])
     .height(look::SEARCH_HEIGHT);
     column![header, talk, ask].height(Length::Fill).into()
+}
+
+/// The field of the next request: its text, its messages, its id for the focus.
+pub struct Field<'a, M> {
+    pub text: &'a str,
+    pub on_input: Box<dyn Fn(String) -> M + 'a>,
+    pub on_submit: M,
+    pub id: iced::widget::Id,
+}
+
+/// The journal in the panel (lot A-19d): its entries when it shows, newest first, whether all
+/// of them show or those of the conversation, and the messages of its buttons.
+pub struct Journal<'a, M> {
+    pub entries: Option<&'a [crate::journal::Entry]>,
+    pub all: bool,
+    pub toggle: M,
+    pub filter: Box<dyn Fn(bool) -> M + 'a>,
 }
 
 /// The program of Sherlock's service: beside the session's programs, or in the `PATH`.
