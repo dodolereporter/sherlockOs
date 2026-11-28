@@ -41,18 +41,28 @@ pub enum Part {
     Dim,
     Highlight,
     Label,
+    /// The « × » of the window under the pointer (lot D-33c).
+    CloseButton,
     MiniBar,
     /// Mission Control: the background, the border and the name of the thumbnail of a
     /// workspace, by its index.
     Thumbnail(usize),
     ThumbnailBorder(usize),
     ThumbnailLabel(usize),
+    /// The « × » of a thumbnail under the pointer, and the « + » after the thumbnails (lot
+    /// D-33c).
+    ThumbnailClose(usize),
+    AddWorkspace,
     /// The on-screen display of the media keys (lot D-35).
     Osd,
     /// The screenshot tool (lots D-35c, D-35e): its shapes (dim, area, handles, toolbar,
     /// buttons) and its texts, by their order.
     CaptureShape(usize),
     CaptureLabel(usize),
+    /// The thumbnail of the last screenshot and its outline, the loupe of the tool.
+    CaptureThumbnail,
+    CaptureThumbnailShadow,
+    CaptureLoupe,
     /// The ring of a click shown (lot C-01), by its number.
     Click(u64),
     /// The background of a locked screen, and the pills of the rescue screen, by their index

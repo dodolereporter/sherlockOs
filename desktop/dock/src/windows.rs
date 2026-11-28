@@ -51,6 +51,9 @@ pub struct Window {
     /// When it last got the keyboard, counted by the source: higher is more recent, 0 for a
     /// window not seen active since the source started.
     pub recency: u64,
+    /// Asked to come forward without the right to take the keyboard (lot Q-52): its icon
+    /// bounces a few times.
+    pub attention: bool,
 }
 
 impl Window {
@@ -77,7 +80,7 @@ pub struct Windows {
     /// The source can open App Expose on some windows (`show_windows`, version 4 of the shell
     /// protocol).
     pub expose: bool,
-    /// The source can force an application to quit (`kill`, version 5 of the shell protocol).
+    /// The source can force an application to quit (`kill`, version 6 of the shell protocol).
     pub force: bool,
 }
 
@@ -638,6 +641,7 @@ impl Toplevels {
                     activated: t.activated,
                     minimized: t.minimized,
                     recency: t.recency,
+                    attention: false,
                 })
                 .collect(),
             controllable: true,

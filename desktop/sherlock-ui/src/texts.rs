@@ -159,6 +159,8 @@ pub mod evidence {
     pub const GO_TO_FOLDER_MENU: &str = "Aller au dossier…";
     pub const EDIT_PATH: &str = "Saisir un chemin";
     pub const GO: &str = "Aller";
+    pub const RECENT_FOLDERS: &str = "Récents";
+    pub const SEARCH: &str = "Rechercher";
     /// A file whose name hides what it is (lot E-06): « malgré son nom en .pdf, ce fichier est
     /// un programme ».
     pub fn disguised(extension: &str, real: &str) -> String {
@@ -308,6 +310,8 @@ pub mod evidence {
     pub const MENU_WINDOW: &str = "Fenêtre";
     pub const PARENT_FOLDER: &str = "Dossier parent";
     pub const SHOW_PREVIEW: &str = "Aperçu";
+    /// The toolbar button that shows or hides the preview (lot E-08).
+    pub const PREVIEW_BUTTON: &str = "Afficher ou masquer l'aperçu (Ctrl+Alt+P)";
     pub const REFRESH: &str = "Actualiser";
     pub const SELECT_ALL: &str = "Tout sélectionner";
     pub const CLOSE_WINDOW: &str = "Fermer la fenêtre";
@@ -382,6 +386,23 @@ pub mod evidence {
         }
     }
     pub const DONE: &str = "C'est fait.";
+    /// Copies and moves: stopped, and the question on taken names (lot E-11).
+    pub const STOPPED: &str = "Arrêté. Ce qui était en cours d'écriture a été retiré.";
+    pub const STOP: &str = "Arrêter";
+    pub fn taken_question(count: usize, first: &str) -> String {
+        match count {
+            1 => format!("« {first} » existe déjà ici."),
+            n => format!(
+                "« {first} » et {} autres éléments existent déjà ici.",
+                n - 1
+            ),
+        }
+    }
+    pub const TAKEN_DETAIL: &str =
+        "Ton choix vaut pour tous. Un élément remplacé va à la corbeille.";
+    pub const REPLACE: &str = "Remplacer";
+    pub const KEEP_BOTH: &str = "Garder les deux";
+    pub const SKIP: &str = "Ignorer";
     pub const PATH_COPIED: &str = "Chemin copié.";
     pub const TRASH_EMPTIED: &str = "La corbeille est vide.";
 

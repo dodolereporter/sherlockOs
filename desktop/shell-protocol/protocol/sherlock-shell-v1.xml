@@ -28,10 +28,11 @@
 
     Version 2 adds the snapped value of output_state. Version 3 adds the global menu: the
     app_menu event of a window, and the register_app_menu and unregister_app_menu requests.
-    Version 4 adds show_windows, for App Expose. Version 5 adds kill, to force an application to quit.
+    Version 4 adds show_windows, for App Expose. Version 5 adds the attention state of a window.
+    Version 6 adds kill, to force an application to quit.
   </description>
 
-  <interface name="sherlock_shell_manager_v1" version="5">
+  <interface name="sherlock_shell_manager_v1" version="6">
     <description summary="list of the windows and state of the screens">
       Once bound, the compositor sends a toplevel event for every window that shows content,
       with its properties, then an output event for every screen, then done. After that, it
@@ -135,7 +136,7 @@
     </event>
   </interface>
 
-  <interface name="sherlock_shell_toplevel_v1" version="5">
+  <interface name="sherlock_shell_toplevel_v1" version="6">
     <description summary="a window">
       One window, Wayland or X11. Its events come in any order between two done events of the
       manager. The id comes first, once. A window on a workspace that is not active keeps its
@@ -174,7 +175,7 @@
       </description>
     </request>
 
-    <request name="kill" since="5">
+    <request name="kill" since="6">
       <description summary="force the application of the window to quit">
         The compositor sends SIGKILL to the process of the window's client: the one its
         connection gives (SO_PEERCRED), never a number the client chose. The application
@@ -233,6 +234,7 @@
       <entry name="snapped" value="3" summary="placed in a half or a quarter of its screen"/>
       <entry name="minimized" value="4" summary="minimized: not shown"/>
       <entry name="activated" value="5" summary="the active window, the last one given the keyboard"/>
+      <entry name="attention" value="6" summary="asked to come forward without the right to take the keyboard: the shell shows it, until it gets the keyboard" since="5"/>
     </enum>
 
     <event name="state">

@@ -89,7 +89,7 @@ pub struct Abilities {
     pub autostart: Option<bool>,
     /// Evidence is installed and the desktop file is known: « Afficher dans Evidence ».
     pub evidence: bool,
-    /// The source can force its windows' process to quit (`sherlock_shell_v1` version 5).
+    /// The source can force its windows' process to quit (`sherlock_shell_v1` version 6).
     pub force: bool,
 }
 
@@ -413,7 +413,7 @@ mod tests {
             .collect();
         assert_eq!(groups, [2, 3, 7]);
         // Windows a source cannot act on are listed, disabled, and their actions too; without
-        // version 5 of the shell protocol, « Forcer à quitter » is off.
+        // version 6 of the shell protocol, « Forcer à quitter » is off.
         let lines = entries(APP, &windows, &[]);
         assert!(!lines[0].enabled && !lines[8].enabled && !lines[9].enabled);
         let lines = entries(

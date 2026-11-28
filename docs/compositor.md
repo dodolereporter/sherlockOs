@@ -396,7 +396,7 @@ sees `wayland-2` and not `wayland-2-shell` (see ADR 0021).
 | Object | Requests | Events |
 | --- | --- | --- |
 | `sherlock_shell_manager_v1` | `destroy`, `show_windows` (window ids, version 4: App Expose), `register_app_menu` (window id, process, bus name, path), `unregister_app_menu` (bus name, path) | `toplevel` (a new window), `output` (name, state of a screen), `output_removed`, `done` |
-| `sherlock_shell_toplevel_v1` | `activate`, `minimize`, `close`, `kill` (version 5), `move_to_workspace` (workspace id), `set_rectangle` (screen name, x, y, width, height), `destroy` | `id`, `title`, `app_id`, `state`, `output`, `workspace` (id), `geometry`, `app_menu` (bus name, path), `closed` |
+| `sherlock_shell_toplevel_v1` | `activate`, `minimize`, `close`, `kill` (version 6), `move_to_workspace` (workspace id), `set_rectangle` (screen name, x, y, width, height), `destroy` | `id`, `title`, `app_id`, `state`, `output`, `workspace` (id), `geometry`, `app_menu` (bus name, path), `closed` |
 
 - **Bind.** The whole state is sent right away, in the bind: every window that shows content,
   then every screen, then `done`, sent even without window nor screen. A roundtrip after the
@@ -408,7 +408,9 @@ sees `wayland-2` and not `wayland-2-shell` (see ADR 0021).
   window's center), the target of an animation rather than its steps. A minimized window
   keeps the screen and the geometry it had. Without any screen, a window stays listed with an
   empty screen name and its place in the space.
-- **States.** `maximized`, `fullscreen`, `snapped` (half or quarter), `minimized`, `activated`.
+- **States.** `maximized`, `fullscreen`, `snapped` (half or quarter), `minimized`, `activated`,
+  and from version 5 `attention` (lot Q-52, see "Activation" below); a client bound at an
+  older version never receives it.
   The active window is the last one given the keyboard: it stays active while the bar or the
   dock has the keyboard after a click on them, which is what the dock needs to choose between
   bringing an application forward and minimizing it (`docs/dock.md`, Launching).
@@ -416,12 +418,12 @@ sees `wayland-2` and not `wayland-2-shell` (see ADR 0021).
   `fullscreen` and `snapped` when such a window, not minimized and on the active workspace, is
   on it: what the bar of lot D-18b reacts to (maximized and fullscreen only), and the dock
   (all three, lot D-18d).
-- **Versions.** The global is offered at version 5. Version 2 (lot D-18d) adds `snapped` to
+- **Versions.** The global is offered at version 6. Version 2 (lot D-18d) adds `snapped` to
   the states of a screen; a client that binds version 1 never receives it: a screen with only a
   snapped window is an empty state for it, as before. Version 3 (lot D-36) adds the global menu
   (see "Global menu"): a manager bound at version 2 or less receives no `app_menu`. Version 4
-  (lot D-21c2) adds `show_windows` (see "App Expose" in Mission Control). Version 5 (lot
-  D-21i) adds `kill` on a window, the dock's « Forcer à quitter »: SIGKILL to the process of its
+  (lot D-21c2) adds `show_windows` (see "App Expose" in Mission Control). Version 5 (lot Q-52) adds
+  the `attention` state of a window. Version 6 (lot D-21i) adds `kill` on a window, the dock's « Forcer à quitter »: SIGKILL to the process of its
   client, as the connection gives it (SO_PEERCRED), never to the compositor nor to process 1;
   an X11 window, whose `_NET_WM_PID` the compositor cannot vouch for, is only asked to close.
   Only the clients of the shell socket see the global. A toplevel has the version of its
@@ -879,6 +881,33 @@ reads and sets both. Exchanges with X11 go through `X11Wm`:
   Wayland client, X11, or the compositor). `is_secret` recognizes a secret copied by a password
   manager (`x-kde-passwordManagerHint`). From X11, smithay passes on only the types with a `/`:
   that hint does not cross from an X11 application.
+## Activation (lot Q-52)
+
+An application brings its window forward: a click on its icon in the bar's notification area,
+a notification, a second launch. `State::request_activation` (`activation.rs`) decides.
+
+- **Granted:** out of its minimized state, its workspace shown, raised with the animation of
+  D-19d and given the keyboard (`State::activate`, as the dock does).
+- **Refused:** no keyboard stolen. The window asks for attention: the `attention` state of
+  `sherlock_shell_v1` (version 5; version 4 is App Expose), for the dock to show, until it gets the keyboard.
+- **Wayland, `xdg-activation-v1`.** A token is granted when it carries the serial of a press
+  (button or key, the last 32 remembered, within 10 s) that the compositor gave to the very
+  client that asks for it: the bar, after a click on an icon, asks for one and hands it to the
+  application, which activates its window with it. A token is used once and lives 10 s; one
+  without a serial, or with a serial its client never got, is refused.
+- **X11, `_NET_ACTIVE_WINDOW`.** smithay 0.7's window manager does not read it: the compositor
+  hears it as an X11 client of XWayland watching the root window's substructure
+  (`x11_activation.rs`, read in the loop, 64 requests a turn at most). `WM_CHANGE_STATE` to
+  `NormalState` (smithay's `unminimize_request`) is handled the same. A pager (source 2) is
+  obeyed; an application (source 1) when a token was granted within the last 10 s and not used
+  by another X11 request (an X11 application cannot hand the token back: the click on its tray
+  icon granted one), or when its process already has the keyboard.
+- **Tests.** `tests/shell.rs`: a token from a click on the dock brings a minimized window of
+  another workspace back; used again it does nothing; without a serial, or with another
+  client's, the window asks for attention, until it gets the keyboard. `tests/xwayland.rs`:
+  `WM_CHANGE_STATE` and `_NET_ACTIVE_WINDOW` from the application ask for attention, a pager's
+  activates.
+
 ## Drag and drop (lot D-29c)
 
 Between Wayland clients, smithay's grab (`DnDGrab`) does the protocol. The compositor adds
@@ -2542,6 +2571,10 @@ lot (`sherlock_ui::mission_control`), to review with the design.
 | --- | --- |
 | Super alone, pressed then released with nothing in between | Opens, or closes |
 | Super + Tab | Opens, or closes |
+| Ctrl + Up, F3 alone, or the Mission Control key (`XF86LaunchA`) | Opens, or closes, as on macOS (lot D-33c) |
+| Ctrl + Down | App Expose of the application in front (its windows of the active workspace), or closes (lot D-33c) |
+| An arrow, in the view | Moves the selection, drawn as under the pointer: the first one selects the window in front, the next ones the nearest window or thumbnail that way (lot D-33c) |
+| Enter or Return, in the view | Chooses the selection, as a click would |
 | Escape | Closes |
 | Three fingers up | Opens; the view follows the fingers |
 | Three fingers down | Closes; the view follows the fingers |
@@ -2556,14 +2589,23 @@ shortcuts, do not reach the client.
 
 **Following the fingers.** Once a three finger swipe picks the vertical direction (see
 "Touchpad"), the view is held where the fingers put it: 300 units up open it fully
-(`gestures::OVERVIEW_DISTANCE`), from closed, or from open going down. When the fingers lift
-past the trigger of the vertical swipe (100 units, `VERTICAL_DISTANCE`), up opens and down
-closes; short of it, or cancelled by libinput, the view goes back to where it was. Either way it
-leaves from where the fingers left it, on `mission_control::SPRING` (the snap spring). Three
+(`gestures::OVERVIEW_DISTANCE`), from closed, or from open going down. When the fingers lift,
+their velocity over the last 100 ms decides (lot D-33c): past 2 openings a second
+(`mission_control::FLICK`), the way they flicked wins, so a quick short swipe opens or closes;
+slower, the view goes where that velocity carries it in 0.2 s (`gestures::PROJECTION`, as for
+the workspaces), open past half way, closed short of it. Fingers that came back past where they
+started close it, whatever way they first went. Cancelled by libinput, the view goes back to
+where it was. It leaves from where the fingers left it, at their speed, on
+`mission_control::SPRING` (the snap spring): no stop at the release. Three
 fingers down on the desktop open nothing: they do what `swipe-down` says, nothing by default.
 
 **What it may not do.** It does not open during a move or resize gesture, nor while an anchored
 surface keeps the keyboard (a lock screen).
+
+**Since the D-33 review (lot D-33c).** Escape, or a click, while three fingers hold the view
+closes it for the rest of that swipe. A scroll or a three finger swipe while Super is held makes
+Super no longer alone. A decoration button held down when the view opens no longer acts when
+released after it. A window without content gets no miniature in a thumbnail.
 
 ### The view
 
@@ -2579,8 +2621,12 @@ surface keeps the keyboard (a lock screen).
   Nothing overlaps, and each window travels little: what is above stays above, what is on the
   left stays on the left.
 - **Each window** is drawn with its title bar (lot D-08), its border, its corners and a shadow
-  at its scale; its title is written below it, in a pill of menu glass. Under the pointer, it
-  has a border of the accent color, 3 px outside its frame (`HIGHLIGHT_WIDTH`). A maximized
+  at its scale. Under the pointer (or selected with the arrows), it has a border of the accent
+  color, 3 px outside its frame (`HIGHLIGHT_WIDTH`), its title below it in a pill of menu glass,
+  and a « × » of 24 (`CLOSE_SIZE`) on its top left corner, as in Sequoia (lot D-33c): both fade
+  in and out in 150 ms (`HOVER_FADE`); the other windows show no title. The « × » turns the red
+  of the close buttons under the pointer; a click on it asks the window to close (as its title
+  bar's button), and the view stays open: the window leaves the grid once gone. A maximized
   window gets its corners back as it shrinks.
 - **The wallpaper** is dimmed by the scrim of the theme (`palette().scrim`), more as the view
   opens. No blur: the compositor has none yet (see "What rendering does not do yet").
@@ -2589,6 +2635,14 @@ surface keeps the keyboard (a lock screen).
   workspace in small, and its name below (« Bureau 2 », `strings::mission_control`). The active
   workspace has a border of the accent color, 2 px; so has the thumbnail a dragged window is
   over. The strip comes down from above the screen as the view opens.
+- **Adding and removing workspaces** (lot D-33c). A « + » of 32 (`ADD_SIZE`) follows the
+  thumbnails, 16 after the last one, while there are fewer than 9: a click adds a workspace at
+  the end, whose thumbnail fades in over 250 ms (`ARRIVAL`). The thumbnail under the pointer
+  shows a « × » on its top left corner while another workspace remains: a click removes that
+  workspace (`State::remove_workspace`). Its windows go to the workspace before it (after it
+  for the first one), the next ones take its place and its number, and the active one stays
+  (or becomes the one the windows went to). The bar follows through `ext-workspace-v1`. The
+  number is the session's until it ends: the session's `--workspaces` is not rewritten.
 - **Animation.** Each window goes from where it is drawn on the desktop to its slot in the grid
   as the view opens, and back as it closes; the titles, the strip and the dim fade with it. A
   window chosen by a click is raised first, then every window goes back to its place.
@@ -2629,6 +2683,16 @@ everything, without its title. Dropped on a thumbnail, it moves to that workspac
 goes back to its slot. A click on a thumbnail goes to that workspace without the slide of the
 row (`State::stop_workspace_slide`): the view closes on the windows of the arriving workspace.
 The bar follows through `ext-workspace-v1`, as for any switch.
+
+**Textures (lot D-33c).** A window's title is drawn at the size it has in the grid, so its
+texture is made once, not at every frame of the opening; the textures are kept per scale (a
+thumbnail's name on two screens of different scales no longer makes its texture again at each
+frame), and Mission Control's are freed as soon as the view is no longer shown. A window shrunk
+past 1.5 texels per pixel (the grid, the thumbnails) is sampled 4 × 4 times over each pixel's
+footprint by the clip shader (`shaders/clip.frag`, with `GL_OES_standard_derivatives`; one
+sample without it): the thumbnails of the strip, shrunk some 10 times, no longer shimmer.
+
+![Mission Control at 1920 × 1080, the pointer on « Firefox »](../desktop/compositor/screenshots/mission-control-1920-dark.png)
 
 ### Input while it is open
 
@@ -2997,11 +3061,28 @@ compositor (`push_layers`), which knows the surfaces of the shell by their layer
 (`bar`, `dock`); their opacity follows. Only within 15 s after the compositor started, so that a
 bar started again later shows at once, and never with `--greeter`. A key or a click puts
 everything in place at once. The windows that open then fade in with their own opening (lot
-D-34). Not done yet: the wallpaper going from blurred at 1.05 to sharp at 1 (the compositor has
-no blur yet, lot D-37), and the windows of the last session reopened one by one.
+D-34).
+
+**The desktop revealed** (lot D-24g, `reveal_desktop`), as the curtain comes back from black at
+the opening, and as it goes up at each unlock:
+- the wallpaper comes back from a zoom of 1.05 to its size over 700 ms (`wallpaper::zoomed`,
+  grown around the center of the screen, cut by its edges), while the curtain, the blurred
+  picture of the lock, leaves it: from blurred and larger to sharp;
+- the windows shown reappear one after another, the front one first, 40 ms apart, each fading
+  in and growing as a window opens, over 250 ms; the last ones start together 500 ms after the
+  reveal at the latest, so that all is done within 800 ms (`arrival::reappear_delay`,
+  `WindowMotion::reappear`). Windows not drawn yet keep their own opening; minimized ones stay
+  in the dock; with window animations off, nothing moves.
+- A key or a click puts the windows in place at once (`end_arrival`).
+
+The blur itself is the curtain's picture fading out, not a blur radius that shrinks: the blur
+behind glass (lot D-37) applies to the surfaces that ask for it, not to the wallpaper. Not done
+yet: the windows of the last session reopened.
 
 Tests (`src/arrival.rs`): the bar starts out of the screen and is in place after the spring, the
-dock waits for its turn, and the travel of each. `tests/greeter.rs`: the session opens from
+dock waits for its turn, and the travel of each. The windows' turns and the zoom (lot D-24g); in `src/anim.rs`, a
+window hidden until its turn, then fading in, and a key ending it; `tests/session_lock.rs`, once
+unlocked, the window reappearing and the wallpaper zoomed, both done 800 ms later. `tests/greeter.rs`: the session opens from
 black, through the curtain, to the desktop. `tests/curtain.rs` draws the boards of the opening
 (6 frames) and of the lock (8 frames) with Mesa's software renderer, in `target/tmp/curtain/`.
 

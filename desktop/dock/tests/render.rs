@@ -581,3 +581,93 @@ fn the_applications_button_comes_first() {
     let ui = Simulator::with_size(dock::settings(), size(&dock), on_desktop(dock.view_dock()));
     assert!(capture(ui, "dock-applications").expect("screenshot written") > 2_000);
 }
+
+/// Lot D-21l: on a screen too narrow for its icons, the dock shrinks them and its surface stays
+/// inside the screen, 8 from each end; on 1920 it keeps its size. `dock-fitted-1920`,
+/// `dock-fitted-520`.
+#[test]
+fn the_dock_shrinks_to_fit_a_narrow_screen() {
+    use dock::app::Screen;
+    use iced::window::Id;
+    for width in [1920, 520] {
+        let mut dock = sample();
+        let id = Id::unique();
+        let _ = dock.update(Message::Surface(id));
+        let _ = dock.update(Message::Screen(
+            id,
+            Some(Screen {
+                name: Some(String::from("eDP-1")),
+                size: Some((width, 800)),
+            }),
+        ));
+        let _ = dock.tick(Duration::from_secs(5));
+        let room = width as f32 - 2.0 * sherlock_ui::dock::SCREEN_ROOM;
+        assert!(
+            dock.surface_size.width <= room,
+            "{width}: {:?}",
+            dock.surface_size
+        );
+        if width == 1920 {
+            assert_eq!(dock.geometry, dock.base);
+        } else {
+            assert!(dock.geometry.icon < dock.base.icon);
+        }
+        let ui = Simulator::with_size(dock::settings(), size(&dock), on_desktop(dock.view_dock()));
+        let written = capture(ui, &format!("dock-fitted-{width}")).expect("capture");
+        assert!(written > 1_000);
+    }
+}
+
+/// Lot D-41d: an application dragged from the Applications view opens a hole among the pinned
+/// icons under the pointer, moves it, closes it out of the dock, and is pinned where it is
+/// dropped. `dock-hole`, `dock-dropped`.
+#[test]
+fn an_application_dragged_from_the_view_opens_a_hole_and_is_pinned() {
+    use dock::dnd::Event;
+    use dock::items::{HOLE, Kind};
+    let _theme = in_theme(Theme::Dark);
+    let mut dock = sample();
+    let _ = dock.tick(Duration::from_secs(5));
+    let (files, terminal) = (icon_center(&dock, 0), icon_center(&dock, 1));
+    let between = Point::new((files.x + terminal.x) / 2.0, files.y);
+    let _ = dock.update(Message::Dnd(Event::Over(between.x, between.y)));
+    assert_eq!(
+        dock.items[1].kind,
+        Kind::Hole,
+        "the hole before the terminal"
+    );
+    let _ = dock.tick(Duration::from_secs(10));
+    let ui = Simulator::with_size(dock::settings(), size(&dock), on_desktop(dock.view_dock()));
+    assert!(capture(ui, "dock-hole").expect("screenshot") > 2_000);
+    // Out of the dock's band: it closes.
+    let _ = dock.update(Message::Dnd(Event::Over(between.x, 0.0)));
+    assert!(dock.items.iter().all(|i| i.kind != Kind::Hole));
+    let _ = dock.update(Message::Dnd(Event::Over(between.x, between.y)));
+    let _ = dock.update(Message::Dnd(Event::Dropped(
+        "org.example.OtherBrowser".into(),
+    )));
+    assert_eq!(dock.pinned[1], "org.example.OtherBrowser");
+    assert!(dock.pinned.iter().all(|p| p != HOLE), "never kept");
+    let _ = dock.tick(Duration::from_secs(15));
+    let ui = Simulator::with_size(dock::settings(), size(&dock), on_desktop(dock.view_dock()));
+    assert!(capture(ui, "dock-dropped").expect("screenshot") > 2_000);
+    // Dropped again where it already is: it stays pinned once.
+    let _ = dock.update(Message::Dnd(Event::Over(between.x, between.y)));
+    let _ = dock.update(Message::Dnd(Event::Dropped(
+        "org.example.OtherBrowser".into(),
+    )));
+    let count = dock
+        .pinned
+        .iter()
+        .filter(|p| *p == "org.example.OtherBrowser")
+        .count();
+    assert_eq!(count, 1);
+    // Something unknown: the hole closes, nothing is pinned.
+    let _ = dock.update(Message::Dnd(Event::Over(between.x, between.y)));
+    let _ = dock.update(Message::Dnd(Event::Dropped("not.installed".into())));
+    assert!(
+        dock.pinned
+            .iter()
+            .all(|p| p != HOLE && p != "not.installed")
+    );
+}

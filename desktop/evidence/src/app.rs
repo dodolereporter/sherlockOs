@@ -35,7 +35,7 @@ use sherlock_ui::motion::{self, Animation, Fade};
 mod network;
 mod path;
 mod popup;
-pub use path::PathEdit;
+pub use path::{FoldedMenu, PathEdit};
 pub use popup::Popups;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -67,6 +67,7 @@ pub const SEARCH: &str = "search";
 pub const RENAME: &str = "rename";
 pub const CHOOSER_SEARCH: &str = "chooser-search";
 pub const PATH: &str = "path";
+pub const SUGGESTIONS: &str = "path-suggestions";
 
 /// What the application receives at startup.
 #[derive(Debug, Clone)]
@@ -172,6 +173,8 @@ pub enum Command {
     DeviceEject,
     /// Sort by a column, from the « Trier par » submenu: the same column again reverses.
     SortBy(Column),
+    /// The large preview of the item under the cursor, opened or closed (lot E-12).
+    QuickLook,
     /// The list view, from the « Vue » submenu: the only view so far.
     ViewList,
     /// The path bar as a field (Ctrl+L), and the « Aller au dossier » sheet (Maj+Ctrl+G).
@@ -302,6 +305,13 @@ pub enum Message {
     ConfirmEmpty,
     CancelEmpty,
     Done(Outcome),
+    /// The names a paste would take, found off the interface thread: the items, where they
+    /// go, whether they move, and the names already there (lot E-11).
+    Taken(Vec<PathBuf>, PathBuf, bool, Vec<String>),
+    /// The choice for the taken names; none: the paste is called off.
+    TakenChoice(Option<crate::transfer_job::Taken>),
+    /// Stop the copy or the move under way.
+    StopTransfer,
     Git(PathBuf, Option<Repo>),
     Window(WindowAction),
     /// A frame of the window, during an animation or a measurement.
@@ -369,6 +379,14 @@ pub enum Message {
     WindowClosed(window::Id),
     /// Escape, taken by a focused field: it still closes the path field.
     Escaped,
+    /// The menu of the folders folded behind « … », opened or closed.
+    Folded(bool),
+    /// The completion list scrolled to this offset.
+    PathScrolled(f32),
+    /// A recent folder clicked in the « Aller au dossier » sheet.
+    PathRecent(usize),
+    /// The search, folded to its icon in a narrow window, opens.
+    OpenSearch,
 }
 
 /// What was asked of a device.
@@ -408,6 +426,12 @@ pub struct App {
     pub(crate) sort: Sort,
     pub(crate) show_hidden: bool,
     pub(crate) show_preview: bool,
+    /// The preview sliding in or out (lot E-08), and the file that remembers it.
+    pub(crate) preview_slide: Option<Fade>,
+    prefs: Option<PathBuf>,
+    /// The large preview is open, and its zoom in or out (lot E-12).
+    pub(crate) looking: bool,
+    pub(crate) look_fade: Option<Fade>,
     /// The preview was asked for while the width had folded it: it stays, the columns fold.
     pub(crate) preview_pinned: bool,
     pub(crate) search: String,
@@ -452,6 +476,9 @@ pub struct App {
     pub(crate) preview_fade: Option<Fade>,
     /// Volumes of the sidebar, and the one whose menu is open.
     pub(crate) volumes: Vec<Volume>,
+    /// The copy or move under way, and the paste waiting for a choice on taken names.
+    pub(crate) progress: Option<Arc<crate::transfer_job::Progress>>,
+    pub(crate) pending_paste: Option<(Vec<PathBuf>, PathBuf, bool, Vec<String>)>,
     /// The servers of the network, and the folders of those connected, by host.
     pub(crate) servers: Vec<crate::network::Server>,
     pub(crate) mounted: HashMap<String, PathBuf>,
@@ -484,6 +511,12 @@ pub struct App {
     /// The folder the completion last read, and the number of the last read asked.
     folders: Option<crate::pathbar::Folders>,
     folders_generation: u64,
+    /// The menu of the folded folders, the completion list's scroll, the folders last
+    /// reached by the field (with their labels), and the search opened from its icon.
+    pub(crate) folded: FoldedMenu,
+    suggest_offset: f32,
+    pub(crate) recent: Vec<(PathBuf, String)>,
+    pub(crate) search_open: bool,
 }
 
 impl App {
@@ -507,6 +540,10 @@ impl App {
             sort: Sort::default(),
             show_hidden: false,
             show_preview: true,
+            preview_slide: None,
+            prefs: None,
+            looking: false,
+            look_fade: None,
             preview_pinned: false,
             search: String::new(),
             repo: None,
@@ -536,6 +573,8 @@ impl App {
             content_fade: None,
             preview_fade: None,
             volumes: Vec::new(),
+            progress: None,
+            pending_paste: None,
             servers: Vec::new(),
             mounted: HashMap::new(),
             device_menu: None,
@@ -555,8 +594,22 @@ impl App {
             suggest_fade: None,
             folders: None,
             folders_generation: 0,
+            folded: FoldedMenu::default(),
+            suggest_offset: 0.0,
+            recent: Vec::new(),
+            search_open: false,
         };
         app.probe = app.config.measure.clone().map(Probe::new);
+        // The preview as it was left (lot E-08): a file of a few bytes, read before the first
+        // frame so that the window opens as it was.
+        app.prefs = app
+            .config
+            .xdg
+            .as_ref()
+            .map(|dirs| crate::prefs::path(&dirs.config_home));
+        if let Some(shown) = app.prefs.as_deref().and_then(crate::prefs::read_preview) {
+            app.show_preview = shown;
+        }
         let task = app.load(&[]);
         let devices = app.refresh_devices();
         let catalog = app.load_catalog();
@@ -621,7 +674,9 @@ impl App {
         } else {
             Subscription::none()
         };
-        Subscription::batch([closed, events, frames, devices, network, appearance, menubar])
+        Subscription::batch([
+            closed, events, frames, devices, network, appearance, menubar,
+        ])
     }
 
     /// Asks the Wayland daemon for the window (`shell`), and keeps its id.
@@ -679,6 +734,57 @@ impl App {
         !self.future.is_empty()
     }
 
+    /// Shows or hides the preview, sliding, and remembers it off the interface thread.
+    fn toggle_preview(&mut self) -> Task<Message> {
+        let from = self.preview_level();
+        self.show_preview = !self.show_preview;
+        self.preview_pinned = false;
+        let now = self.now();
+        let to = if self.panes().preview { 1.0 } else { 0.0 };
+        self.preview_slide = Some(Fade::new(from, to, now, more::PREVIEW_SLIDE));
+        let Some(path) = self.prefs.clone() else {
+            return Task::none();
+        };
+        let shown = self.show_preview;
+        Task::perform(
+            async move {
+                if let Err(error) = crate::prefs::write_preview(&path, shown) {
+                    tracing::warn!(%error, "the preview choice is not remembered");
+                }
+            },
+            |()| Message::Inert,
+        )
+    }
+
+    /// How far the preview is in, from 0 (hidden) to 1 (shown).
+    pub(crate) fn preview_level(&self) -> f32 {
+        // What the width leaves room for (E-05), at rest.
+        let rest = if self.panes().preview { 1.0 } else { 0.0 };
+        self.preview_slide
+            .as_ref()
+            .map_or(rest, |f| f.value(self.now()))
+    }
+
+    /// Opens or closes the large preview, zooming in or out. It opens on one item only.
+    fn quick_look(&mut self, open: bool) {
+        if open && self.single().is_none() {
+            return;
+        }
+        let now = self.now();
+        let from = self.look_level();
+        self.looking = open;
+        let to = if open { 1.0 } else { 0.0 };
+        self.look_fade = Some(Fade::new(from, to, now, more::QUICK_LOOK_ZOOM));
+    }
+
+    /// How far the large preview has come in, from 0 to 1.
+    pub(crate) fn look_level(&self) -> f32 {
+        let rest = if self.looking { 1.0 } else { 0.0 };
+        self.look_fade
+            .as_ref()
+            .map_or(rest, |f| f.value(self.now()))
+    }
+
     /// Animation time.
     pub fn now(&self) -> Duration {
         self.origin.elapsed()
@@ -696,9 +802,13 @@ impl App {
             || spring(&self.highlight, motion::GEOMETRY_PRECISION)
             || fade(&self.content_fade)
             || fade(&self.preview_fade)
+            || fade(&self.preview_slide)
+            || fade(&self.look_fade)
+            || self.progress.is_some()
             || self.dnd_waiting()
             || fade(&self.path_fade)
             || fade(&self.suggest_fade)
+            || fade(&self.folded.fade)
             || self
                 .path_edit
                 .as_ref()
@@ -711,9 +821,12 @@ impl App {
         let now = self.now();
         self.content_fade = None;
         self.preview_fade = None;
+        self.preview_slide = None;
+        self.look_fade = None;
         self.path_fade = None;
         self.path_leaving = None;
         self.suggest_fade = None;
+        self.folded.fade = None;
         if let Some(edit) = &mut self.path_edit {
             edit.shake = None;
         }
@@ -747,6 +860,9 @@ impl App {
         );
         if elsewhere && self.path_edit.as_ref().is_some_and(|e| !e.sheet) {
             self.close_path_edit();
+        }
+        if elsewhere {
+            self.folded_menu(false);
         }
         let task = self.handle(message);
         self.sync_menubar();
@@ -974,8 +1090,35 @@ impl App {
                 return self.empty_trash();
             }
             Message::CancelEmpty => self.confirm_empty = false,
+            Message::Taken(sources, dest, moving, names) => {
+                if names.is_empty() {
+                    return self.transfer(
+                        sources,
+                        dest,
+                        moving,
+                        crate::transfer_job::Taken::KeepBoth,
+                    );
+                }
+                self.pending_paste = Some((sources, dest, moving, names));
+            }
+            Message::TakenChoice(choice) => {
+                if let (Some(taken), Some((sources, dest, moving, _))) =
+                    (choice, self.pending_paste.take())
+                {
+                    return self.transfer(sources, dest, moving, taken);
+                }
+                self.pending_paste = None;
+            }
+            Message::StopTransfer => {
+                if let Some(progress) = &self.progress {
+                    progress.stop();
+                }
+            }
             Message::Done(outcome) => {
                 self.busy = self.busy.saturating_sub(1);
+                if self.busy == 0 {
+                    self.progress = None;
+                }
                 let select = match outcome {
                     // A quiet operation (rename, new folder) leaves no message behind.
                     Ok((text, select)) => {
@@ -1069,7 +1212,17 @@ impl App {
                 return self.path_folders(generation, folders);
             }
             Message::PathResolved(path, found) => return self.path_resolved(path, found),
-            Message::Escaped => self.close_path_edit(),
+            Message::Escaped => {
+                self.close_path_edit();
+                self.folded_menu(false);
+            }
+            Message::Folded(open) => self.folded_menu(open),
+            Message::PathScrolled(offset) => self.suggest_offset = offset,
+            Message::PathRecent(index) => return self.path_recent(index),
+            Message::OpenSearch => {
+                self.search_open = true;
+                return operation::focus(SEARCH);
+            }
             Message::Loaded(generation, result) => {
                 crate::startup::first(&LISTED, "folder listed");
                 if generation == self.generation {
@@ -1136,12 +1289,18 @@ impl App {
         if self.preview_fade.as_ref().is_some_and(|f| f.is_done(t)) {
             self.preview_fade = None;
         }
+        if self.preview_slide.as_ref().is_some_and(|f| f.is_done(t)) {
+            self.preview_slide = None;
+        }
         if self.path_fade.as_ref().is_some_and(|f| f.is_done(t)) {
             self.path_fade = None;
             self.path_leaving = None;
         }
         if self.suggest_fade.as_ref().is_some_and(|f| f.is_done(t)) {
             self.suggest_fade = None;
+        }
+        if self.folded.fade.as_ref().is_some_and(|f| f.is_done(t)) {
+            self.folded.fade = None;
         }
         let Some(probe) = &mut self.probe else {
             return scroll;
@@ -1285,6 +1444,7 @@ impl App {
 
     fn reset_and_load(&mut self, select: &[PathBuf]) -> Task<Message> {
         self.search.clear();
+        self.search_open = false;
         self.clear_selection();
         self.repo = None;
         self.notice = None;
@@ -1953,6 +2113,25 @@ impl App {
         if self.menu.is_some() {
             return self.menu_key(&key);
         }
+        // The large preview: Space or Escape close it, the arrows go to the next item and it
+        // follows (lot E-12).
+        if self.looking {
+            match key.as_ref() {
+                Key::Named(Named::Space | Named::Escape) => {
+                    self.quick_look(false);
+                    return Task::none();
+                }
+                Key::Named(Named::ArrowDown | Named::ArrowRight) => {
+                    let to = self.selection.cursor().map_or(0, |c| c + 1);
+                    return self.move_cursor(to.min(self.entries.len().saturating_sub(1)), false);
+                }
+                Key::Named(Named::ArrowUp | Named::ArrowLeft) => {
+                    let to = self.selection.cursor().map_or(0, |c| c.saturating_sub(1));
+                    return self.move_cursor(to, false);
+                }
+                _ => return Task::none(),
+            }
+        }
         if self.path_edit.is_some() {
             return self.path_key(&key, modifiers);
         }
@@ -1987,7 +2166,8 @@ impl App {
             Key::Named(Named::F2) => self.run(Command::Rename),
             Key::Named(Named::F5) => self.run(Command::Refresh),
             Key::Named(Named::Delete) => self.run(Command::Trash),
-            Key::Named(Named::Space) => self.run(Command::TogglePreview),
+            // Space opens the large preview, as Quick Look in the Finder (lot E-12).
+            Key::Named(Named::Space) => self.run(Command::QuickLook),
             Key::Named(Named::ContextMenu) => {
                 self.open_menu_at_cursor();
                 Task::none()
@@ -1997,11 +2177,17 @@ impl App {
                 Task::none()
             }
             Key::Named(Named::Escape) => {
+                self.search_open = false;
+                self.folded_menu(false);
                 self.search.clear();
                 self.notice = None;
                 self.refilter();
                 self.clear_selection();
                 Task::none()
+            }
+            // As Alt+Cmd+P in the Finder (lot E-08).
+            Key::Character(c) if ctrl && modifiers.alt() && c.eq_ignore_ascii_case("p") => {
+                self.run(Command::TogglePreview)
             }
             Key::Character(c) if ctrl => match (c.to_lowercase().as_str(), shift) {
                 ("c", true) => self.run(Command::CopyPath),
@@ -2012,7 +2198,10 @@ impl App {
                 ("n", true) => self.run(Command::NewFolder),
                 ("h", _) => self.run(Command::ToggleHidden),
                 ("a", _) => self.run(Command::SelectAll),
-                ("f", _) => operation::focus(SEARCH),
+                ("f", _) => {
+                    self.search_open = true;
+                    operation::focus(SEARCH)
+                }
                 ("r", _) => self.run(Command::Refresh),
                 ("l", _) => self.run(Command::EditPath),
                 ("g", true) => self.run(Command::GoToFolder),
@@ -2103,16 +2292,18 @@ impl App {
                 self.refilter();
             }
             Command::ViewList => {}
+            Command::QuickLook => self.quick_look(!self.looking),
             Command::EditPath => return self.start_path_edit(false, None),
             Command::GoToFolder => return self.start_path_edit(true, None),
-            // Space shows a preview the width had folded, rather than hiding a hidden one.
+            // A preview the width had folded comes back, pinned, rather than a hidden one
+            // being hidden (E-05); it slides in (E-08).
             Command::TogglePreview if self.show_preview && !self.panes().preview => {
+                let from = self.preview_level();
                 self.preview_pinned = true;
+                let now = self.now();
+                self.preview_slide = Some(Fade::new(from, 1.0, now, more::PREVIEW_SLIDE));
             }
-            Command::TogglePreview => {
-                self.show_preview = !self.show_preview;
-                self.preview_pinned = false;
-            }
+            Command::TogglePreview => return self.toggle_preview(),
             Command::DeviceOpen | Command::DeviceUnmount | Command::DeviceEject => {
                 let Some(id) = self.device_menu.clone() else {
                     return Task::none();
@@ -2223,18 +2414,46 @@ impl App {
         else {
             return Task::none();
         };
-        match mode {
-            Clip::Copy => self.spawn(texts::copying(sources.len()), move || {
-                done(ops::copy_into(&sources, &dest)?)
-            }),
-            Clip::Cut => {
-                // A cut item is pasted only once.
-                self.clipboard = None;
-                self.spawn(texts::moving(sources.len()), move || {
-                    done(ops::move_into(&sources, &dest)?)
-                })
-            }
+        // A cut item is pasted only once.
+        let moving = mode == Clip::Cut;
+        if moving {
+            self.clipboard = None;
         }
+        // The names already taken there are looked for first, off the interface thread: if
+        // any, the user chooses (lot E-11).
+        Task::perform(
+            async move {
+                let names = crate::transfer_job::taken(&sources, &dest);
+                (sources, dest, names)
+            },
+            move |(sources, dest, names)| Message::Taken(sources, dest, moving, names),
+        )
+    }
+
+    /// Copies or moves with a progress the status bar shows, and that it can stop.
+    fn transfer(
+        &mut self,
+        sources: Vec<PathBuf>,
+        dest: PathBuf,
+        moving: bool,
+        taken: crate::transfer_job::Taken,
+    ) -> Task<Message> {
+        let progress = Arc::new(crate::transfer_job::Progress::default());
+        self.progress = Some(progress.clone());
+        let trash = self.config.trash.clone();
+        let text = if moving {
+            texts::moving(sources.len())
+        } else {
+            texts::copying(sources.len())
+        };
+        self.spawn(text, move || {
+            let report = if moving {
+                crate::transfer_job::move_(&sources, &dest, taken, trash.as_ref(), progress)?
+            } else {
+                crate::transfer_job::copy(&sources, &dest, taken, trash.as_ref(), progress)?
+            };
+            done(report)
+        })
     }
 
     fn new_folder(&mut self) -> Task<Message> {

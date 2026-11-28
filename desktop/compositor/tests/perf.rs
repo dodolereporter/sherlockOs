@@ -729,7 +729,7 @@ mod tests {
             Item::Shadow {
                 key, shadow, alpha, ..
             } => paint(ids, key, shadow.area, alpha),
-            Item::Wallpaper => Vec::new(),
+            Item::Wallpaper(_) => Vec::new(),
             // The window's texture, deformed over the area it sweeps.
             Item::Genie(frame) => paint(ids, frame.key, frame.area, frame.alpha),
             Item::Decoration {
@@ -739,6 +739,9 @@ mod tests {
                 key, rect, alpha, ..
             }
             | Item::Osd {
+                key, rect, alpha, ..
+            }
+            | Item::Picture {
                 key, rect, alpha, ..
             }
             | Item::Snapshot {
