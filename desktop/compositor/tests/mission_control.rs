@@ -187,6 +187,14 @@ mod tests {
     const KEY_TAB: u32 = 23;
     const KEY_ESCAPE: u32 = 9;
     const KEY_A: u32 = 38;
+    // xkb codes (evdev + 8) of left Ctrl, the arrows, Return and F3.
+    const KEY_CTRL: u32 = 37;
+    const KEY_UP: u32 = 111;
+    const KEY_LEFT: u32 = 113;
+    const KEY_RIGHT: u32 = 114;
+    const KEY_DOWN: u32 = 116;
+    const KEY_RETURN: u32 = 36;
+    const KEY_F3: u32 = 69;
 
     /// A window of the client; its buffer lives as long as it does.
     struct Shown {
@@ -426,6 +434,80 @@ mod tests {
         // Alone again, it opens; alone once more, it closes.
         h.tap(KEY_SUPER);
         h.tap(KEY_SUPER);
+        assert!(!h.state.overview_open());
+    }
+
+    /// Lot D-33c: the keys of macOS, and the arrows and Enter in the open view.
+    #[test]
+    fn ctrl_up_f3_and_ctrl_down_open_the_views_and_the_arrows_choose_a_window() {
+        let (mut h, _shown) = two_windows();
+        // Ctrl + Up opens Mission Control, and again closes it.
+        h.key(KEY_CTRL, true);
+        h.tap(KEY_UP);
+        assert!(h.state.overview_open() && h.state.overview_only().is_none());
+        h.tap(KEY_UP);
+        assert!(!h.state.overview_open());
+        // Ctrl + Down: App Expose, the windows of the application in front.
+        h.tap(KEY_DOWN);
+        assert!(h.state.overview_open() && h.state.overview_only().is_some());
+        h.tap(KEY_DOWN);
+        h.key(KEY_CTRL, false);
+        assert!(!h.state.overview_open());
+        // F3 alone opens it too.
+        h.tap(KEY_F3);
+        assert!(h.state.overview_open() && h.state.overview_only().is_none());
+        // Away from the pointer, the first arrow selects the window in front, the next ones
+        // go to their side; Enter chooses, as a click would.
+        h.state.pointer_motion((1435.0, 895.0).into(), 20);
+        assert_eq!(h.state.overview_selected(), None);
+        h.tap(KEY_RIGHT);
+        let front = Target::Window(h.window("Front"));
+        assert_eq!(h.state.overview_selected(), Some(&front));
+        h.tap(KEY_LEFT);
+        let back = Target::Window(h.window("Back"));
+        assert_eq!(h.state.overview_selected(), Some(&back));
+        // Up, to the strip of the workspaces: a thumbnail.
+        h.tap(KEY_UP);
+        assert!(matches!(
+            h.state.overview_selected(),
+            Some(Target::Workspace(_))
+        ));
+        h.tap(KEY_DOWN);
+        assert!(matches!(
+            h.state.overview_selected(),
+            Some(Target::Window(_))
+        ));
+        h.tap(KEY_LEFT);
+        h.tap(KEY_RETURN);
+        assert!(!h.state.overview_open());
+        assert_eq!(h.focused_title().as_deref(), Some("Back"));
+    }
+
+    /// D-33 review: Escape while three fingers hold the view closes it for good, and the gesture
+    /// key held during a swipe is not alone.
+    #[test]
+    fn escape_during_the_swipe_closes_the_view_for_the_rest_of_it() {
+        let (mut h, _shown) = two_windows();
+        h.state.gesture_swipe_begin(3, 0);
+        for i in 1..=10 {
+            h.state.gesture_swipe_update(i * 10, (0.0, -15.0).into());
+        }
+        assert!(h.state.overview_open());
+        h.tap(KEY_ESCAPE);
+        assert!(!h.state.overview_open());
+        for i in 11..=20 {
+            h.state.gesture_swipe_update(i * 10, (0.0, -15.0).into());
+        }
+        assert!(!h.state.overview_open(), "the same swipe opens nothing");
+        h.state.gesture_swipe_end(300, false);
+        assert!(!h.state.overview_open());
+        assert_eq!(h.focused_title().as_deref(), Some("Front"));
+        // Super held while three fingers swipe sideways, then released: no toggle.
+        h.key(KEY_SUPER, true);
+        h.state.gesture_swipe_begin(3, 400);
+        h.state.gesture_swipe_update(410, (-40.0, 0.0).into());
+        h.state.gesture_swipe_end(420, true);
+        h.key(KEY_SUPER, false);
         assert!(!h.state.overview_open());
     }
 

@@ -2567,6 +2567,10 @@ lot (`sherlock_ui::mission_control`), to review with the design.
 | --- | --- |
 | Super alone, pressed then released with nothing in between | Opens, or closes |
 | Super + Tab | Opens, or closes |
+| Ctrl + Up, F3 alone, or the Mission Control key (`XF86LaunchA`) | Opens, or closes, as on macOS (lot D-33c) |
+| Ctrl + Down | App Expose of the application in front (its windows of the active workspace), or closes (lot D-33c) |
+| An arrow, in the view | Moves the selection, drawn as under the pointer: the first one selects the window in front, the next ones the nearest window or thumbnail that way (lot D-33c) |
+| Enter or Return, in the view | Chooses the selection, as a click would |
 | Escape | Closes |
 | Three fingers up | Opens; the view follows the fingers |
 | Three fingers down | Closes; the view follows the fingers |
@@ -2589,6 +2593,11 @@ fingers down on the desktop open nothing: they do what `swipe-down` says, nothin
 
 **What it may not do.** It does not open during a move or resize gesture, nor while an anchored
 surface keeps the keyboard (a lock screen).
+
+**Since the D-33 review (lot D-33c).** Escape, or a click, while three fingers hold the view
+closes it for the rest of that swipe. A scroll or a three finger swipe while Super is held makes
+Super no longer alone. A decoration button held down when the view opens no longer acts when
+released after it. A window without content gets no miniature in a thumbnail.
 
 ### The view
 

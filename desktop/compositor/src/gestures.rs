@@ -318,6 +318,8 @@ impl State {
 
     pub fn gesture_swipe_begin(&mut self, fingers: u32, time: u32) {
         self.queue_redraw();
+        // The gesture key held during a swipe is not alone (D-33 review).
+        self.overview.cancel_tap();
         let route = match fingers {
             COMPOSITOR_FINGERS => {
                 let view = self.workspace_view(self.now());
