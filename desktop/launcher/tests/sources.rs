@@ -139,7 +139,7 @@ mod tests {
     fn launcher_on(home: &Path, clipboard: Clipboard) -> (Launcher, Arc<Record>) {
         let record = Arc::new(Record::default());
         let starts = Arc::clone(&record);
-        let spawn: app::Spawn = Arc::new(move |command: &Command| {
+        let spawn: app::Spawn = Arc::new(move |command: &Command, _: Option<&str>| {
             if let Ok(mut started) = starts.started.lock() {
                 started.push(command.clone());
             }
@@ -418,7 +418,7 @@ mod tests {
         // A launcher given no session refuses every command and stays open.
         let mut launcher = Launcher::new(
             vec![Box::new(System::default())],
-            Arc::new(|_: &Command| Ok(1)),
+            Arc::new(|_: &Command, _: Option<&str>| Ok(1)),
         );
         let _ = launcher.update(Message::Query("verrou".into()));
         enter(&mut launcher);
