@@ -1,5 +1,6 @@
 //! Captures of the moods the lock screen uses, in the round bubble, dark and light, at two
-//! sizes, and two sequences of 8 frames, eyes closing and peeking at the field below. They go
+//! sizes, and three sequences of 8 frames: eyes closing, eyes closing while the head bends
+//! toward the field below as a key is typed, and peeking at the field. They go
 //! to `target/tmp/sherlock-3d/captures/`, never into the repository.
 //!
 //! Picking the Vulkan driver changes the environment, which needs a single thread: this test
@@ -14,14 +15,17 @@ use sherlock_ui::color::{Color, Palette};
 
 type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
 
-/// Mood, seconds played, file name.
-const STATES: [(Mood, f32, &str); 5] = [
-    (Mood::Idle, 1.0, "repos"),
+/// Mood, seconds played, whether he looks at the password field, file name.
+const STATES: [(Mood, f32, bool, &str); 7] = [
+    (Mood::Idle, 1.0, false, "repos"),
     // Mid-gesture: the hand up.
-    (Mood::Wave, 0.7, "salut"),
-    (Mood::EyesClosed, 1.0, "yeux-fermes"),
-    (Mood::Peek, 1.0, "peek"),
-    (Mood::Sorry, 1.0, "desole"),
+    (Mood::Wave, 0.7, false, "salut"),
+    (Mood::EyesClosed, 1.0, false, "yeux-fermes"),
+    (Mood::Peek, 1.0, false, "peek"),
+    (Mood::Sorry, 1.0, false, "desole"),
+    // As on the lock screen: the eyes, parallel, turned a little toward the field below.
+    (Mood::Idle, 1.0, true, "repos-champ"),
+    (Mood::Peek, 1.0, true, "peek-champ"),
 ];
 /// Bubble sides in pixels: about the lock screen's at scale 1, and at scale 2.
 const SIDES: [u32; 2] = [170, 340];
@@ -55,8 +59,11 @@ fn main() -> Result {
 
     let mut renderer = Renderer::new(&device, &queue, &model, wgpu::TextureFormat::Rgba8Unorm);
     let mut eyes = Vec::new();
-    for (mood, seconds, name) in STATES {
+    for (mood, seconds, gaze, name) in STATES {
         let mut animator = Animator::new(model.clone());
+        if gaze {
+            animator.look_at(Some(Camera::UPPER_BODY.unproject(FIELD, 1.0, 4.0)));
+        }
         animator.set_mood(mood);
         for _ in 0..(seconds * 30.0).round() as usize {
             animator.advance(1.0 / 30.0);
@@ -114,15 +121,17 @@ fn main() -> Result {
     // The sequences, dark, at the larger size.
     let palette = Palette::DARK;
     let side = SIDES[1];
-    for (mood, name) in [
-        (Mood::EyesClosed, "seq-yeux-fermes"),
-        (Mood::Peek, "seq-peek"),
+    // While typing (lot D-24d), his head bends toward the field, eyes closed or peeking.
+    for (mood, gaze, name) in [
+        (Mood::EyesClosed, false, "seq-yeux-fermes"),
+        (Mood::EyesClosed, true, "seq-frappe"),
+        (Mood::Peek, true, "seq-peek"),
     ] {
         let mut animator = Animator::new(model.clone());
         for _ in 0..15 {
             animator.advance(1.0 / 30.0);
         }
-        if mood == Mood::Peek {
+        if gaze {
             let field = Camera::UPPER_BODY.unproject(FIELD, 1.0, 4.0);
             animator.look_at(Some(field));
         }

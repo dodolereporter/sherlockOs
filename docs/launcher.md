@@ -96,6 +96,39 @@ gets every key as soon as it maps, and the search field takes the focus at once.
 exactly the panel: 600 wide, as high as `launcher::panel_height(sections, rows)`, and it is
 resized (`LayoutChange`) when the number of results changes.
 
+**Every screen** (lot P-02e, L-1). The board's numbers (600 wide, 150 from the top, 9 results)
+are for the 1440 by 900 reference screen. The launcher learns the logical size of the screen of
+its surface from iced_exwlshell (`ShellEvent::WindowOutputChanged`) and `launcher::fit` places
+the panel there:
+
+- width: 600 at most, the screen's width less 16 on each side (`SCREEN_GUTTER`);
+- top: 150 at most, a sixth of the screen's height on a smaller one (`TOP_SHARE`, 150 / 900);
+- results: as many as fit, every section shown, between the top and the dock's room plus the
+  gutter, 9 at most and 1 at least. The dock's room (`launcher::dock_room`) follows the icon size
+  of `dock.conf`, read when the screen is learnt. On a screen too small even for one result, the
+  panel climbs toward the gutter.
+
+| Logical screen | Width | Top | Results |
+| --- | --- | --- | --- |
+| 1920 × 1080 (also 4K at 2) | 600 | 150 | 9 |
+| 1440 × 900 (reference) | 600 | 150 | 9 |
+| 1536 × 864 (1920 × 1080 at 1.25) | 600 | 144 | fewer |
+| 1366 × 768 | 600 | 128 | fewer |
+| 1280 × 720 (1920 × 1080 at 1.5) | 600 | 120 | fewer |
+| 853 × 533 (1280 × 800 at 1.5) | 600 | 89 | fewer |
+
+A new screen, or a new size, moves and resizes the panel (`LayoutChange` and `MarginChange` on
+its own surface, the padding of the full screen surface otherwise) and searches again with the
+new number of results. Until the screen is known, the board's place is used.
+
+Titles and subtitles of the results stay on one line, ending with « … » when they are too long
+(`ui::ellipsis`, L-2): a long file name or path never wraps in its 46 high row nor pushes the
+« Entrée » key cap out.
+
+![1920 × 1080](../desktop/launcher/screenshots/launcher-1920x1080.png)
+![1366 × 768: seven results, above the dock](../desktop/launcher/screenshots/launcher-1366x768.png)
+![1280 × 800 at 1.5 (853 × 533): three results](../desktop/launcher/screenshots/launcher-853x533.png)
+
 ### Search
 
 Every key typed in the field searches again: the first one already filters. An empty query (or
@@ -136,8 +169,8 @@ most precise answer to a query that is a calculation (and an expression rarely m
 anything else); the system commands take the place of the board's « Réglages », which have no
 source yet. A command found only by a keyword (`logout`) is a weaker guess than a file whose
 name holds the query: its section then comes after the files. A section gives 5 results at most (`launcher::SECTION_RESULTS`), and the panel 9 in
-all (`launcher::MAX_RESULTS`), which keeps it clear of the dock on the 900 high reference
-screen with five sections (tested). Sherlock's row is reserved: the sources before it never
+all (`launcher::MAX_RESULTS`) on the reference screen, fewer on a smaller one (see Surface,
+`launcher::fit`), which keeps it clear of the dock with every section (tested). Sherlock's row is reserved: the sources before it never
 take it (`Source::reserved`).
 
 ### Calculator

@@ -14,8 +14,8 @@ described in `.github/workflows/ci-rust.yml`, in two jobs side by side since lot
 
 Two jobs run side by side, each on its machine:
 
-- `checks` runs `just checks`: `fmt-check`, `check-language`, then `lint`, stopping at the first
-  one that fails. The two checks that compile nothing come first, so they fail in seconds.
+- `checks` runs `just checks`: `fmt-check`, `check-language`, `lint`, then `check-tokens`,
+  stopping at the first one that fails. The two checks that compile nothing come first, so they fail in seconds.
 - `verify` runs `just test-ci`: the tests through `cargo-nextest`, then the doc tests.
 
 | Recipe | Command | Fails if |
@@ -23,6 +23,7 @@ Two jobs run side by side, each on its machine:
 | `just fmt-check` | `cargo fmt --all -- --check` | A file does not follow `rustfmt.toml` |
 | `just check-language` | `distro/tests/check-language.py --self-test`, then `distro/tests/check-language.py` | One of the checker's own cases fails, or French is left in development text (ADR 0017) |
 | `just lint` | `cargo clippy --workspace --all-targets --all-features -- -D warnings` | Clippy or rustc emits a warning, or a lint of `[workspace.lints]` is broken |
+| `just check-tokens` | `cargo check -p sherlock-ui --no-default-features --lib` | sherlock-ui does not build without its `iced` feature, as the compositor and the configuration crates take it: `lint` builds every feature and does not see it (lot Q-53) |
 | `just test-ci` | `cargo nextest run --workspace --all-features --profile ci`, then `cargo test --workspace --all-features --doc` | A test fails or does not compile |
 
 Locally, `just verify` runs `just checks` then `just test`, the same tests through `cargo test`:
@@ -116,7 +117,7 @@ just fmt-check       # format only
 just check-language  # French left in development text
 just fmt             # fixes the format
 just lint            # clippy only
-just checks          # the three above: the CI's `checks` job
+just checks          # the above and check-tokens: the CI's `checks` job
 just test            # tests only, through cargo test
 just test-ci         # tests as the CI runs them (needs cargo-nextest)
 ```

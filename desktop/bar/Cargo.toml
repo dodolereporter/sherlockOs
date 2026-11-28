@@ -36,7 +36,8 @@ dock-config = { path = "../dock-config" }
 notifications-config = { path = "../notifications-config" }
 # prctl(PR_SET_PDEATHSIG) and kill(2): the monitoring commands must die with the bar.
 libc = "=0.2.191"
-sherlock-ui = { path = "../sherlock-ui" }
+# `layer-shell`: its glass asks the compositor for the blur behind it (lot D-37).
+sherlock-ui = { path = "../sherlock-ui", features = ["layer-shell"] }
 # Sound and brightness, shared with the media keys of the compositor (workspace crate).
 system-services = { path = "../system-services" }
 # The compositor's workspaces and windows (ADR 0021): sherlock_shell_v1 and ext-workspace-v1,
@@ -59,6 +60,9 @@ tracing-subscriber = { version = "=0.3.23", default-features = false, features =
 
 [dev-dependencies]
 iced_test = "=0.14.0"
+# Runs the tasks the bar returns, as the runtime does, for the tray click test (the version
+# iced pulls already).
+iced_runtime = "=0.14.0"
 # The real notification daemon on a private bus, for the notification centre test (workspace
 # crate).
 notifications = { path = "../notifications" }

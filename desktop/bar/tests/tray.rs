@@ -152,6 +152,9 @@ mod tests {
         fn activate(&self, x: i32, y: i32) {
             self.seen.lock().unwrap().push(format!("Activate {x} {y}"));
         }
+        fn provide_xdg_activation_token(&self, token: &str) {
+            self.seen.lock().unwrap().push(format!("Token {token}"));
+        }
         fn secondary_activate(&self, _x: i32, _y: i32) {
             self.seen
                 .lock()
@@ -331,6 +334,10 @@ mod tests {
         let _ = state.update(Message::TrayClick(key.clone(), Click::Primary));
         assert!(!state.tray_open());
         let client = bus.connect();
+        // The token of the click first, for the application to bring its window forward with
+        // (lot Q-52), then `Activate`.
+        zbus::block_on(tray::provide_token(&client, &service, &path, "click-token")).unwrap();
+        assert_eq!(app.seen.lock().unwrap().remove(0), "Token click-token");
         zbus::block_on(request.send(&client, &service, &path)).unwrap();
         let wheel = iced::mouse::ScrollDelta::Lines { x: 0.0, y: -1.0 };
         let scroll = Request::scroll(wheel).unwrap();
@@ -703,6 +710,22 @@ mod tests {
                 let _ = state.update(Message::AppMenuRead(address, 0, Ok(vpn_menu())));
                 let _ = state.update(Message::HoverEntry(0, 1));
                 let name = format!("tray-menu-{width}{suffix}");
+                let path = screen(&mut state, (width, height), &name);
+                assert!(std::fs::metadata(&path).unwrap().len() > 10_000);
+                // Every icon kept in the bar: the chevron stays, and the popup says it takes
+                // one back (Q-49).
+                let _ = state.update(Message::MenuKey(bar::menu::Key::Close));
+                let later = std::time::Instant::now() + Duration::from_secs(10);
+                let _ = state.update(Message::Frame(later));
+                let all = state
+                    .tray
+                    .shown()
+                    .map(|i| i.properties.id.clone())
+                    .collect();
+                let _ = state.update(Message::Pins(all));
+                locate_chevron(&mut state, bar_size);
+                assert!(state.tray_open() && state.tray.in_popup().next().is_none());
+                let name = format!("tray-empty-{width}{suffix}");
                 let path = screen(&mut state, (width, height), &name);
                 assert!(std::fs::metadata(&path).unwrap().len() > 10_000);
             }

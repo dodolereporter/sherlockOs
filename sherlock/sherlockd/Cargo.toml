@@ -17,11 +17,12 @@ thiserror = "=2.0.21"
 # Async runtime, already in Cargo.lock (pulled by iced). Minimal features: a single thread
 # (`rt`), `process` and `io-util` to talk to MCP servers over stdio, `io-std` to serve the proxy
 # on standard input and output, `time` for timeouts, `macros` for `#[tokio::main]`,
-# `#[tokio::test]` and `select!`.
+# `#[tokio::test]` and `select!`, `net` for the compositor's consent socket (A-11c).
 tokio = { version = "=1.54.1", default-features = false, features = [
     "io-std",
     "io-util",
     "macros",
+    "net",
     "process",
     "rt",
     "time",

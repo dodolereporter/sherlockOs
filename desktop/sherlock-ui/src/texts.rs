@@ -107,6 +107,20 @@ pub mod evidence {
     pub const TRASH: &str = "Corbeille";
     /// Devices: disks, keys, cards.
     pub const DEVICES: &str = "Appareils";
+    /// The file servers of the local network (lot E-07).
+    pub const NETWORK: &str = "Réseau";
+    pub const NETWORK_NO_GIO: &str =
+        "Pour te connecter à un serveur, il faut gvfs (la commande gio), qui n'est pas installé.";
+    pub const NETWORK_CREDENTIALS: &str = "Ce serveur demande un nom et un mot de passe.";
+    pub const NETWORK_TIMEOUT: &str = "Le serveur ne répond pas.";
+    pub const NETWORK_NO_FOLDER: &str = "Le serveur est monté, mais sans dossier à ouvrir.";
+    pub fn network_failed(why: &str) -> String {
+        format!("La connexion n'a pas marché : {why}")
+    }
+    pub fn connecting(server: &str) -> String {
+        format!("Connexion à {server}…")
+    }
+    pub const DISCONNECTED: &str = "Le serveur est déconnecté.";
     pub const SYSTEM_DISK: &str = "Disque système";
     pub const MOUNT: &str = "Monter";
     pub const UNMOUNT: &str = "Démonter";
@@ -145,6 +159,23 @@ pub mod evidence {
     pub const GO_TO_FOLDER_MENU: &str = "Aller au dossier…";
     pub const EDIT_PATH: &str = "Saisir un chemin";
     pub const GO: &str = "Aller";
+    pub const RECENT_FOLDERS: &str = "Récents";
+    pub const SEARCH: &str = "Rechercher";
+    /// A file whose name hides what it is (lot E-06): « malgré son nom en .pdf, ce fichier est
+    /// un programme ».
+    pub fn disguised(extension: &str, real: &str) -> String {
+        format!("Attention : malgré son nom en .{extension}, ce fichier est {real}.")
+    }
+    pub const REAL_PROGRAM: &str = "un programme";
+    pub const REAL_PNG: &str = "une image PNG";
+    pub const REAL_JPEG: &str = "une image JPEG";
+    pub const REAL_GIF: &str = "une image GIF";
+    pub const REAL_PDF: &str = "un document PDF";
+    pub const REAL_ZIP: &str = "une archive ZIP";
+    /// Opening a program or a launcher that no application opens (lot E-06).
+    pub const IS_PROGRAM: &str = "Ce fichier est un programme. Evidence ne le lance pas : ouvre-le depuis un terminal si tu lui fais confiance.";
+    /// A rename to a name with a control character (a line feed, an escape).
+    pub const CONTROL_IN_NAME: &str = "Un nom ne peut pas contenir de caractère de contrôle.";
     pub const PATH_NOT_FOUND: &str = "Rien ne se trouve à cet endroit.";
     pub const PATH_DENIED: &str = "Tu n'as pas accès à cet endroit.";
     pub fn search_placeholder(folder: &str) -> String {
@@ -353,6 +384,23 @@ pub mod evidence {
         }
     }
     pub const DONE: &str = "C'est fait.";
+    /// Copies and moves: stopped, and the question on taken names (lot E-11).
+    pub const STOPPED: &str = "Arrêté. Ce qui était en cours d'écriture a été retiré.";
+    pub const STOP: &str = "Arrêter";
+    pub fn taken_question(count: usize, first: &str) -> String {
+        match count {
+            1 => format!("« {first} » existe déjà ici."),
+            n => format!(
+                "« {first} » et {} autres éléments existent déjà ici.",
+                n - 1
+            ),
+        }
+    }
+    pub const TAKEN_DETAIL: &str =
+        "Ton choix vaut pour tous. Un élément remplacé va à la corbeille.";
+    pub const REPLACE: &str = "Remplacer";
+    pub const KEEP_BOTH: &str = "Garder les deux";
+    pub const SKIP: &str = "Ignorer";
     pub const PATH_COPIED: &str = "Chemin copié.";
     pub const TRASH_EMPTIED: &str = "La corbeille est vide.";
 
