@@ -759,7 +759,11 @@ réseau »), which asks for a confirmation under the line, then deletes every sa
 that name (`Delete`, polkit `settings.modify.system`).
 
 **Bluetooth** (D-20d). As for the Wi-Fi, a chevron on the tile (« Appareils Bluetooth ») opens
-the list of devices (`quick/devices.rs`, services in `system/bluetooth.rs`):
+the list of devices (`quick/devices.rs`, services in `system_services::bluetooth`, shared with Control Room since D-26o): A device paired is
+renamed by its `Alias` (`bluetooth::rename`: control characters left out, 64 characters at
+most), and its alias is the name shown; `bluetooth::changes` gives a stream of what BlueZ
+announces (properties of `/org/bluez/…`, devices added and removed), for a view that follows
+them.
 
 - **« Mes appareils »**: the paired devices, the connected ones first, each with the glyph of
   its kind (headphones, mouse, keyboard, phone, computer, gamepad, else Bluetooth), from
@@ -772,7 +776,7 @@ the list of devices (`quick/devices.rs`, services in `system/bluetooth.rs`):
   `Trusted=true` and `Connect`. One device at a time; its line reads « Connexion… » or
   « Appairage… ».
 - **The agent.** For each pairing only, the bar serves `org.bluez.Agent1` at
-  `/org/sherlockos/bar/agent` and registers it (`KeyboardDisplay`), and unregisters it at the
+  `/org/sherlockos/agent` and registers it (`KeyboardDisplay`), and unregisters it at the
   end, whatever the end. It answers BlueZ alone: the unique name that owns `org.bluez`, read
   with `GetNameOwner` when the agent is registered, compared with the sender of every call; and
   about the device being paired alone. Anything else gets `org.bluez.Error.Rejected`. Its

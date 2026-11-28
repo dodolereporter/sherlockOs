@@ -10,6 +10,7 @@
 
 pub mod audio;
 pub mod backlight;
+pub mod bluetooth;
 pub mod keyboard;
 pub mod mpris;
 pub mod names;

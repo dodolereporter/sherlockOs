@@ -7,12 +7,12 @@
 //! Each call takes the connection it goes through, so that the tests run them on a private
 //! bus against fake services.
 
-pub mod bluetooth;
 pub mod network;
 pub mod power;
 
-// Sound and brightnesses are shared with the media keys of the compositor (lots D-35, D-35d).
-pub use system_services::{Problem, Result, audio, backlight, keyboard, watch};
+// Sound and brightnesses are shared with the media keys of the compositor (lots D-35, D-35d),
+// Bluetooth with Control Room (lot D-26o).
+pub use system_services::{Problem, Result, audio, backlight, bluetooth, keyboard, watch};
 
 use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
