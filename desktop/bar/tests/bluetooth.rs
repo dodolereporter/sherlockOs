@@ -160,6 +160,8 @@ mod tests {
         connected: bool,
         trusted: bool,
         answers: bool,
+        /// Set by `rename`: BlueZ's alias, the name until then.
+        alias: Option<String>,
     }
 
     impl Gadget {
@@ -172,6 +174,7 @@ mod tests {
                 connected: false,
                 trusted: paired,
                 answers: true,
+                alias: None,
             }
         }
     }
@@ -186,6 +189,16 @@ mod tests {
         #[zbus(property)]
         fn icon(&self) -> String {
             self.icon.to_owned()
+        }
+
+        #[zbus(property)]
+        fn alias(&self) -> String {
+            self.alias.clone().unwrap_or_else(|| self.name.to_owned())
+        }
+
+        #[zbus(property)]
+        fn set_alias(&mut self, alias: String) {
+            self.alias = Some(alias);
         }
 
         #[zbus(property)]
@@ -545,6 +558,39 @@ mod tests {
         assert!(read.devices.iter().all(|d| d.path != MOUSE));
         let path = ObjectPath::try_from(HEADSET).unwrap();
         assert_eq!(path.as_str(), HEADSET);
+    }
+
+    /// D-26o: a paired device renamed shows its new name; the name is cleaned and bounded.
+    #[test]
+    fn a_device_is_renamed() {
+        let mut bus = Bus::start("rename");
+        let state = Shared::default();
+        bluez(&mut bus, &state);
+        let client = bus.connect();
+        let long = format!("Souris\u{7} du bureau {}", "x".repeat(100));
+        zbus::block_on(bluetooth::rename(&client, MOUSE, &long)).unwrap();
+        let read = read(&client);
+        let mouse = read.devices.iter().find(|d| d.path == MOUSE).unwrap();
+        assert!(mouse.name.starts_with("Souris du bureau"), "{}", mouse.name);
+        assert!(mouse.name.chars().count() <= bluetooth::MAX_ALIAS_CHARS);
+    }
+
+    /// D-26o: the changes BlueZ announces reach a view that follows them.
+    #[test]
+    fn the_changes_of_bluez_are_followed() {
+        use iced::futures::StreamExt;
+        let mut bus = Bus::start("changes");
+        let state = Shared::default();
+        bluez(&mut bus, &state);
+        let client = bus.connect();
+        let mut changes = zbus::block_on(bluetooth::changes(&client)).unwrap();
+        let (sender, received) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = sender.send(zbus::block_on(changes.next()));
+        });
+        zbus::block_on(bluetooth::connect(&client, MOUSE)).unwrap();
+        let next = received.recv_timeout(Duration::from_secs(5));
+        assert_eq!(next, Ok(Some(())));
     }
 
     #[test]
