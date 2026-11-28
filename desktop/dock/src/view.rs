@@ -11,6 +11,7 @@ use sherlock_ui::{color, dock, metrics, typography};
 use crate::app::{Dock, Message, Pointer};
 use crate::items::Glyph;
 use crate::layout::{Geometry, Layout};
+use crate::stack::Presentation;
 
 impl Dock {
     pub fn view(&self, id: Id) -> Element<'_, Message> {
@@ -202,9 +203,16 @@ impl Dock {
                     .color(color::palette().text_secondary);
                 header = header.push(count);
             }
-            if let Some(count) = menu.grid {
-                let grid = self.view_grid(header.into(), count);
-                return sherlock_ui::glass::glass(grid, metrics::MENU_RADIUS);
+            if let Some((shown, count)) = menu.stack {
+                let panel = match shown {
+                    // The fan has no panel: its items rise over the dock (lot D-21k2).
+                    Presentation::Fan => {
+                        return self.view_fan(count, menu.unfold.progress(self.now));
+                    }
+                    Presentation::Grid => self.view_grid(header.into(), count),
+                    Presentation::List => self.view_list(header.into(), count),
+                };
+                return sherlock_ui::glass::glass(panel, metrics::MENU_RADIUS).into();
             }
             let mut entries: Vec<Element<'_, Message>> = vec![header.into()];
             for (index, line) in menu.entries.iter().enumerate() {
@@ -226,7 +234,7 @@ impl Dock {
             }
             let menu = ui::menu(entries, crate::menu::width(&menu.entries)).height(Length::Fill);
             // The blur behind its glass (lot D-37b).
-            sherlock_ui::glass::glass(menu, metrics::MENU_RADIUS)
+            sherlock_ui::glass::glass(menu, metrics::MENU_RADIUS).into()
         });
         // It unfolds from its icon: from the side facing the dock.
         let origin = match self.geometry.position {
@@ -235,10 +243,14 @@ impl Dock {
             Edge::Left => (0.0, 0.5),
             Edge::Right => (1.0, 0.5),
         };
-        reveal(panel)
-            .opacity(opacity)
-            .scale(menu.unfold.scale(self.now), origin)
-            .into()
+        // The fan's items come out of the icon themselves; the panels grow from it.
+        let fan = matches!(menu.stack, Some((Presentation::Fan, _)));
+        let scale = if fan {
+            1.0
+        } else {
+            menu.unfold.scale(self.now)
+        };
+        reveal(panel).opacity(opacity).scale(scale, origin).into()
     }
 }
 
@@ -254,7 +266,10 @@ impl Dock {
             .map(|(index, item)| {
                 let picture =
                     ui::icon(item.icon, dock::STACK_ICON, color::palette().text_secondary);
-                dock::stack_cell(picture, &item.name, Message::StackOpen(index))
+                pullable(
+                    index,
+                    dock::stack_cell(picture, &item.name, Message::StackOpen(index)),
+                )
             })
             .collect();
         let mut rows = iced::widget::Column::new().spacing(dock::STACK_GAP);
@@ -274,7 +289,9 @@ impl Dock {
             Trailing::None,
             Some(Message::StackFolder),
         );
-        let content = iced::widget::column![header, rows, space::vertical(), footer]
+        // Past four rows, the grid scrolls (UI-11, lot D-21k2).
+        let rows = sherlock_ui::scroll::scroll(rows).height(Length::Fill);
+        let content = iced::widget::column![header, rows, footer]
             .width(Length::Fill)
             .height(Length::Fill);
         container(content)
@@ -284,6 +301,116 @@ impl Dock {
             .style(sherlock_ui::theme::menu)
             .into()
     }
+}
+
+impl Dock {
+    /// The fan of the stack (lot D-21k2), as macOS's: « Ouvrir dans Evidence » at the top, then
+    /// its items in an arc, the first at the bottom, over the icon; each its icon and its name in
+    /// a pill on its left. They come out of the icon one after the other as `progress` goes to
+    /// 1, on the menus' spring.
+    fn view_fan(&self, count: usize, progress: f32) -> Element<'_, Message> {
+        let items = self.stack.as_ref().map_or(&[][..], |s| &s.items[..]);
+        let shown = &items[..count.min(items.len())];
+        let rows = shown.len();
+        let mut column = iced::widget::Column::new().width(Length::Fill);
+        let footer = ui::secondary_button(dock::text::OPEN_IN_EVIDENCE, Some(Message::StackFolder));
+        // Over the column, its right side on the top item's.
+        let top =
+            dock::FAN_HALF - dock::FAN_ICON / 2.0 - dock::fan_offset(rows.saturating_sub(1), rows);
+        let footer = container(footer)
+            .height(dock::STACK_FOOTER)
+            .align_right(Length::Fill)
+            .padding(iced::Padding::ZERO.right(top.max(0.0)));
+        column = column.push(footer);
+        // Top to bottom: the last of the items first, the first one nearest the icon.
+        for (index, item) in shown.iter().enumerate().rev() {
+            let picture = container(ui::icon(
+                item.icon,
+                dock::STACK_ICON,
+                color::palette().text_secondary,
+            ))
+            .center(dock::FAN_ICON)
+            .style(dock::fan_tile);
+            let name = container(
+                sherlock_ui::ellipsis::ellipsis(item.name.as_str()).size(dock::LABEL_SIZE),
+            )
+            .padding([dock::LABEL_PADDING.0, dock::LABEL_PADDING.1])
+            .max_width(dock::FAN_LABEL_MAX)
+            .style(dock::label(1.0));
+            let row = row![name, picture]
+                .spacing(dock::FAN_LABEL_GAP)
+                .align_y(Alignment::Center);
+            let button = iced::widget::button(row)
+                .padding(0)
+                .style(|_, _| iced::widget::button::Style::default())
+                .on_press(Message::StackOpen(index));
+            let button = pullable(index, button);
+            // Out of the icon: from the bottom, later for the higher rows; the spring overshoots
+            // a little past 1, then settles on it.
+            let delay = dock::FAN_STAGGER * index as f32;
+            let t = ((progress - delay) / (1.0 - delay)).max(0.0);
+            let rise = (index + 1) as f32 * dock::FAN_ROW * (1.0 - t);
+            // The icons over the dock's icon, the higher ones leaning right.
+            let right = dock::FAN_HALF - dock::FAN_ICON / 2.0 - dock::fan_offset(index, rows);
+            let placed = container(reveal(button).offset(0.0, rise).opacity(t.min(1.0)))
+                .height(dock::FAN_ROW)
+                .align_right(Length::Fill)
+                .align_y(Alignment::Center)
+                .padding(iced::Padding::ZERO.right(right));
+            column = column.push(placed);
+        }
+        container(column)
+            .padding(iced::Padding::ZERO.bottom(dock::STACK_PADDING))
+            .align_bottom(Length::Fill)
+            .into()
+    }
+
+    /// The list of the stack (lot D-21k2), as a menu: its items with their glyph, a folder
+    /// marked with a chevron and opened in Evidence, then « Ouvrir dans Evidence ».
+    fn view_list<'a>(&'a self, header: Element<'a, Message>, count: usize) -> Element<'a, Message> {
+        let items = self.stack.as_ref().map_or(&[][..], |s| &s.items[..]);
+        let mut entries = vec![header];
+        for (index, item) in items.iter().take(count).enumerate() {
+            let glyph = ui::icon(
+                item.icon,
+                metrics::ICON_SIZE,
+                color::palette().text_secondary,
+            );
+            let trailing = if item.folder {
+                Trailing::Submenu
+            } else {
+                Trailing::None
+            };
+            let line = ui::menu_item_with(
+                Some(glyph.into()),
+                &item.name,
+                trailing,
+                Some(Message::StackOpen(index)),
+            );
+            entries.push(pullable(index, line));
+        }
+        entries.push(ui::menu_separator());
+        entries.push(
+            ui::menu_item(
+                dock::text::OPEN_IN_EVIDENCE,
+                Trailing::None,
+                Some(Message::StackFolder),
+            )
+            .into(),
+        );
+        ui::menu(entries, dock::OWN_MENU_WIDTH)
+            .height(Length::Fill)
+            .into()
+    }
+}
+
+/// Item `index` of the stack's content, which can be pulled out to an application (lot D-21k2):
+/// the dock learns which item the pointer is over.
+fn pullable<'a>(index: usize, item: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
+    iced::widget::mouse_area(item)
+        .on_enter(Message::StackHover(Some(index)))
+        .on_exit(Message::StackHover(None))
+        .into()
 }
 
 fn place<'a>(content: impl Into<Element<'a, Message>>, x: f32, y: f32) -> Element<'a, Message> {
