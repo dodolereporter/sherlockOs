@@ -471,6 +471,13 @@ server's `tools/call`:
   session is the process's own (its pid and when it started), or the one the panel gives its
   conversation, through `--ask` then `--proxy --session <id>` (1 to 64 letters, digits or `-`;
   anything else is left aside); `--ask` only follows the lines of its session;
+- what the window is shown of the arguments (`Request::shown`, 224 bytes, its 4 lines of 56
+  characters) and what the journal keeps (`Request::summary`, 2 KiB) name every argument: when
+  they do not fit, each long value is cut in its middle, its start and end kept
+  (`~/Documents/a…/rapport.txt`), so that a long first value cannot push the argument that
+  matters out of sight while the consent covers it (lot A-20). Every hidden character (bidi
+  override, isolate, zero-width space) is escaped as `\u202e`: the window cannot show another
+  name than the one used;
 - `agent::execute` keeps refusing everything but read for a tool host without a broker
   (`ToolHost::consents`), as defence in depth.
 
