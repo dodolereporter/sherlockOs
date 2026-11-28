@@ -24,6 +24,9 @@ use system_services::Problem;
 use system_services::audio::{Device, Pactl};
 
 use crate::apps::{self, Choice, Kind};
+use crate::displays;
+use crate::pages::displays::{Change as DisplayChange, Displays};
+use crate::pages::network::{Change as NetworkChange, Net};
 use crate::search::{self, Hit, Page, Setting};
 use crate::settings::{File, Paths, Settings};
 use crate::sound::{self, Audio};
@@ -198,12 +201,26 @@ pub enum Message {
     SoundSet(Result<Audio, Problem>),
     Catalog(Arc<Catalog>),
     SetApp(Kind, Choice),
+    /// A settings file changed elsewhere.
+    FilesChanged,
+    /// The files as they are now, read off the interface thread.
+    Reloaded(Arc<(Settings, Vec<File>)>),
+    /// The sound devices changed elsewhere.
+    SoundChanged,
+    /// The « Réseau » page.
+    Network(NetworkChange),
+    /// Another `control-room` asked for a page: this window shows it.
+    Show(Page),
     /// Text typed in the field where the keyboard is tried.
     TryKeys(String),
     /// Whether the default application of a kind was written.
     AppWritten(Kind, bool),
+    /// The Bluetooth page: BlueZ read, an action asked or ended (lot D-26o).
+    Bluetooth(crate::bluetooth::Msg),
     /// Where the page scrolls to for the setting opened: from, to.
     ScrollTo(Option<(f64, f64)>),
+    /// The « Écrans » page: the compositor's screens and what is changed of them.
+    Displays(DisplayChange),
 }
 
 /// Something that comes in and goes out: a spring from 0 to 1, and a fade.
@@ -281,6 +298,8 @@ pub struct App {
     /// The installed wallpapers, once found off the interface thread.
     pub(crate) installed: Option<Vec<&'static wallpapers::Wallpaper>>,
     pub(crate) sound: Sound,
+    /// The Bluetooth page's view of BlueZ (lot D-26o).
+    pub(crate) bluetooth: crate::bluetooth::State,
     /// The installed applications and their associations, once read.
     pub(crate) catalog: Option<Arc<Catalog>>,
     /// Files that cannot be changed: unreadable, not text, or not writable. Their settings
@@ -303,6 +322,10 @@ pub struct App {
     closing: bool,
     pub(crate) theme: ThemeFade,
     origin: Instant,
+    /// The screens, while the « Écrans » page is open or a change waits for « Garder ».
+    pub(crate) displays: Displays,
+    /// The Wi-Fi, while the « Réseau » page is open.
+    pub(crate) network: Net,
 }
 
 impl App {
@@ -325,6 +348,7 @@ impl App {
             thumbnails: HashMap::new(),
             installed: None,
             sound: Sound::Loading,
+            bluetooth: crate::bluetooth::State::default(),
             catalog: None,
             locked,
             sound_queue: Vec::new(),
@@ -337,6 +361,8 @@ impl App {
             closing: false,
             theme: ThemeFade::default(),
             origin: Instant::now(),
+            displays: Displays::default(),
+            network: Net::default(),
         };
         let load = Task::perform(async move { thumbnails::load(&dirs) }, |found| {
             Message::Thumbnails(Arc::new(found))
@@ -344,7 +370,16 @@ impl App {
         let pactl = app.pactl();
         let audio = Task::perform(async move { sound::read(&pactl) }, Message::Audio);
         let catalog = app.load_catalog();
-        (app, Task::batch([load, audio, catalog]))
+        let mut app = app;
+        let bluetooth = match app.page {
+            Page::Bluetooth => app.bluetooth.open().map(Message::Bluetooth),
+            _ => Task::none(),
+        };
+        let network = match app.page == Page::Network {
+            true => app.open_network(),
+            false => Task::none(),
+        };
+        (app, Task::batch([load, audio, catalog, bluetooth, network]))
     }
 
     fn pactl(&self) -> Pactl {
@@ -385,6 +420,7 @@ impl App {
             || self.spotlight.is_some()
             || self.theme.running()
             || self.save_at.is_some()
+            || self.displays.confirm.is_some()
     }
 
     pub fn subscription(&self) -> Subscription<Message> {
@@ -420,13 +456,73 @@ impl App {
             receiver
         })
         .map(Message::Theme);
-        Subscription::batch([frames, tab, keys, appearance])
+        // Its own Wayland connection, only while the screens are shown or a change waits.
+        let screens = match self.page == Page::Displays || self.displays.confirm.is_some() {
+            true => Subscription::run(follow_screens)
+                .map(|e| Message::Displays(DisplayChange::Event(e))),
+            false => Subscription::none(),
+        };
+        // Changes made elsewhere: the files, and the sound while its page is open.
+        let files = Subscription::run_with(self.followed_files(), crate::follow::files)
+            .map(|()| Message::FilesChanged);
+        let sound = match self.page == Page::Sound {
+            true => Subscription::run_with(self.paths.pactl.clone(), crate::follow::sound)
+                .map(|()| Message::SoundChanged),
+            false => Subscription::none(),
+        };
+        let bluetooth = if self.page == Page::Bluetooth {
+            Subscription::run(crate::bluetooth::changes).map(Message::Bluetooth)
+        } else {
+            Subscription::none()
+        };
+        // The networks around, read again while their page is open; the pages other
+        // `control-room` ask for.
+        let network = match self.page == Page::Network {
+            true => Subscription::run_with((), crate::network::ticks)
+                .map(|()| Message::Network(NetworkChange::Tick)),
+            false => Subscription::none(),
+        };
+        let asked = Subscription::run(crate::instance::asked).map(Message::Show);
+        Subscription::batch([
+            frames, tab, keys, appearance, screens, files, sound, bluetooth, network, asked,
+        ])
+    }
+
+    /// The files Control Room shows, followed while it is open.
+    fn followed_files(&self) -> crate::follow::Files {
+        let mut files: Vec<_> = File::ALL
+            .iter()
+            .map(|f| self.paths.of(*f).to_owned())
+            .collect();
+        files.push(self.paths.apps.config_home.join("mimeapps.list"));
+        crate::follow::Files(files)
     }
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
+        let before = self.page;
+        let task = self.handle(message);
+        // The Bluetooth page reads BlueZ and scans while it is open, and stops when it is left.
+        let follow = match (before == Page::Bluetooth, self.page == Page::Bluetooth) {
+            (false, true) => self.bluetooth.open(),
+            (true, false) => self.bluetooth.close(),
+            _ => Task::none(),
+        };
+        Task::batch([task, follow.map(Message::Bluetooth)])
+    }
+
+    fn handle(&mut self, message: Message) -> Task<Message> {
         let now = self.now();
         match message {
-            Message::Go(page) => self.go(page),
+            Message::Bluetooth(message) => {
+                return self.bluetooth.update(message).map(Message::Bluetooth);
+            }
+            Message::Go(page) => return self.go(page),
+            Message::Show(page) => {
+                let shown = self.go(page);
+                let raise = window::latest().and_then(window::gain_focus);
+                return Task::batch([shown, raise]);
+            }
+            Message::Network(change) => return self.update_network(change),
             Message::Search(query) => {
                 let hits = search::search(&query);
                 // A new list of results comes in, one after the other.
@@ -446,15 +542,41 @@ impl App {
                 }
             }
             Message::Open(setting) => {
-                self.go(setting.page());
+                let opened = self.go(setting.page());
                 let fade = Fade::new(1.0, 0.0, now, cr::SPOTLIGHT);
                 self.spotlight = Some((setting, fade));
                 // The page scrolls to the setting, once it is laid out.
-                return crate::scroll::find(setting).map(Message::ScrollTo);
+                let scroll = crate::scroll::find(setting).map(Message::ScrollTo);
+                return Task::batch([opened, scroll]);
             }
             Message::ScrollTo(found) => {
                 if let Some((from, to)) = found {
                     self.scroll = Some(Animation::new(cr::PAGE_SPRING, from, to, now));
+                }
+            }
+            Message::FilesChanged => {
+                // Our own changes, waiting or being written, are read back when written.
+                if self.writing.is_some() || !self.pending.is_empty() {
+                    return Task::none();
+                }
+                let paths = self.paths.clone();
+                let read = Task::perform(async move { Settings::load(&paths) }, |read| {
+                    Message::Reloaded(Arc::new(read))
+                });
+                return Task::batch([read, self.load_catalog()]);
+            }
+            Message::Reloaded(read) => {
+                if self.writing.is_none() && self.pending.is_empty() {
+                    let (settings, locked) = (*read).clone();
+                    self.settings = settings;
+                    self.locked = locked;
+                }
+            }
+            Message::SoundChanged => {
+                // A change of ours on its way shows itself when `pactl` answers.
+                if !self.sound_busy && self.sound_queue.is_empty() && self.volumes.is_empty() {
+                    let pactl = self.pactl();
+                    return Task::perform(async move { sound::read(&pactl) }, Message::Audio);
                 }
             }
             Message::AppWritten(kind, ok) => {
@@ -479,6 +601,7 @@ impl App {
             Message::Focus(direction) => return focus::advance(direction),
             Message::Frame(instant) => {
                 self.theme.tick(instant);
+                self.tick_displays(instant);
                 if self
                     .leaving
                     .is_some_and(|(_, at)| now >= at + cr::PAGE_FADE)
@@ -587,6 +710,7 @@ impl App {
                 }
             }
             Message::Catalog(catalog) => self.catalog = Some(catalog),
+            Message::Displays(change) => self.update_displays(change),
             Message::TryKeys(text) => {
                 self.trial = text.chars().take(cr::TRIAL_MAX).collect();
             }
@@ -641,8 +765,9 @@ impl App {
         )
     }
 
-    /// Opens `page`: it comes in, and the folded sidebar goes.
-    fn go(&mut self, page: Page) {
+    /// Opens `page`: it comes in, and the folded sidebar goes. The « Réseau » page reads the
+    /// Wi-Fi: the task returned.
+    fn go(&mut self, page: Page) -> Task<Message> {
         let now = self.now();
         if page != self.page {
             // The page left fades out under the one coming in.
@@ -651,8 +776,13 @@ impl App {
             self.page_slide = Slide::coming(now);
             self.spotlight = None;
             self.scroll = None;
+            if page == Page::Network {
+                self.sidebar.show(now, false);
+                return self.open_network();
+            }
         }
         self.sidebar.show(now, false);
+        Task::none()
     }
 
     /// The message of `change`, none when its file is locked: the control is disabled.
@@ -803,6 +933,19 @@ impl Writes {
 /// Closes the window.
 fn close_window() -> Task<Message> {
     window::latest().and_then(window::close)
+}
+
+/// The screens of the compositor, from a thread of their own (`displays::run`), which stops
+/// once the subscription is dropped.
+fn follow_screens() -> impl iced::futures::Stream<Item = displays::Event> {
+    let (sender, receiver) = iced::futures::channel::mpsc::unbounded();
+    let started = std::thread::Builder::new()
+        .name("screens".into())
+        .spawn(move || displays::run(|event| sender.unbounded_send(event).is_ok()));
+    if let Err(error) = started {
+        tracing::warn!(%error, "the screens cannot be read");
+    }
+    receiver
 }
 
 /// The file that holds a change.

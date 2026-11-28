@@ -18,10 +18,11 @@ To try it without touching your own settings, give it a configuration folder of 
 ## Pages
 
 D-26a1 brought the appearance and touchpad pages; D-26a2 sound, lock and default applications;
-D-26c the keyboard page and the gestures of the touchpad page. Displays come with D-26b.
+D-26b the screens; D-26c the keyboard page and the gestures of the touchpad page.
 
 | Page | Setting | File | Read by |
 | --- | --- | --- | --- |
+| « Écrans » | Arrangement (dragged), resolution, refresh, scale (100 to 200 %), rotation, main screen, on or off | `$XDG_CONFIG_HOME/sherlockos/displays.conf`, per screen (EDID), written by the compositor | Compositor, through `wlr-output-management` (ADR 0025) |
 | « Apparence » | Theme: Sombre, Clair, Auto, and the hours of Auto (half-hour steps) | `$XDG_CONFIG_HOME/appearance/appearance.conf` | Every program (`appearance-config`) |
 | « Apparence » | Wallpaper among the installed ones, « Suivre le thème » | `$XDG_CONFIG_HOME/sherlockos/wallpaper.conf` | Compositor |
 | « Apparence » | Dock: size, magnification and its strength, hiding, edge | `$XDG_CONFIG_HOME/dock/dock.conf` | Dock |
@@ -55,6 +56,47 @@ and flushing the files to the disk never happen on the interface thread: a batch
 goes to a task (`Writes::run`), one batch at a time, in the order of the changes; the changes
 made meanwhile wait for the next batch and stay shown. The wallpapers installed are found by
 the same task that reduces their thumbnails, once: drawing the page never looks at the disk.
+
+**Screens.** The page does not write a file: it is a client of `wlr-output-management`
+(ADR 0025), on a Wayland connection of its own, in a thread that runs only while the page is
+open or a change waits (`displays::run`). The compositor sends every screen with its modes and
+state; what it sends is bounded (16 screens, 256 modes, names of 64 characters). Each change is
+sent as a whole configuration and shown once the compositor has taken it. A change of
+resolution, refresh, scale, rotation or of a screen on or off asks « Garder ces réglages
+d'affichage ? » with « Revenir » and « Garder »; without an answer the previous configuration
+comes back after `CONFIRM_DELAY` (15 seconds), as on macOS and Windows. Moving a screen needs no
+confirmation. In the arrangement, the screens are drawn to scale; a screen dropped goes to the
+nearest place along the edge of another, where it covers none (`arrangement::snap`), and the
+main screen (the one at the origin, with the bar drawn on top) stays at the origin: dragging it
+moves the others. « En faire l'écran principal » moves the origin to the chosen screen. The last
+screen on cannot be switched off. The compositor keeps the setting of each screen under its
+EDID names and gives it back when the screen comes back; it writes it only once a change has
+held for 20 seconds, so that a change never confirmed is not kept. Under `--nested`, a screen
+is a slice of the host window: its resolution cannot change and it cannot turn.
+
+| Captures | |
+| --- | --- |
+| Wide, dark | ![Screens](control-room/displays-wide-dark.png) |
+| Narrow, dark | ![Screens, narrow](control-room/displays-narrow-dark.png) |
+| Waiting for « Garder », light | ![Confirmation](control-room/displays-confirm-light.png) |
+| In the nested compositor, two screens of its window | ![Nested](control-room/displays-nested.png) |
+
+**Network (lot D-26n).** The « Réseau » page switches the Wi-Fi on or off, lists the networks
+around (read again every 5 seconds while the page is open, « Rechercher » asks for a new scan),
+and joins one: an open network at once; a protected one through its saved connection, else
+with the password asked under it; a network flagged WEP or 802.1X (WPA2 or WPA3 Enterprise, as
+eduroam) with a form: WEP and its key, or « Entreprise » with PEAP or TTLS (MSCHAPv2 inside),
+the identity, the password and the domain the server's certificate must name. « Autre
+réseau… » joins a hidden network by its name. « Oublier » deletes the saved connection of the
+network in use, with its secrets. Every call goes to NetworkManager on the system bus, off the
+interface thread (`system_services::network`, shared with the bar), and polkit asks where its
+policy wants it; the secrets are bounded (256 bytes, 32 for a name) and never logged.
+
+**One window (lot D-26n).** `control-room --page <id>` opens a page: `displays`, `network`,
+`bluetooth`, `sound`, `appearance`, `keyboard`, `touchpad`, `lock`, `clipboard`, `accessibility`, `apps`. The first Control Room listens on
+`$XDG_RUNTIME_DIR/sherlockos-control-room.sock`; a second one hands it its page (one line of at
+most 64 bytes) and leaves, and the window shows that page and takes the focus. The bar's
+« Ouvrir les Réglages », under a network it cannot join, runs `control-room --page network`.
 
 **Sound.** The page reads the outputs and the microphones with `pactl list sinks` and
 `list sources` (the monitors of the outputs left out), their defaults and volumes, off the
@@ -99,6 +141,39 @@ the wallpaper folders (`desktop_config::wallpaper::dirs`), from the smallest var
 reduced off the interface thread. An image of the user's (`path`) is named above the picker;
 choosing a wallpaper replaces it.
 
+### Bluetooth (D-26o)
+
+« Bluetooth » goes through BlueZ on the system bus with the code of the bar's quick settings
+(`system_services::bluetooth`, `src/bluetooth.rs`): a connection for reads (5 s at most per
+call) and one for actions (60 s, for polkit to ask), each call in a task, never on the
+interface thread. The page has:
+
+- the switch of the adapter; a refusal or a failure says so in its help line;
+- « Mes appareils », the paired devices, each with the glyph of its kind (headphones, mouse,
+  keyboard, phone, computer, gamepad), its name with « … » when too long, « Connecté · 80 % »
+  when BlueZ gives the battery, and « Connecter » or « Déconnecter », « Renommer » (a field,
+  64 characters at most, BlueZ's `Alias`) and « Oublier » (asked again under the device);
+- « Appareils à proximité », found by a scan that runs while the page is open and stops when
+  it is left (« Recherche… » beside its title), each with « Appairer »;
+- while a device pairs, the agent's question in a card: the code, « Confirmer » and
+  « Annuler ». Leaving the page cancels the pairing.
+
+One device at a time: its line says « Connexion… » or « Appairage… » and the other buttons wait.
+The page follows what BlueZ announces (`bluetooth::changes`): another program connecting a
+device, a battery level, a device found. `control-room --page bluetooth` opens it, as the
+bar's « Réglages Bluetooth… » does.
+
+## Changes made elsewhere
+
+While Control Room is open, its files are looked at every `follow::FILES_EVERY` (2 seconds:
+their modification time and length only, on a thread of their own), and `mimeapps.list` with
+them. When one changes (by hand, or by its program: a pin in the dock), the settings are read
+again off the interface thread and shown, unless a change of ours waits or is being written:
+that one is read back once written. While the sound page is open, `pactl subscribe`
+(`system_services::watch::sound`) tells when an output or the default changes: the devices
+are read again, unless a change of ours is on its way to `pactl`. The appearance file is also
+followed for the theme, as before.
+
 ## Search
 
 The field on top of the sidebar finds a setting by its name, its page or the words people use
@@ -137,6 +212,8 @@ fades out over `SPOTLIGHT`. Escape empties the field. Ctrl+F puts the keyboard i
 | `thumbnails` | The installed wallpapers and their thumbnails | no |
 | `sound` | Outputs, microphones and volumes through `pactl` | no |
 | `apps` | The kinds of default applications, their choices, writing them | no |
+| `displays` | The compositor's screens through `wlr-output-management`, in a thread | no |
+| `arrangement` | The screens drawn to scale, where a dropped screen lands | no |
 | `app` | State, messages, saving, animations | yes |
 | `view` | Window, title bar, sidebar, page and its transition, cards and rows | yes |
 | `pages` | One module per page | yes |
@@ -222,6 +299,13 @@ Sound, lock and default applications:
 ![Lock, light](control-room/lock-wide-light.png)
 ![Default applications](control-room/default-apps-wide-dark.png)
 ![Default applications, narrow, light](control-room/default-apps-narrow-light.png)
+
+Bluetooth (D-26o), a headset connected, a mouse paired, a speaker found; the question of a
+pairing; and the narrow window, light:
+
+![Bluetooth](control-room/bluetooth-wide-dark.png)
+![Bluetooth, pairing](control-room/bluetooth-pairing-wide-dark.png)
+![Bluetooth, narrow, light](control-room/bluetooth-narrow-light.png)
 
 Search: the part of each name that matched, in green:
 

@@ -151,6 +151,19 @@ wl_region#41.add(105, 56, 319, 76)                 # it leaves: the bar again
 wl_surface#28.set_input_region(wl_region#41)
 ```
 
+### Fitting the screen (D-21l)
+
+As on macOS, the dock is never longer than its screen. When its surface would leave less than
+`dock::SCREEN_ROOM` (8) at either end of the screen (its width, or its height on the left or the
+right), its icons shrink: `Geometry::fitted` finds the largest size, to the pixel, whose
+longest magnified bar and room for the labels fit, down to `dock::FIT_MIN_ICON` (20). The size
+of the settings is kept (`Dock::base`): an icon closed, another screen, or fewer icons give
+the room back, and they grow again, on the same springs as any other change. A screen not
+known yet keeps the settings' size. On 1366 × 768 at 1.5 (911 long), twenty icons and the separator
+fit, smaller (`the_dock_shrinks_its_icons_to_fit_its_screen`).
+
+![Four icons and Sherlock on a 520 wide screen](../desktop/dock/screenshots/fitted-520.png)
+
 ### Hiding
 
 `AutoHide` (`hide.rs`) decides when the dock leaves the screen:
@@ -427,6 +440,12 @@ author's choice, as on Windows and Plasma:
 | Is in front with a single window shown | Minimizes it |
 | Middle button, or Ctrl+click | Starts it again for a new window (see below), whatever its windows |
 
+A start waits for the `xdg-activation-v1` token of the click, given to the application in
+`XDG_ACTIVATION_TOKEN` and `DESKTOP_STARTUP_ID` (lot Q-52): an application with a single
+instance, already open, brings its window forward with it. Without a token it starts all the
+same. The icon bounces from the click; a start that fails is logged, and the bounce stops at
+its timeout.
+
 **Several windows.** As on macOS, an application has one icon however many windows it has, and
 whatever their kind: a Wayland window carries an `app_id`, an X11 one a class, and both go to
 the icon whose desktop entry owns them (see Open windows). The most recent window is the one
@@ -626,6 +645,12 @@ own thread, connection included:
 They are tried in this order. `windows::Auto`, the control of the running dock, acts through
 the shell protocol while its source runs, through the wlroots one otherwise.
 
+A window that asks for attention (`attention`, version 5 of the shell protocol, lot Q-52: the
+compositor refused it the keyboard because no click let it come forward) makes the icon of its
+application bounce `ATTENTION_HOPS` hops (3), the launch bounce's, then rest; a window that keeps
+asking bounces once, and again only after it stopped asking. The dock binds the shell manager
+up to version 6 (4 for App Expose, 6 for « Forcer à quitter »).
+
 A window belongs to a pinned application when its `app_id` (or X11 class) is the desktop file
 id or its `StartupWMClass`, ignoring case; or, when one is a reverse-DNS name and the other is
 not, the last part of it: `konsole` belongs to `org.kde.konsole.desktop`, and since lot D-21d
@@ -668,6 +693,71 @@ compositor receives and the watching connection sees go.
 
 Still missing: **game mode**, a way for the dock to know it, so that it hides (see below).
 
+## Trash (D-21j)
+
+As on macOS, the trash ends the dock, after the separator (`items.rs`, `trash.rs`). It is the
+user's freedesktop trash, `$XDG_DATA_HOME/Trash` (`~/.local/share/Trash`), the one Evidence
+fills. Its tile (`dock::trash_icon`) is a bin, with sheets of paper in it while `Trash/files`
+holds something: a thread follows the folder with inotify (`trash::watch`, as the dock follows
+its file) and tells the dock each time it fills or empties; nothing polls.
+
+- A click opens it in Evidence (`evidence trash:///`, Evidence's argument for its trash).
+- An icon of the pinned list dragged onto it and let go is thrown away: unpinned, in a puff of
+  smoke, as when it is let go out of the dock.
+- Its menu: « Ouvrir », then « Vider la corbeille » while it holds something. A first click
+  arms it (« Reclique pour vider », the menu stays open); a second one, past the launcher's
+  `CONFIRM_DELAY` (a double click only arms), deletes what it holds on a thread of its own:
+  each entry of `Trash/files` and its record in `Trash/info`, a link removed itself, never what
+  it points to, 100,000 entries at most at a time.
+
+Files cannot be dropped on it from Evidence yet: the dock accepts only the applications of the
+Applications view (D-41d, below).
+
+![The trash, full, at the end of the dock](../desktop/dock/screenshots/trash.png)
+![Its menu, armed](../desktop/dock/screenshots/trash-menu.png)
+
+## Downloads stack (D-21k)
+
+Before the trash stands the downloads folder, as a stack (`stack.rs`): `XDG_DOWNLOAD_DIR` of
+`user-dirs.dirs` (`$HOME` itself refused), else `~/Downloads`, when it exists. Its tile is the
+theme's `folder-download`, else `dock::stack_icon`. A thread finds the folder and follows it
+with inotify (`trash::follow`, shared with the trash), reading its 16 newest items among its
+first 4,096 entries, hidden ones left out; the dock is rebuilt only when the folder itself
+changes, not its content.
+
+- A click opens its grid over it, as a menu unfolds: four to a row, the newest first, each with
+  Evidence's picture for its kind and its name, which ends with « … » when too long; a hover
+  veil and a press on each. A click opens the item with its default application (`mime-apps`,
+  on a thread), a folder in Evidence; « Ouvrir dans Evidence » opens the downloads folder.
+- A right click gives its menu: « Ouvrir dans Evidence ».
+
+The fan of macOS is not drawn: the grid is shown on every edge.
+
+![The stack before the trash](../desktop/dock/screenshots/stack.png)
+![Its grid](../desktop/dock/screenshots/stack-grid.png)
+![Its grid, full](../desktop/dock/screenshots/stack-grid-full.png)
+
+While an icon is dragged, the pointer is the closed hand, over the dock or past it
+(`pointer::held`).
+## Applications dragged from the Applications view (D-41d)
+
+An application dragged from the Applications view is pinned where it is dropped, as from
+Launchpad. iced starts no Wayland drag: the view and the dock speak `wl_data_device` themselves
+(`src/dnd.rs`, as Evidence does in E-03), on their surface's connection, in a thread each. What
+is dragged is the desktop id, in the private type `application/x-sherlockos-desktop-id`: no
+other application is offered anything, and the dock accepts nothing else.
+
+- Over the dock, a hole opens among the pinned icons where it would go (the token `<hole>` in
+  the pinned list, an icon that draws nothing: the icons make room on their own tracks), and
+  follows the pointer; out of the dock's band, or when the drag leaves, it closes.
+- Dropped: the id read from the drop (255 bytes at most, 2 s at most, letters, digits, `.`, `-`
+  and `_` only, off the interface thread) takes the hole's place, moved there if it was already
+  pinned, and the list is written (`save_pinned`, which never writes the hole). An id the dock
+  does not know closes the hole.
+
+![The hole](../desktop/dock/screenshots/hole.png)
+![Dropped](../desktop/dock/screenshots/dropped.png)
+
 ## Menu of an icon
 
 A right click opens the menu of the icon under the pointer, as an `xdg_popup` attached to the
@@ -687,12 +777,22 @@ Since lot D-21c the entries follow the dock menu of macOS:
 | Each window, in the order they came: its title, « … » when too long, the application's name when it has none; the active one checked. A click brings it forward alone | The source can act on its windows |
 | Separator, then « Nouvelle fenêtre », or « Ouvrir » when the application has no window | The application has an `Exec` |
 | The other actions of its desktop entry (`Actions=`, their French `Name`), « Nouvel onglet », « Nouvelle fenêtre de navigation privée »… | The application has an `Exec` |
-| Separator, then « Garder dans le Dock » for an open application that is not pinned, otherwise « Retirer du Dock » | Pinned, Sherlock included |
+| Separator, then « Options » (lot D-21i): the title of the group, as macOS's submenu, never an action | |
+| « Garder dans le Dock », checked while it is pinned: a click pins an open application, or unpins a pinned one | Open with a desktop entry, or pinned, Sherlock included |
+| « Ouvrir à l’ouverture de session », checked while its desktop file is in `$XDG_CONFIG_HOME/autostart` without `Hidden=true` (read by the session, lot D-44): a click copies its desktop file there (bounded to 256 KiB, atomic write), or takes it out | It has a desktop entry |
+| « Afficher dans Evidence »: Evidence opens on the folder of its desktop file | It has a desktop entry |
 | Separator, then « Afficher toutes les fenêtres » (App Expose, lot D-21c2) | The source offers App Expose, the windows can be acted on, and one is shown |
-| « Quitter » | The windows are known, the source can close them, and the application has one |
+| « Masquer »: its windows are minimized, as macOS hides an application | The windows are known, the source can act on them, and the application has one |
+| « Quitter » | The same |
+| « Forcer à quitter »: the compositor kills the process of its windows (`kill`, version 6 of `sherlock_shell_v1`, offered on the shell socket only): SIGKILL to the pid its connection gives (SO_PEERCRED), never to the compositor nor to process 1; an X11 window, whose `_NET_WM_PID` could name any process, is only asked to close | The same, and the compositor offers version 6 |
+
+![The menu of an icon with its options](../desktop/dock/screenshots/menu-options.png)
+
+The autostart folder is read once the dock's surface exists, and again after each change, on a
+thread of its own (`autostart.rs`): the menu never touches the disk.
 
 A disabled entry stays visible and does nothing: nothing is pretended. For Sherlock, every entry
-but « Retirer du Dock » is disabled.
+but « Garder dans le Dock » (checked: a click takes it out) is disabled.
 
 **The dock's own menu** (D-21h). A right click on the bar outside the icons, on the separator
 or between two icons, opens the dock's menu, as the Dock options of macOS, from the pointer:

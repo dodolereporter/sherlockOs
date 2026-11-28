@@ -13,7 +13,10 @@ use crate::settings::File;
 /// A page of the sidebar, in its order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Page {
+    Displays,
     Sound,
+    Bluetooth,
+    Network,
     Appearance,
     Keyboard,
     Touchpad,
@@ -24,8 +27,11 @@ pub enum Page {
 }
 
 impl Page {
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 11] = [
+        Self::Displays,
         Self::Sound,
+        Self::Bluetooth,
+        Self::Network,
         Self::Appearance,
         Self::Keyboard,
         Self::Touchpad,
@@ -37,7 +43,10 @@ impl Page {
 
     pub fn name(self) -> &'static str {
         match self {
+            Self::Displays => t::DISPLAYS,
             Self::Sound => t::SOUND,
+            Self::Bluetooth => t::BLUETOOTH,
+            Self::Network => t::NETWORK,
             Self::Appearance => t::APPEARANCE,
             Self::Keyboard => t::KEYBOARD,
             Self::Touchpad => t::TOUCHPAD,
@@ -51,7 +60,10 @@ impl Page {
     /// The sentence under its title.
     pub fn about(self) -> &'static str {
         match self {
+            Self::Displays => t::DISPLAYS_ABOUT,
             Self::Sound => t::SOUND_ABOUT,
+            Self::Bluetooth => t::BLUETOOTH_ABOUT,
+            Self::Network => t::NETWORK_ABOUT,
             Self::Appearance => t::APPEARANCE_ABOUT,
             Self::Keyboard => t::KEYBOARD_ABOUT,
             Self::Touchpad => t::TOUCHPAD_ABOUT,
@@ -62,9 +74,33 @@ impl Page {
         }
     }
 
+    /// Its name on the command line (`control-room --page network`), and back.
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::Displays => "displays",
+            Self::Sound => "sound",
+            Self::Bluetooth => "bluetooth",
+            Self::Network => "network",
+            Self::Appearance => "appearance",
+            Self::Keyboard => "keyboard",
+            Self::Touchpad => "touchpad",
+            Self::Lock => "lock",
+            Self::Clipboard => "clipboard",
+            Self::Accessibility => "accessibility",
+            Self::DefaultApps => "apps",
+        }
+    }
+
+    pub fn from_id(id: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|p| p.id() == id)
+    }
+
     pub fn icon(self) -> Icon {
         match self {
+            Self::Displays => Icon::Desktop,
             Self::Sound => Icon::Sound,
+            Self::Bluetooth => Icon::Bluetooth,
+            Self::Network => Icon::Network,
             Self::Appearance => Icon::Image,
             Self::Keyboard => Icon::Keyboard,
             Self::Touchpad => Icon::Touchpad,
@@ -79,6 +115,16 @@ impl Page {
 /// A setting, as the search finds it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Setting {
+    Arrangement,
+    Resolution,
+    Refresh,
+    Scale,
+    Rotation,
+    MainDisplay,
+    DisplayOn,
+    Wifi,
+    Networks,
+    OtherNetwork,
     Theme,
     LightFrom,
     DarkFrom,
@@ -107,6 +153,7 @@ pub enum Setting {
     InputDevice,
     InputVolume,
     LockAfter,
+    Bluetooth,
     ClipboardHistory,
     ClipboardKeep,
     ReduceMotion,
@@ -117,7 +164,17 @@ pub enum Setting {
 }
 
 impl Setting {
-    pub const ALL: [Self; 42] = [
+    pub const ALL: [Self; 53] = [
+        Self::Arrangement,
+        Self::Resolution,
+        Self::Refresh,
+        Self::Scale,
+        Self::Rotation,
+        Self::MainDisplay,
+        Self::DisplayOn,
+        Self::Wifi,
+        Self::Networks,
+        Self::OtherNetwork,
         Self::Theme,
         Self::LightFrom,
         Self::DarkFrom,
@@ -146,6 +203,7 @@ impl Setting {
         Self::InputDevice,
         Self::InputVolume,
         Self::LockAfter,
+        Self::Bluetooth,
         Self::ClipboardHistory,
         Self::ClipboardKeep,
         Self::ReduceMotion,
@@ -166,6 +224,16 @@ impl Setting {
     pub fn entry(self) -> (Page, &'static str, &'static str) {
         use Page::*;
         match self {
+            Self::Arrangement => (Displays, t::ARRANGEMENT, t::DISPLAY_WORDS),
+            Self::Resolution => (Displays, t::RESOLUTION, t::DISPLAY_WORDS),
+            Self::Refresh => (Displays, t::REFRESH, t::DISPLAY_WORDS),
+            Self::Scale => (Displays, t::SCALE, t::DISPLAY_WORDS),
+            Self::Rotation => (Displays, t::ROTATION, t::DISPLAY_WORDS),
+            Self::MainDisplay => (Displays, t::MAIN_DISPLAY, t::DISPLAY_WORDS),
+            Self::DisplayOn => (Displays, t::DISPLAY_ON, t::DISPLAY_WORDS),
+            Self::Wifi => (Network, t::WIFI, t::NETWORK_WORDS),
+            Self::Networks => (Network, t::NETWORKS, t::NETWORK_WORDS),
+            Self::OtherNetwork => (Network, t::OTHER_NETWORK_SEARCH, t::NETWORK_WORDS),
             Self::Theme => (Appearance, t::THEME, t::THEME_WORDS),
             Self::LightFrom => (Appearance, t::LIGHT_FROM, t::HOURS_WORDS),
             Self::DarkFrom => (Appearance, t::DARK_FROM, t::HOURS_WORDS),
@@ -194,6 +262,7 @@ impl Setting {
             Self::InputDevice => (Sound, t::INPUT_DEVICE, t::MICROPHONE_WORDS),
             Self::InputVolume => (Sound, t::INPUT_VOLUME, t::MICROPHONE_WORDS),
             Self::LockAfter => (Lock, t::LOCK_AFTER, t::LOCK_WORDS),
+            Self::Bluetooth => (Bluetooth, t::BLUETOOTH_SWITCH, t::BLUETOOTH_WORDS),
             Self::ClipboardHistory => (Clipboard, t::CLIPBOARD_HISTORY, t::CLIPBOARD_WORDS),
             Self::ClipboardKeep => (Clipboard, t::CLIPBOARD_KEEP, t::CLIPBOARD_WORDS),
             Self::ReduceMotion => (Accessibility, t::REDUCE_MOTION, t::MOTION_WORDS),
@@ -210,8 +279,8 @@ impl Setting {
         self.entry().0
     }
 
-    /// The settings file that holds it; none for the sound and the default applications,
-    /// which go through `pactl` and `mime-apps`.
+    /// The settings file that holds it; none for the screens, the sound and the default
+    /// applications, which go through the compositor, `pactl` and `mime-apps`.
     pub fn file(self) -> Option<File> {
         let file = match self.page() {
             Page::Appearance => match self {
@@ -230,7 +299,9 @@ impl Setting {
             Page::Lock => File::Lock,
             Page::Clipboard => File::Clipboard,
             Page::Accessibility => File::Appearance,
-            Page::Sound | Page::DefaultApps => return None,
+            Page::Displays | Page::Sound | Page::Bluetooth | Page::Network | Page::DefaultApps => {
+                return None;
+            }
         };
         Some(file)
     }
@@ -261,10 +332,12 @@ pub fn search(query: &str) -> Vec<Hit> {
                 return None;
             }
             let marks: Vec<Range<usize>> = words.iter().filter_map(|w| find(name, w)).collect();
+            // The name itself first: two pages may name a setting alike (« Disposition »).
             let rank = match fold(name) {
-                n if n.starts_with(&whole) => 0,
-                n if n.contains(&whole) || !marks.is_empty() => 1,
-                _ => 2,
+                n if n == whole => 0,
+                n if n.starts_with(&whole) => 1,
+                n if n.contains(&whole) || !marks.is_empty() => 2,
+                _ => 3,
             };
             Some((rank, Hit { setting, marks }))
         })

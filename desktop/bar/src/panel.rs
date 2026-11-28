@@ -42,9 +42,53 @@ pub fn keyboard_room() -> bool {
     KEYBOARD_ROOM.with(std::cell::Cell::get)
 }
 
+thread_local! {
+    /// The logical height of the bar's screen, when the compositor gave it: a panel never goes
+    /// past its bottom (UI-08). On the interface thread, set when a panel opens.
+    static SCREEN_HEIGHT: std::cell::Cell<Option<f32>> = const { std::cell::Cell::new(None) };
+}
+
+/// Room kept free under a panel, above the bottom of the screen (where the dock may be).
+pub const SCREEN_ROOM: f32 = 24.0;
+/// The notification centre is never shorter than this under the calendar: below, both scroll
+/// together in the panel.
+pub const CENTER_MIN: f32 = 120.0;
+
+/// Tells the panels the logical height of the screen (`None`: unknown, the board's sizes).
+pub fn reserve_screen(height: Option<f32>) {
+    SCREEN_HEIGHT.with(|cell| cell.set(height));
+}
+
+/// The height a panel may take under the bar, down to `SCREEN_ROOM` above the bottom of the
+/// screen; unbounded when the screen is unknown.
+pub fn available() -> f32 {
+    let top = metrics::TOP_BAR_MARGIN_TOP + metrics::TOP_BAR_HEIGHT + panels::BELOW_BAR;
+    SCREEN_HEIGHT
+        .with(std::cell::Cell::get)
+        .map_or(f32::INFINITY, |screen| {
+            // A screen too small for anything still gets a panel it can scroll.
+            (screen - top - SCREEN_ROOM).max(CENTER_MIN)
+        })
+}
+
+/// The height of the notification centre under the calendar: the board's, else what the
+/// screen leaves, `CENTER_MIN` at least.
+pub fn center_height() -> f32 {
+    let left = available() - panels::CALENDAR_HEIGHT - panels::PANEL_GAP;
+    left.clamp(CENTER_MIN, panels::CENTER_HEIGHT)
+}
+
 impl Panel {
-    /// Size of the panel itself, without the room for its shadow.
+    /// Size of the panel itself, without the room for its shadow: its content's, within the
+    /// height the screen leaves it (`available`). What does not fit scrolls.
     pub fn size(self) -> (f32, f32) {
+        let (width, height) = self.content_size();
+        (width, height.min(available()))
+    }
+
+    /// Size of the panel's content, as the board lays it out, the notification centre at
+    /// `center_height`.
+    pub fn content_size(self) -> (f32, f32) {
         match self {
             Self::Control if keyboard_room() => (panels::QUICK_WIDTH, panels::CONTROL_HEIGHT),
             Self::Control => (
@@ -53,7 +97,7 @@ impl Panel {
             ),
             Self::Calendar => (
                 panels::CENTER_WIDTH,
-                panels::CALENDAR_HEIGHT + panels::PANEL_GAP + panels::CENTER_HEIGHT,
+                panels::CALENDAR_HEIGHT + panels::PANEL_GAP + center_height(),
             ),
         }
     }
@@ -171,7 +215,11 @@ pub enum History {
 
 /// The notification centre of the Panels board: its title and « Tout effacer », then a card per
 /// application, newest first.
-pub fn center(history: &History) -> Element<'_, Message> {
+pub fn center<'a>(
+    history: &'a History,
+    options: Option<u32>,
+    expanded: &std::collections::HashSet<String>,
+) -> Element<'a, Message> {
     let empty = !matches!(history, History::Ready(groups) if !groups.is_empty());
     let title = text(words::NOTIFICATIONS)
         .font(typography::TITLE)
@@ -187,7 +235,9 @@ pub fn center(history: &History) -> Element<'_, Message> {
         });
     let body: Element<'_, Message> = match history {
         History::Ready(groups) if !groups.is_empty() => {
-            let cards = groups.iter().map(card);
+            let cards = groups
+                .iter()
+                .map(|group| card(group, options, expanded.contains(&group.app)));
             scroll(Column::with_children(cards).spacing(panels::CENTER_GAP))
                 .height(Length::Fill)
                 .into()
@@ -211,8 +261,9 @@ fn notice(line: &str) -> Element<'_, Message> {
     container(line).center(Length::Fill).into()
 }
 
-/// The card of an application: its tile and name, then its newest notifications.
-fn card(group: &Group) -> Element<'_, Message> {
+/// The card of an application: its tile and name and « × » that clears them all, then its newest
+/// notifications, all of them once `open` (« N autres notifications », D-23d).
+fn card(group: &Group, options: Option<u32>, open: bool) -> Element<'_, Message> {
     let initial: String = group
         .app
         .chars()
@@ -244,13 +295,27 @@ fn card(group: &Group) -> Element<'_, Message> {
     if let (true, Some(first)) = (single, group.entries.first()) {
         header = header.push(small(&first.when));
     }
+    let ids: Vec<u32> = group.entries.iter().map(|e| e.id).collect();
+    header = header.push(sherlock_ui::notifications::close_button(
+        Message::RemoveNotifications(ids),
+    ));
     let mut rows = vec![header.into()];
-    for entry in group.entries.iter().take(panels::GROUP_MAX) {
-        rows.push(notification(entry, !single));
+    let shown = if open {
+        group.entries.len()
+    } else {
+        panels::GROUP_MAX
+    };
+    for entry in group.entries.iter().take(shown) {
+        rows.push(notification(entry, !single, options == Some(entry.id)));
     }
     let hidden = group.entries.len().saturating_sub(panels::GROUP_MAX);
     if hidden > 0 {
-        rows.push(small(&words::more(hidden)));
+        let label = if open {
+            sherlock_ui::notifications::text::SHOW_LESS.to_owned()
+        } else {
+            words::more(hidden)
+        };
+        rows.push(link(label, Message::ExpandGroup(group.app.clone(), !open)));
     }
     container(Column::with_children(rows).spacing(panels::CARD_GAP))
         .width(Length::Fill)
@@ -259,48 +324,61 @@ fn card(group: &Group) -> Element<'_, Message> {
         .into()
 }
 
+/// A line of small secondary text that does something when clicked.
+fn link<'a>(label: String, message: Message) -> Element<'a, Message> {
+    let label = text(label)
+        .font(typography::UI)
+        .size(typography::SMALL_SIZE)
+        .style(panels::secondary_text);
+    iced::widget::button(label)
+        .padding(0)
+        .style(|_, _| iced::widget::button::Style::default())
+        .on_press(message)
+        .into()
+}
+
 /// One notification of a card: title, body, and its buttons while it is open. `timed`: its
 /// time on the right of its title, when the card holds several.
-fn notification(entry: &Entry, timed: bool) -> Element<'_, Message> {
+fn notification(entry: &Entry, timed: bool, options: bool) -> Element<'_, Message> {
     // A long title ends with « … »; the body below wraps.
     let title = ui::ellipsis(entry.summary.as_str())
         .font(typography::UI_SEMIBOLD)
         .width(Length::Fill);
-    let mut lines: Vec<Element<'_, Message>> = if timed {
+    let mut head = row![title.width(Length::Fill)]
+        .spacing(panels::HEADER_GAP)
+        .align_y(Alignment::Center);
+    if timed {
         let when = text(entry.when.as_str())
             .font(typography::UI)
             .size(typography::SMALL_SIZE)
             .style(panels::secondary_text);
-        vec![
-            row![title.width(Length::Fill), when]
-                .spacing(panels::HEADER_GAP)
-                .into(),
-        ]
-    } else {
-        vec![title.into()]
-    };
+        head = head
+            .push(when)
+            .push(sherlock_ui::notifications::close_button(
+                Message::RemoveNotifications(vec![entry.id]),
+            ));
+    }
+    let mut lines: Vec<Element<'_, Message>> = vec![head.into()];
     if !entry.body.is_empty() {
         lines.push(
             ui::body(entry.body.as_str())
+                .wrapping(text::Wrapping::WordOrGlyph)
                 .style(panels::secondary_text)
                 .into(),
         );
     }
-    let buttons: Vec<Element<'_, Message>> = entry
+    // Their row shares the width, « Options » beyond three, as in a bubble (D-23c).
+    let actions: Vec<(&str, Message)> = entry
         .actions
         .iter()
         .filter(|(key, _)| entry.open && key != "default")
-        .take(sherlock_ui::notifications::MAX_BUTTONS)
-        .enumerate()
-        .map(|(i, (key, label))| {
-            let invoke = Message::InvokeAction(entry.id, key.clone());
-            panels::action_button(label.as_str(), i == 0, Some(invoke)).into()
-        })
+        .map(|(key, label)| (label.as_str(), Message::InvokeAction(entry.id, key.clone())))
         .collect();
-    if !buttons.is_empty() {
-        let buttons = iced::widget::Row::with_children(buttons).spacing(panels::ACTION_GAP);
+    if !actions.is_empty() {
+        let toggle = Message::NotificationOptions(entry.id);
+        let actions = sherlock_ui::notifications::action_row(actions, options, toggle);
         lines.push(
-            container(buttons)
+            container(actions)
                 .padding(Padding {
                     top: 2.0,
                     ..Padding::ZERO
@@ -308,8 +386,12 @@ fn notification(entry: &Entry, timed: bool) -> Element<'_, Message> {
                 .into(),
         );
     }
-    Column::with_children(lines)
-        .spacing(panels::CARD_GAP)
+    // A click on it runs its default action, as on a bubble, and clears it (D-23d); « × » on
+    // the right of its title clears it alone.
+    let body = Column::with_children(lines).spacing(panels::CARD_GAP);
+    mouse_area(body)
+        .on_press(Message::OpenNotification(entry.id))
+        .interaction(iced::mouse::Interaction::Pointer)
         .into()
 }
 
@@ -436,6 +518,49 @@ mod tests {
         let surface_top = metrics::TOP_BAR_MARGIN_TOP + top as f32;
         let (ix, iy, _, _) = input_rect(panel, margins, shared);
         (surface_left + ix as f32, surface_top + iy as f32)
+    }
+
+    /// Every screen of the brief, as logical heights: 1280 × 720, 1366 × 768 at 1.25,
+    /// 1920 × 1080 at 1.5, 1280 × 800 at 1.5, 4K at 2 and at 1.
+    const SCREENS: [f32; 6] = [720.0, 614.4, 720.0, 533.3, 1080.0, 2160.0];
+
+    #[test]
+    fn the_panels_fit_in_every_screen_and_scroll_what_does_not() {
+        let top = metrics::TOP_BAR_MARGIN_TOP + metrics::TOP_BAR_HEIGHT + panels::BELOW_BAR;
+        for keyboard in [false, true] {
+            reserve_keyboard(keyboard);
+            // Unknown screen: the board's sizes.
+            reserve_screen(None);
+            for panel in [Panel::Control, Panel::Calendar] {
+                assert_eq!(panel.size(), panel.content_size());
+            }
+            assert_eq!(center_height(), panels::CENTER_HEIGHT);
+            for screen in SCREENS {
+                reserve_screen(Some(screen));
+                for panel in [Panel::Control, Panel::Calendar] {
+                    let (_, height) = panel.size();
+                    assert!(
+                        top + height + SCREEN_ROOM <= screen + 0.01,
+                        "{panel:?} on {screen}: {height}"
+                    );
+                    // What is cut scrolls; nothing is cut on a screen tall enough.
+                    let (_, full) = panel.content_size();
+                    if screen >= 1080.0 {
+                        assert_eq!(height, full, "{panel:?} on {screen}");
+                    }
+                }
+                let center = center_height();
+                assert!((CENTER_MIN..=panels::CENTER_HEIGHT).contains(&center));
+            }
+        }
+        // On 1366 × 768 at 1.25, the centre gives up some height but the calendar stays whole
+        // above it, without scrolling.
+        reserve_screen(Some(614.4));
+        let (_, height) = Panel::Calendar.size();
+        assert_eq!(height, Panel::Calendar.content_size().1);
+        assert!(center_height() < panels::CENTER_HEIGHT);
+        reserve_screen(None);
+        reserve_keyboard(false);
     }
 
     #[test]

@@ -3,9 +3,11 @@
 //! `compositor [--nested [--outputs N] | --headless] [--xwayland] [--measure] [--scale S]…
 //! [--workspaces N]
 //! [--snap-gap PX] [--minimize-effect genie|scale|none] [--window-animations on|off]
-//! [command [arguments…]]`.
+//! [--greeter] [--] [command [arguments…]]`.
 //! Without `--nested`, it is the real session (lot D-14), started from a text console or by
-//! the login screen, never inside another graphical session.
+//! the login screen, never inside another graphical session. `--greeter` makes it the
+//! compositor of the login screen (lot D-24, ADR 0026). `--` ends the options: what follows is
+//! the command, even if it starts with `--`.
 
 use std::ffi::OsString;
 
@@ -36,6 +38,9 @@ pub struct Options {
     /// Opening and closing animations of the windows (`--window-animations on|off`); `None`
     /// keeps the default, on.
     pub window_animations: Option<bool>,
+    /// The compositor of the login screen (`--greeter`, lot D-24, ADR 0026): one client shown
+    /// fullscreen, no shortcut of the desktop, and the compositor stops with the command.
+    pub greeter: bool,
     /// Command launched once XWayland is ready.
     pub command: Vec<OsString>,
 }
@@ -50,9 +55,14 @@ impl Options {
         }
         let (mut measure, mut xwayland, mut screens, mut scales) = (false, false, None, Vec::new());
         let (mut workspaces, mut snap_gap, mut minimize_effect) = (None, None, None);
-        let (mut window_animations, mut headless) = (None, false);
+        let (mut window_animations, mut headless, mut greeter) = (None, false, false);
         loop {
             match command.first().and_then(|a| a.to_str()) {
+                Some("--") => {
+                    command.remove(0);
+                    break;
+                }
+                Some("--greeter") => greeter = true,
                 Some("--headless") if !nested => headless = true,
                 Some("--measure") => measure = true,
                 Some("--xwayland") => xwayland = true,
@@ -86,6 +96,7 @@ impl Options {
             snap_gap,
             minimize_effect,
             window_animations,
+            greeter,
             command,
         })
     }
@@ -95,6 +106,13 @@ impl Options {
     /// `docs/compositor.md`), and the card must stay asleep.
     pub fn xwayland(&self) -> bool {
         self.nested || self.xwayland
+    }
+
+    /// The session stops when the command ends: the measured scene with `--measure`, the
+    /// login screen with `--greeter` (greetd starts the chosen session once its greeter, this
+    /// compositor, has left).
+    pub fn stops_with_command(&self) -> bool {
+        self.measure || self.greeter
     }
 
     /// The real session takes the screens and the input devices of the seat: it refuses to
@@ -212,6 +230,19 @@ mod tests {
         // What follows the command belongs to it.
         assert_eq!(options.command, ["konsole", "--scale"]);
         assert_eq!(parse(&["--nested"]).unwrap().scales, [1.0]);
+    }
+
+    #[test]
+    fn the_greeter_stops_with_its_command_given_after_two_dashes() {
+        let options = parse(&["--greeter", "--", "sherlockos-greeter", "--scale"]).unwrap();
+        assert!(options.greeter && !options.nested && options.stops_with_command());
+        assert_eq!(options.command, ["sherlockos-greeter", "--scale"]);
+        // The two dashes are only taken once: a second pair belongs to the command.
+        let options = parse(&["--", "--", "x"]).unwrap();
+        assert!(!options.greeter && !options.stops_with_command());
+        assert_eq!(options.command, ["--", "x"]);
+        assert!(parse(&["--headless", "--greeter", "x"]).unwrap().greeter);
+        assert!(parse(&["--nested", "--greeter"]).unwrap().greeter);
     }
 
     #[test]

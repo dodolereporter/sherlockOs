@@ -83,6 +83,11 @@ install-session: cursors
     cargo build --release -p compositor -p bar -p dock -p launcher -p notifications -p evidence -p lock -p apps -p control-room -p autostart
     desktop/compositor/session/install.sh "$PWD"
 
+# Builds the compositor and the login screen, then prints the sudo commands that make it the display manager (greetd, ADR 0026) and those that go back to SDDM, without running them
+install-greeter:
+    cargo build --release -p compositor -p greeter
+    desktop/greeter/install.sh "$PWD"
+
 # Installs Evidence for the user, without root: its binary in ~/.local/bin, its desktop entry, which the dock pins and the launcher lists, and its icon
 install-evidence:
     #!/usr/bin/env bash

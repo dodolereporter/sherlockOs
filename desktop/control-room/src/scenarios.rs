@@ -503,6 +503,93 @@ fn capture(app: &App, name: &str, size: (f32, f32)) -> PathBuf {
 /// bar, and a narrow one, where the sidebar folds.
 const SIZES: [((f32, f32), &str); 2] = [((1920.0, 1032.0), "wide"), ((520.0, 760.0), "narrow")];
 
+/// The Bluetooth page (lot D-26o) with what BlueZ would give: a headset connected at 80 %, a
+/// mouse paired, a speaker around while the scan runs; then the question of a pairing. Both
+/// sizes, both themes: `bluetooth-<size>-<theme>`, `bluetooth-pairing-wide-dark`.
+#[test]
+fn captures_of_the_bluetooth_page() {
+    use crate::bluetooth::Msg;
+    use system_services::bluetooth::{Asked, Bluetooth, Device, Kind, Reply};
+    let device = |path: &str, name: &str, kind, paired, connected, battery| Device {
+        path: path.to_owned(),
+        name: name.to_owned(),
+        kind,
+        paired,
+        connected,
+        battery,
+    };
+    let read = Bluetooth {
+        adapter: String::from("/org/bluez/hci0"),
+        powered: true,
+        connected: 1,
+        devices: vec![
+            device(
+                "/dev/1",
+                "Casque WH-1000XM4",
+                Kind::Audio,
+                true,
+                true,
+                Some(80),
+            ),
+            device(
+                "/dev/2",
+                "Souris MX Master 3 de Camille, au bureau",
+                Kind::Mouse,
+                true,
+                false,
+                None,
+            ),
+            device(
+                "/dev/3",
+                "Enceinte du salon",
+                Kind::Audio,
+                false,
+                false,
+                None,
+            ),
+        ],
+    };
+    for (which, theme_name) in [(Theme::Dark, "dark"), (Theme::Light, "light")] {
+        let _theme = in_theme(which);
+        let (_tmp, mut app) = bench("bluetooth", Vec::new());
+        let _ = app.update(Message::Go(Page::Bluetooth));
+        let _ = app.update(Message::Bluetooth(Msg::Read(Ok(read.clone()))));
+        app.settle();
+        for &(size, size_name) in &SIZES {
+            let path = capture(&app, &format!("bluetooth-{size_name}-{theme_name}"), size);
+            assert!(path.exists(), "{}", path.display());
+        }
+        if which == Theme::Dark {
+            let messages: Vec<Message> = {
+                let mut ui = simulator(&app, SIZES[0].0);
+                ui.click(t::CONNECT).expect("the mouse connects");
+                ui.click(t::PAIR).expect("the speaker pairs");
+                ui.into_messages().collect()
+            };
+            assert!(
+                matches!(
+                    messages.as_slice(),
+                    [
+                        Message::Bluetooth(Msg::Device(mouse)),
+                        Message::Bluetooth(Msg::Device(speaker)),
+                    ] if mouse == "/dev/2" && speaker == "/dev/3"
+                ),
+                "{messages:?}"
+            );
+            // A pairing asks to confirm a code.
+            app.bluetooth.busy = Some(String::from("/dev/3"));
+            let (sender, _answer) = iced::futures::channel::oneshot::channel();
+            let asked = Asked::Confirm(String::from("123456"));
+            app.bluetooth.asked = Some((asked, Reply::new(sender)));
+            let path = capture(&app, "bluetooth-pairing-wide-dark", SIZES[0].0);
+            assert!(path.exists());
+        }
+        // Leaving the page stops the scan and what was under way.
+        let _ = app.update(Message::Go(Page::Sound));
+        assert!(app.bluetooth.asked.is_none() && app.bluetooth.busy.is_none());
+    }
+}
+
 #[test]
 fn captures_of_the_pages_in_both_themes() {
     let (_, dirs) = wallpapers();
@@ -807,4 +894,155 @@ fn the_page_left_fades_out_under_the_new_one() {
     std::thread::sleep(cr::PAGE_FADE);
     let _ = app.update(Message::Frame(std::time::Instant::now()));
     assert!(app.leaving.is_none());
+}
+
+/// Two screens as a laptop with a monitor on its right gives them.
+fn two_screens() -> Vec<crate::displays::Screen> {
+    use crate::displays::{Lit, Mode, Screen};
+    let mode = |width, height, refresh| Mode {
+        width,
+        height,
+        refresh,
+    };
+    let laptop = vec![
+        mode(2560, 1600, 60_000),
+        mode(1920, 1200, 60_000),
+        mode(1280, 800, 60_000),
+    ];
+    let monitor = vec![
+        mode(2560, 1440, 143_981),
+        mode(2560, 1440, 59_951),
+        mode(1920, 1080, 60_000),
+    ];
+    vec![
+        Screen {
+            name: "eDP-1".into(),
+            make: "BOE".into(),
+            model: "Écran intégré".into(),
+            on: Some(Lit {
+                mode: laptop[0],
+                position: (0, 0),
+                transform: 0,
+                scale: 2.0,
+            }),
+            modes: laptop,
+        },
+        Screen {
+            name: "DP-1".into(),
+            make: "DEL".into(),
+            model: "Moniteur 27 pouces".into(),
+            on: Some(Lit {
+                mode: monitor[0],
+                position: (1280, 0),
+                transform: 0,
+                scale: 1.25,
+            }),
+            modes: monitor,
+        },
+    ]
+}
+
+#[test]
+fn a_screen_change_waits_for_keep_and_comes_back_without_it() {
+    use crate::displays::{Answer, Event};
+    use crate::pages::displays::Change as Screens;
+    let (_tmp, mut app) = bench("displays", Vec::new());
+    let _ = app.update(Message::Go(Page::Displays));
+    let (sender, requests) = std::sync::mpsc::channel();
+    let event = |e| Message::Displays(Screens::Event(e));
+    let _ = app.update(event(Event::Ready(sender)));
+    let _ = app.update(event(Event::Screens(two_screens())));
+    // The main screen is chosen first.
+    assert_eq!(app.displays.selected.as_deref(), Some("eDP-1"));
+
+    // A scale: sent whole, the other screen as it is.
+    let _ = app.update(Message::Displays(Screens::Scale(1.5)));
+    let sent = requests.try_recv().expect("a configuration");
+    let laptop = sent
+        .0
+        .iter()
+        .find(|(n, _)| n == "eDP-1")
+        .unwrap()
+        .1
+        .unwrap();
+    assert_eq!(laptop.scale, 1.5);
+    let monitor = sent.0.iter().find(|(n, _)| n == "DP-1").unwrap().1.unwrap();
+    assert_eq!(monitor.scale, 1.25);
+    assert!(app.displays.confirm.is_none());
+    let _ = app.update(event(Event::Answer(Answer::Applied)));
+    let (previous, until) = app.displays.confirm.clone().expect("a confirmation");
+    // Before the delay nothing comes back; after it, the previous configuration does.
+    app.tick_displays(until - std::time::Duration::from_secs(1));
+    assert!(requests.try_recv().is_err());
+    app.tick_displays(until);
+    assert_eq!(requests.try_recv().unwrap(), previous);
+    assert!(app.displays.confirm.is_none());
+
+    // « Garder » keeps it.
+    let _ = app.update(Message::Displays(Screens::Rotation(1)));
+    let _ = requests.try_recv().unwrap();
+    let _ = app.update(event(Event::Answer(Answer::Applied)));
+    let _ = app.update(Message::Displays(Screens::Keep));
+    assert!(app.displays.confirm.is_none());
+
+    // A refusal says so, and waits for nothing.
+    let _ = app.update(Message::Displays(Screens::Resolution(1280, 800)));
+    let _ = requests.try_recv().unwrap();
+    let _ = app.update(event(Event::Answer(Answer::Refused)));
+    assert!(app.displays.refused && app.displays.confirm.is_none());
+
+    // The monitor becomes the main screen: it goes to the origin, the laptop to its left.
+    let _ = app.update(Message::Displays(Screens::Select("DP-1".into())));
+    let _ = app.update(Message::Displays(Screens::Main));
+    let sent = requests.try_recv().unwrap();
+    let at = |n: &str| {
+        sent.0
+            .iter()
+            .find(|(m, _)| m == n)
+            .unwrap()
+            .1
+            .unwrap()
+            .position
+    };
+    assert_eq!((at("DP-1"), at("eDP-1")), ((0, 0), (-1280, 0)));
+}
+
+#[test]
+fn captures_of_the_screens() {
+    use crate::displays::Event;
+    use crate::pages::displays::Change as Screens;
+    for (which, theme_name) in [(Theme::Dark, "dark"), (Theme::Light, "light")] {
+        let _theme = in_theme(which);
+        let (_tmp, mut app) = bench("capture-displays", Vec::new());
+        let _ = app.update(Message::Go(Page::Displays));
+        let (sender, _requests) = std::sync::mpsc::channel();
+        let event = |e| Message::Displays(Screens::Event(e));
+        let _ = app.update(event(Event::Ready(sender)));
+        let _ = app.update(event(Event::Screens(two_screens())));
+        app.settle();
+        for &(size, size_name) in &SIZES {
+            capture(&app, &format!("displays-{size_name}-{theme_name}"), size);
+        }
+        // Waiting for « Garder ».
+        let _ = app.update(Message::Displays(Screens::Scale(1.5)));
+        let _ = app.update(event(Event::Answer(crate::displays::Answer::Applied)));
+        capture(&app, &format!("displays-confirm-{theme_name}"), SIZES[0].0);
+    }
+}
+
+#[test]
+fn a_file_changed_elsewhere_shows_unless_a_change_of_ours_waits() {
+    let (_tmp, mut app) = bench_with("follow", &[("sherlockos/touchpad.conf", "speed = 0.4\n")]);
+    // Changed by hand while Control Room is open.
+    fs::write(&app.paths.touchpad, "speed = 0.4\ntap-to-click = false\n").expect("file");
+    let _ = app.update(Message::FilesChanged);
+    let _ = app.update(Message::Reloaded(Arc::new(Settings::load(&app.paths))));
+    assert!(!app.settings.touchpad.tap_to_click);
+    // A change of ours waits: what was read before it does not replace it.
+    let stale = Arc::new(Settings::load(&app.paths));
+    let _ = app.update(Message::Set(Change::NaturalScroll(false)));
+    let _ = app.update(Message::Reloaded(stale));
+    assert!(!app.settings.touchpad.natural_scroll);
+    app.finish_writes();
+    assert!(!Settings::load(&app.paths).0.touchpad.natural_scroll);
 }

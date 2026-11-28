@@ -4,7 +4,9 @@
 
 pub mod anim;
 pub mod app;
+pub mod autostart;
 pub mod config;
+pub mod dnd;
 pub mod drag;
 pub mod entry;
 pub mod hide;
@@ -16,6 +18,8 @@ pub mod menu;
 pub mod pins;
 pub mod save;
 pub mod shell;
+pub mod stack;
+pub mod trash;
 mod view;
 pub mod watch;
 pub mod windows;
@@ -158,6 +162,8 @@ pub fn run() -> Result<(), iced_exwlshell::Error> {
         })
         .settings(settings())
         .wl_settings(ExWlSettings {
+            // On the shell socket, the only one that offers anchored surfaces (lot D-46).
+            with_connection: Some(shell_protocol::connect.into()),
             layer_settings: layer,
             shell_broadcast: broadcast,
             ..ExWlSettings::default()

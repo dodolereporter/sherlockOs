@@ -52,9 +52,9 @@ impl Shell {
     pub fn with_connection(connection: Connection) -> Result<Self, SourceError> {
         let (globals, mut queue) = registry_queue_init::<Toplevels>(&connection)?;
         let manager: SherlockShellManagerV1 = globals
-            .bind(&queue.handle(), 1..=4, ())
+            .bind(&queue.handle(), 1..=6, ())
             .map_err(SourceError::NoShellProtocol)?;
-        // App Expose came with version 4.
+        // App Expose came with version 4, the attention state with version 5, `kill` with 6.
         let expose = (manager.version() >= 4).then(|| manager.clone());
         let control = ShellControl {
             connection,
@@ -112,6 +112,7 @@ impl Source for Shell {
                 activated: t.activated,
                 minimized: t.minimized,
                 recency: t.recency,
+                attention: t.attention,
             })
             .collect();
         let covered = self
@@ -126,6 +127,11 @@ impl Source for Shell {
             controllable: true,
             covered,
             expose: self.control.manager.is_some(),
+            force: self
+                .control
+                .manager
+                .as_ref()
+                .is_some_and(|m| m.version() >= 6),
         })
     }
 
@@ -198,6 +204,15 @@ impl Shared {
     }
 }
 
+/// « Forcer à quitter », when the compositor knows it (version 6).
+fn kill(toplevel: &SherlockShellToplevelV1) {
+    if toplevel.version() >= 6 {
+        toplevel.kill();
+    } else {
+        tracing::info!("the compositor cannot force an application to quit");
+    }
+}
+
 impl ShellControl {
     fn flush(&self) {
         if let Err(error) = self.connection.flush() {
@@ -215,6 +230,7 @@ impl Control for ShellControl {
                 Request::Activate => window.toplevel.activate(),
                 Request::Minimize => window.toplevel.minimize(),
                 Request::Close => window.toplevel.close(),
+                Request::Kill => kill(&window.toplevel),
             }
             count += 1;
         }
@@ -233,6 +249,7 @@ impl Control for ShellControl {
             Request::Activate => handle.toplevel.activate(),
             Request::Minimize => handle.toplevel.minimize(),
             Request::Close => handle.toplevel.close(),
+            Request::Kill => kill(&handle.toplevel),
         }
         drop(shared);
         self.flush();
@@ -286,11 +303,13 @@ struct Toplevel {
     title: String,
     activated: bool,
     minimized: bool,
+    /// Asks for attention (version 5, lot Q-52).
+    attention: bool,
     recency: u64,
     pending_app_id: Option<String>,
     pending_title: Option<String>,
-    /// Activated, minimized.
-    pending_state: Option<(bool, bool)>,
+    /// Activated, minimized, asks for attention.
+    pending_state: Option<(bool, bool, bool)>,
     /// A `done` came after it appeared.
     described: bool,
 }
@@ -358,6 +377,7 @@ impl Dispatch<SherlockShellManagerV1, ()> for Toplevels {
                 title: String::new(),
                 activated: false,
                 minimized: false,
+                attention: false,
                 recency: 0,
                 pending_app_id: None,
                 pending_title: None,
@@ -387,13 +407,14 @@ impl Dispatch<SherlockShellManagerV1, ()> for Toplevels {
                     if let Some(title) = toplevel.pending_title.take() {
                         toplevel.title = title;
                     }
-                    if let Some((activated, minimized)) = toplevel.pending_state.take() {
+                    if let Some((activated, minimized, attention)) = toplevel.pending_state.take() {
                         toplevel.recency =
                             state
                                 .stamps
                                 .follow(toplevel.activated, activated, toplevel.recency);
                         toplevel.activated = activated;
                         toplevel.minimized = minimized;
+                        toplevel.attention = attention;
                     }
                     toplevel.described = true;
                 }
@@ -435,7 +456,8 @@ impl Dispatch<SherlockShellToplevelV1, ()> for Toplevels {
             toplevel::Event::State { state: flags } => {
                 let activated = holds(&flags, toplevel::State::Activated as u32);
                 let minimized = holds(&flags, toplevel::State::Minimized as u32);
-                toplevel.pending_state = Some((activated, minimized));
+                let attention = holds(&flags, toplevel::State::Attention as u32);
+                toplevel.pending_state = Some((activated, minimized, attention));
             }
             // Gone, but published with the rest of its batch: only `done` makes a consistent
             // state (a window closing and another opening must not read as one window less).

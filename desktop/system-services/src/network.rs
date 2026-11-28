@@ -1,16 +1,18 @@
 //! Wi-Fi through NetworkManager on the system bus: switch it on and off, the network it is on,
 //! the networks around, joining one (with its password when it has none saved, or a hidden one
-//! by its name), following the activation to its end, and forgetting a saved network.
+//! by its name), following the activation to its end, and forgetting a saved network. Shared
+//! by the bar's quick settings and Control Room's network page, which also joins WEP and
+//! enterprise networks (`join_with`).
 
 use std::collections::HashMap;
 use std::time::Duration;
 
-use iced::futures::StreamExt;
-use iced::futures::future::Either;
+use futures_lite::StreamExt;
 use zbus::Connection;
 use zbus::zvariant::{ObjectPath, OwnedObjectPath, OwnedValue, Value};
 
-use super::{Problem, Result, get, set};
+use crate::bus::{get, set};
+use crate::{Problem, Result};
 
 pub const SERVICE: &str = "org.freedesktop.NetworkManager";
 pub const PATH: &str = "/org/freedesktop/NetworkManager";
@@ -448,13 +450,12 @@ pub async fn outcome(bus: &Connection, active: &str, limit: Duration) -> Result<
         }
         Outcome::Failed(0)
     };
-    let timer = crate::bus::pause(limit);
-    Ok(
-        match iced::futures::future::select(Box::pin(ended), Box::pin(timer)).await {
-            Either::Left((end, _)) => end,
-            Either::Right(((), _)) => Outcome::TimedOut,
-        },
-    )
+    // A timer of zbus's own runtime (async-io): no thread, no interface toolkit.
+    let timer = async {
+        async_io::Timer::after(limit).await;
+        Outcome::TimedOut
+    };
+    Ok(futures_lite::future::or(ended, timer).await)
 }
 
 /// Joins `network` and follows the activation to its end. A connection created for it that
@@ -466,6 +467,12 @@ pub async fn join(
     password: Option<&str>,
 ) -> Result<Outcome> {
     let attempt = connect(bus, device, network, password).await?;
+    follow(bus, &attempt).await
+}
+
+/// Follows `attempt` to its end, `ACTIVATION_LIMIT` at most, and deletes the connection it
+/// created when it fails.
+async fn follow(bus: &Connection, attempt: &Attempt) -> Result<Outcome> {
     let end = outcome(bus, attempt.active.as_str(), ACTIVATION_LIMIT).await?;
     if let (Outcome::WrongPassword | Outcome::Failed(_), Some(created)) = (end, &attempt.created)
         && let Err(problem) = delete(bus, created).await
@@ -529,6 +536,164 @@ pub fn new_connection<'a>(network: &'a Network, password: Option<&'a str>) -> Re
     Ok(settings)
 }
 
+/// What a network asks to be joined, beyond its name (lot D-26n, Control Room).
+#[derive(Clone, PartialEq, Eq)]
+pub enum Credentials {
+    /// Open: nothing.
+    None,
+    /// WPA, WPA2 or WPA3 with a password.
+    Password(String),
+    /// WEP, with its key.
+    Wep(String),
+    /// WPA2 or WPA3 Enterprise (802.1X): an identity and its password, the inner method, and
+    /// the domain the server's certificate must name (eduroam asks for one).
+    Enterprise {
+        method: Eap,
+        identity: String,
+        password: String,
+        domain: Option<String>,
+    },
+}
+
+// The secrets never go to the log.
+impl std::fmt::Debug for Credentials {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::None => "None",
+            Self::Password(_) => "Password(…)",
+            Self::Wep(_) => "Wep(…)",
+            Self::Enterprise { .. } => "Enterprise(…)",
+        })
+    }
+}
+
+/// The outer method of an enterprise network, both with MSCHAPv2 inside.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Eap {
+    Peap,
+    Ttls,
+}
+
+/// The longest identity, password or domain taken (the name: `MAX_SSID`), so that nothing
+/// unbounded goes to the bus.
+pub const MAX_FIELD: usize = 256;
+
+/// The settings of a new connection to the network `ssid` with `credentials`; `hidden`: the
+/// network does not say its name, the device asks for it.
+pub fn connection<'a>(
+    ssid: &'a str,
+    hidden: bool,
+    credentials: &'a Credentials,
+) -> Result<Settings<'a>> {
+    let bad = |what: &str| Err(Problem::Failed(format!("{what} is empty or too long")));
+    if ssid.is_empty() || ssid.len() > MAX_SSID {
+        return bad("the network's name");
+    }
+    let too_long = |text: &str| text.is_empty() || text.len() > MAX_FIELD;
+    let mut settings = HashMap::from([
+        (
+            "connection",
+            HashMap::from([
+                ("type", Value::from("802-11-wireless")),
+                ("id", Value::from(ssid)),
+            ]),
+        ),
+        (
+            "802-11-wireless",
+            HashMap::from([
+                ("ssid", Value::from(ssid.as_bytes())),
+                ("mode", Value::from("infrastructure")),
+                ("hidden", Value::from(hidden)),
+            ]),
+        ),
+    ]);
+    let security = match credentials {
+        Credentials::None => return Ok(settings),
+        Credentials::Password(password) if too_long(password) => return bad("the password"),
+        Credentials::Password(password) => HashMap::from([
+            ("key-mgmt", Value::from("wpa-psk")),
+            ("psk", Value::from(password.as_str())),
+        ]),
+        Credentials::Wep(key) if too_long(key) => return bad("the key"),
+        Credentials::Wep(key) => HashMap::from([
+            ("key-mgmt", Value::from("none")),
+            ("auth-alg", Value::from("open")),
+            ("wep-key0", Value::from(key.as_str())),
+            // A passphrase, hashed to the key by NetworkManager; 1 is a key in hexadecimal.
+            (
+                "wep-key-type",
+                Value::from(if is_hex_key(key) { 1u32 } else { 2u32 }),
+            ),
+        ]),
+        Credentials::Enterprise {
+            method,
+            identity,
+            password,
+            domain,
+        } => {
+            if too_long(identity) || too_long(password) {
+                return bad("the identity or the password");
+            }
+            let eap = match method {
+                Eap::Peap => "peap",
+                Eap::Ttls => "ttls",
+            };
+            let mut dot1x = HashMap::from([
+                ("eap", Value::from(vec![eap])),
+                ("identity", Value::from(identity.as_str())),
+                ("password", Value::from(password.as_str())),
+                ("phase2-auth", Value::from("mschapv2")),
+            ]);
+            if let Some(domain) = domain.as_deref().filter(|d| !d.is_empty()) {
+                if domain.len() > MAX_FIELD {
+                    return bad("the domain");
+                }
+                dot1x.insert("domain-suffix-match", Value::from(domain));
+            }
+            settings.insert("802-1x", dot1x);
+            HashMap::from([("key-mgmt", Value::from("wpa-eap"))])
+        }
+    };
+    settings.insert("802-11-wireless-security", security);
+    Ok(settings)
+}
+
+/// A WEP key given in hexadecimal: 10 or 26 digits.
+fn is_hex_key(key: &str) -> bool {
+    matches!(key.len(), 10 | 26) && key.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+/// Joins the network `ssid` with `credentials`, on `device`: through `point` (an access point
+/// of the scan) or, for a hidden network, by its name (lot D-26n, Control Room). NetworkManager
+/// keeps the connection, its secrets readable by root only, and asks polkit; the activation is
+/// followed to its end as `join` does, and the connection deleted when it fails.
+pub async fn join_with(
+    bus: &Connection,
+    device: &str,
+    ssid: &str,
+    point: Option<&str>,
+    credentials: &Credentials,
+) -> Result<Outcome> {
+    let settings = connection(ssid, point.is_none(), credentials)?;
+    let device = object(device)?;
+    let point = object(point.unwrap_or(ANY_POINT))?;
+    let reply = bus
+        .call_method(
+            Some(SERVICE),
+            PATH,
+            Some(MANAGER),
+            "AddAndActivateConnection",
+            &(settings, &device, &point),
+        )
+        .await?;
+    let (created, active): (OwnedObjectPath, OwnedObjectPath) = reply.body().deserialize()?;
+    let attempt = Attempt {
+        active,
+        created: Some(created),
+    };
+    follow(bus, &attempt).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -586,5 +751,38 @@ mod tests {
             Some(Outcome::WrongPassword)
         );
         assert_eq!(ending(DEACTIVATED, 6), Some(Outcome::Failed(6)));
+    }
+
+    #[test]
+    fn every_kind_of_network_gets_its_settings() {
+        let none = Credentials::None;
+        let hidden = connection("Cachée", true, &none).unwrap();
+        assert_eq!(hidden["802-11-wireless"]["hidden"], Value::from(true));
+        assert!(!hidden.contains_key("802-11-wireless-security"));
+        let wep = Credentials::Wep(String::from("0123456789"));
+        let settings = connection("Vieux", false, &wep).unwrap();
+        let security = &settings["802-11-wireless-security"];
+        assert_eq!(security["key-mgmt"], Value::from("none"));
+        assert_eq!(security["wep-key-type"], Value::from(1u32));
+        let eduroam = Credentials::Enterprise {
+            method: Eap::Peap,
+            identity: String::from("moi@universite.fr"),
+            password: String::from("secret"),
+            domain: Some(String::from("universite.fr")),
+        };
+        let settings = connection("eduroam", false, &eduroam).unwrap();
+        assert_eq!(
+            settings["802-11-wireless-security"]["key-mgmt"],
+            Value::from("wpa-eap")
+        );
+        let dot1x = &settings["802-1x"];
+        assert_eq!(dot1x["phase2-auth"], Value::from("mschapv2"));
+        assert_eq!(dot1x["domain-suffix-match"], Value::from("universite.fr"));
+        // Bounded, and never in the log.
+        assert!(connection(&"x".repeat(33), false, &none).is_err());
+        assert!(connection("", false, &none).is_err());
+        let long = Credentials::Password("p".repeat(MAX_FIELD + 1));
+        assert!(connection("Maison", false, &long).is_err());
+        assert!(!format!("{eduroam:?}").contains("secret"));
     }
 }

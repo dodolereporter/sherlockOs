@@ -29,6 +29,9 @@ mime-apps = { path = "../mime-apps" }
 # Outputs, microphones and their volumes through `pactl`, as the bar and the media keys
 # (workspace crate).
 system-services = { path = "../system-services" }
+# BlueZ on the system bus for the Bluetooth page (lot D-26o): the version and features the bar
+# pins (its own small executor, no tokio).
+zbus = { version = "=5.19.0", default-features = false, features = ["async-io", "blocking-api"] }
 # The screens page talks `wlr-output-management` to the compositor on a connection of its own
 # (ADR 0025): the versions the workspace already pulls, client side.
 wayland-client = "=0.31.15"

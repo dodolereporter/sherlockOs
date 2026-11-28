@@ -17,11 +17,15 @@ pub(super) use sherlock_shell_toplevel_v1::State as ToplevelState;
 use crate::State;
 
 /// Version of the global. Version 2 adds the `snapped` state of a screen, version 3 the global
-/// menu, version 4 `show_windows` for App Expose.
-const VERSION: u32 = 4;
+/// menu, version 4 `show_windows` for App Expose, version 5 the `attention` state of a window
+/// (lot Q-52), version 6 `kill` (lot D-21i).
+const VERSION: u32 = 6;
 
 /// First version with the global menu.
 const APP_MENU_SINCE: u32 = 3;
+
+/// First version with the `attention` state of a window.
+const ATTENTION_SINCE: u32 = 5;
 
 pub(super) fn create_global(dh: &DisplayHandle) {
     dh.create_global::<State, SherlockShellManagerV1, ()>(VERSION, ());
@@ -158,8 +162,18 @@ fn send(resource: &SherlockShellToplevelV1, old: Option<&Snapshot>, new: &Snapsh
     if resource.version() >= APP_MENU_SINCE && old.is_none_or(|o| o.menu != new.menu) {
         resource.app_menu(new.menu.service.clone(), new.menu.path.clone());
     }
-    if old.is_none_or(|o| o.states != new.states) {
-        resource.state(bytes(&new.states));
+    // A client of an older version never hears of a state it does not know.
+    let known = |states: &[u32]| -> Vec<u32> {
+        let attention = ToplevelState::Attention as u32;
+        let all = resource.version() >= ATTENTION_SINCE;
+        states
+            .iter()
+            .copied()
+            .filter(|s| all || *s != attention)
+            .collect()
+    };
+    if old.is_none_or(|o| known(&o.states) != known(&new.states)) {
+        resource.state(bytes(&known(&new.states)));
     }
     if old.is_none_or(|o| o.output != new.output) {
         resource.output(new.output.clone());
@@ -285,6 +299,7 @@ impl Dispatch<SherlockShellToplevelV1, u32> for State {
             Request::Activate => state.activate(&window),
             Request::Minimize => state.minimize(&window),
             Request::Close => State::close(&window),
+            Request::Kill => state.force_quit(&window),
             Request::MoveToWorkspace { workspace } => state.move_to_workspace(&window, &workspace),
             _ => {}
         }

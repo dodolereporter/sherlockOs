@@ -51,13 +51,14 @@ pub const QUICK_WIDTH: f32 = 336.0;
 /// and 8, the volume and brightness rows, the two segmented groups, the user row, 14 between
 /// each), plus the line under the volume that names the output, plus the row of the keyboard
 /// backlight (D-35d). On a machine without one, the panel is `KEYBOARD_ROW` shorter (UI-04).
+/// The board's « Carte graphique » group is not there (D-20f): nothing switches the card yet.
 pub const CONTROL_HEIGHT: f32 = 2.0 * (PADDING + metrics::BORDER_WIDTH)
     + (2.0 * 56.0 + 8.0)
-    + 5.0 * metrics::GAP_SECTION
+    + 4.0 * metrics::GAP_SECTION
     + KEYBOARD_ROW
     + (28.0 + 4.0 + 17.0)
     + 28.0
-    + 2.0 * (17.0 + 6.0 + 36.0)
+    + (17.0 + 6.0 + 36.0)
     + (metrics::BORDER_WIDTH + 12.0 + 34.0);
 
 /// The slider of the keyboard backlight under the brightness, with its gap.
@@ -168,10 +169,13 @@ pub enum Glyph {
     Keyboard,
     Phone,
     Computer,
+    /// The microphone, on and muted (D-20g).
+    Microphone,
+    MicrophoneMuted,
 }
 
 impl Glyph {
-    pub const ALL: [Self; 18] = [
+    pub const ALL: [Self; 20] = [
         Self::Wifi,
         Self::Bluetooth,
         Self::Moon,
@@ -190,6 +194,8 @@ impl Glyph {
         Self::Keyboard,
         Self::Phone,
         Self::Computer,
+        Self::Microphone,
+        Self::MicrophoneMuted,
     ];
 
     /// Path on the 24 grid.
@@ -225,6 +231,8 @@ impl Glyph {
                 "M8 3h8a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H8a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1zM11 18h2"
             }
             Self::Computer => "M4 5h16v10H4zM2 19h20",
+            Self::Microphone => Icon::Microphone.path(),
+            Self::MicrophoneMuted => Icon::MicrophoneMuted.path(),
         }
     }
 
@@ -345,7 +353,15 @@ pub mod text {
     pub const WIFI: &str = "Wi-Fi";
     pub const BLUETOOTH: &str = "Bluetooth";
     pub const DO_NOT_DISTURB: &str = "Ne pas déranger";
-    pub const GAME_MODE: &str = "Mode jeu";
+    // Its durations (D-23e).
+    pub const DURATIONS: &str = "Durées";
+    pub const FOR_AN_HOUR: &str = "Pendant 1 heure";
+    pub const UNTIL_EVENING: &str = "Jusqu’à ce soir";
+    pub const UNTIL_TOMORROW: &str = "Jusqu’à demain matin";
+    /// The line of the tile while it holds for a time: « Jusqu’à 19:00 ».
+    pub fn until(time: &str) -> String {
+        format!("Jusqu’à {time}")
+    }
     pub const ON: &str = "Activé";
     pub const OFF: &str = "Désactivé";
     pub const LOADING: &str = "…";
@@ -364,6 +380,7 @@ pub mod text {
     pub const WIFI_OFF_LINE: &str = "Le Wi-Fi est coupé.";
     pub const NO_NETWORK: &str = "Aucun réseau trouvé.";
     pub const ENTERPRISE: &str = "Ce réseau se rejoint depuis les Réglages.";
+    pub const OPEN_SETTINGS: &str = "Ouvrir les Réglages";
     // A join that ends badly, a forgotten network, a hidden one (D-20e).
     pub const WRONG_PASSWORD: &str = "Mot de passe incorrect";
     pub const JOIN_FAILED: &str = "Connexion impossible";
@@ -381,10 +398,20 @@ pub mod text {
         format!("Oublier {name} ? Il faudra retaper son mot de passe.")
     }
     pub const MUTE: &str = "Couper le son";
+    // The outputs and the inputs of the sound (D-20g).
+    pub const SOUND: &str = "Son";
+    pub const SOUND_DEVICES: &str = "Sorties et entrées";
+    // What opens Control Room on the right page (D-20f).
+    pub const WIFI_SETTINGS: &str = "Réglages Wi-Fi…";
+    pub const BLUETOOTH_SETTINGS: &str = "Réglages Bluetooth…";
+    pub const SOUND_SETTINGS: &str = "Réglages du son…";
+    pub const OUTPUT: &str = "Sortie";
+    pub const INPUT: &str = "Entrée";
+    pub const NO_INPUT: &str = "Aucun micro";
+    pub const MUTE_MICROPHONE: &str = "Couper le micro";
+    pub const UNMUTE_MICROPHONE: &str = "Rétablir le micro";
     pub const UNMUTE: &str = "Rétablir le son";
     pub const NO_OUTPUT: &str = "Aucune sortie son";
-    pub const GPU: &str = "Carte graphique";
-    pub const GPU_CHOICES: [&str; 3] = ["Auto", "AMD", "NVIDIA"];
     pub const ENERGY: &str = "Énergie";
     pub const PROFILES: [&str; 3] = ["Économie", "Équilibré", "Performance"];
     pub const ENERGY_ABSENT: &str = "Service absent";

@@ -87,7 +87,7 @@ pub fn read_user_dirs(home: &Path) -> Option<String> {
         .map(PathBuf::from)
         .filter(|p| p.is_absolute())
         .unwrap_or_else(|| home.join(".config"));
-    std::fs::read_to_string(config.join("user-dirs.dirs")).ok()
+    crate::ops::read_small_text(&config.join("user-dirs.dirs"), crate::ops::SMALL_FILE)
 }
 
 #[cfg(test)]

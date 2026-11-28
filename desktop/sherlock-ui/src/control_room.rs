@@ -80,6 +80,20 @@ pub const APP_MENU_WIDTH: f32 = CONTROL_WIDTH;
 /// Step of the hours of the automatic theme, in minutes.
 pub const HOUR_STEP: u32 = 30;
 
+/// The « Écrans » page (lot D-26b): the arrangement's area, the margin around the screens in
+/// it, the corner radius of a screen, its thickness of the main screen's bar, and the
+/// smallest a screen is drawn.
+pub const ARRANGEMENT_HEIGHT: f32 = 200.0;
+pub const ARRANGEMENT_MARGIN: f32 = 24.0;
+pub const SCREEN_RADIUS: f32 = 6.0;
+pub const MAIN_BAR: f32 = 5.0;
+/// A change of mode, scale, rotation or of a screen on or off is undone after this long
+/// without « Garder », as on macOS and Windows: a screen left black comes back by itself.
+pub const CONFIRM_DELAY: Duration = Duration::from_secs(15);
+/// The scales offered.
+pub const SCALES: [f64; 5] = [1.0, 1.25, 1.5, 1.75, 2.0];
+/// Width of the menus of resolution, refresh and rotation.
+pub const DISPLAY_MENU_WIDTH: f32 = 220.0;
 /// Width of the value written on the right of a repeat slider (« 1000 ms », « 50 par seconde »).
 pub const VALUE_WIDTH: f32 = 104.0;
 /// Width of the menu of the keyboard layouts.
@@ -125,6 +139,30 @@ pub mod texts {
     pub const APPEARANCE_ABOUT: &str = "Le thème, le fond d'écran et le dock.";
     pub const TOUCHPAD: &str = "Pavé tactile et souris";
     pub const TOUCHPAD_ABOUT: &str = "Comment tes doigts cliquent, glissent et défilent.";
+    pub const BLUETOOTH: &str = "Bluetooth";
+    pub const BLUETOOTH_ABOUT: &str = "Tes casques, souris et claviers sans fil.";
+    // The Bluetooth page (D-26o).
+    pub const BLUETOOTH_SWITCH: &str = "Bluetooth";
+    pub const BLUETOOTH_SWITCH_HELP: &str = "Les appareils appairés se reconnectent seuls.";
+    pub const BLUETOOTH_WORDS: &str = "sans fil casque écouteurs souris clavier manette appairer";
+    pub const MY_DEVICES: &str = "Mes appareils";
+    pub const NEARBY: &str = "Appareils à proximité";
+    pub const NEARBY_SEARCH: &str = "Appareils à proximité Bluetooth";
+    pub const SEARCHING: &str = "Recherche…";
+    pub const NO_PAIRED: &str = "Aucun appareil appairé.";
+    pub const NOTHING_NEARBY: &str = "Aucun appareil à proximité pour l'instant.";
+    pub const BLUETOOTH_OFF_NOTE: &str = "Le Bluetooth est coupé.";
+    pub const BLUETOOTH_LOADING: &str = "Lecture du Bluetooth…";
+    pub const BLUETOOTH_UNAVAILABLE: &str = "Pas de Bluetooth sur cet ordinateur.";
+    pub const CONNECT: &str = "Connecter";
+    pub const DISCONNECT: &str = "Déconnecter";
+    pub const PAIR: &str = "Appairer";
+    pub const RENAME: &str = "Renommer";
+    pub const CONFIRM: &str = "Confirmer";
+    pub const OK: &str = "OK";
+    pub const DEVICE_NAME: &str = "Nom de l'appareil";
+    pub const BLUETOOTH_REFUSED: &str = "Refusé.";
+    pub const BLUETOOTH_FAILED: &str = "Le Bluetooth n'a pas répondu.";
     pub const SOUND: &str = "Son";
     pub const SOUND_ABOUT: &str = "Où le son sort, d'où il entre, et à quel volume.";
     pub const LOCK: &str = "Verrouillage";
@@ -139,6 +177,105 @@ pub mod texts {
         "Des mouvements, de la transparence et du contraste à ta mesure.";
     pub const DEFAULT_APPS: &str = "Applications par défaut";
     pub const DEFAULT_APPS_ABOUT: &str = "Ce qui s'ouvre pour chaque sorte de fichier ou de lien.";
+
+    pub const DISPLAYS: &str = "Écrans";
+    pub const DISPLAYS_ABOUT: &str = "La définition, la taille et la place de chaque écran.";
+
+    // « Écrans ».
+    pub const ARRANGEMENT: &str = "Disposition des écrans";
+    pub const ARRANGEMENT_HELP: &str = "Glisse les écrans pour les placer comme sur ton bureau.";
+    pub const RESOLUTION: &str = "Résolution";
+    pub const RESOLUTION_HELP: &str = "Plus elle est haute, plus l'image est fine.";
+    pub const REFRESH: &str = "Fréquence";
+    pub const REFRESH_HELP: &str = "Les images que l'écran affiche chaque seconde.";
+    pub const SCALE: &str = "Échelle";
+    pub const SCALE_HELP: &str = "La taille du texte et des fenêtres.";
+    pub const ROTATION: &str = "Rotation";
+    pub const ROTATION_HELP: &str = "Pour un écran tourné sur le côté.";
+    pub const ROTATIONS: [&str; 4] = ["Standard", "90°", "180°", "270°"];
+    pub const MAIN_DISPLAY: &str = "Écran principal";
+    pub const MAIN_DISPLAY_HELP: &str = "La barre et les notifications s'y affichent.";
+    pub const MAKE_MAIN: &str = "En faire l'écran principal";
+    pub const IS_MAIN: &str = "C'est l'écran principal.";
+    pub const DISPLAY_ON: &str = "Utiliser cet écran";
+    pub const DISPLAY_ON_HELP: &str = "Éteint, il ne montre plus rien.";
+    pub const KEEP_DISPLAYS: &str = "Garder ces réglages d'affichage ?";
+    pub const KEEP: &str = "Garder";
+    pub const REVERT: &str = "Revenir";
+    pub const DISPLAYS_LOADING: &str = "Recherche des écrans…";
+    pub const DISPLAYS_UNAVAILABLE: &str = "Les écrans ne se règlent pas ici pour l'instant.";
+    pub const DISPLAY_REFUSED: &str = "L'écran a refusé ce réglage : rien n'a changé.";
+    pub const DISPLAY_OFF: &str = "Éteint";
+
+    /// What the confirmation says while it waits: « Retour aux réglages précédents dans 12 s. »
+    pub fn reverting_in(seconds: u64) -> String {
+        format!("Retour aux réglages précédents dans {seconds} s.")
+    }
+
+    /// A resolution in a menu: « 1920 × 1080 », « 2560 × 1600 (recommandée) ».
+    pub fn resolution(width: i32, height: i32, preferred: bool) -> String {
+        match preferred {
+            true => format!("{width} × {height} (recommandée)"),
+            false => format!("{width} × {height}"),
+        }
+    }
+
+    /// A refresh rate in millihertz, as a menu shows it: « 60 Hz », « 143,98 Hz ».
+    pub fn hertz(millihertz: i32) -> String {
+        let hundredths = (f64::from(millihertz) / 10.0).round() as i64;
+        match hundredths % 100 {
+            0 => format!("{} Hz", hundredths / 100),
+            rest => format!("{},{rest:02} Hz", hundredths / 100),
+        }
+    }
+
+    /// The scales of `SCALES`, as the segmented control shows them.
+    pub const SCALE_LABELS: [&str; 5] = ["100 %", "125 %", "150 %", "175 %", "200 %"];
+
+    /// A scale as a percentage: « 125 % ».
+    pub fn percent(scale: f64) -> String {
+        format!("{} %", (scale * 100.0).round())
+    }
+
+    pub const NETWORK: &str = "Réseau";
+    pub const NETWORK_ABOUT: &str = "Le Wi-Fi, les réseaux autour de toi et ceux que tu gardes.";
+
+    // « Réseau ».
+    pub const WIFI: &str = "Wi-Fi";
+    pub const WIFI_HELP: &str = "Coupé, l'ordinateur ne cherche plus de réseau.";
+    pub const WIFI_HARDWARE_OFF: &str =
+        "Coupé par l'interrupteur ou le mode avion de l'ordinateur.";
+    pub const NETWORKS: &str = "Réseaux";
+    pub const NETWORK_LOADING: &str = "Lecture du Wi-Fi…";
+    pub const NETWORK_UNAVAILABLE: &str = "Le gestionnaire de réseau ne répond pas.";
+    pub const NO_WIFI: &str = "Aucune carte Wi-Fi trouvée.";
+    pub const NO_NETWORK: &str = "Aucun réseau trouvé.";
+    pub const CONNECTED: &str = "Connecté";
+    pub const OPEN_NETWORK: &str = "Ouvert";
+    pub const PROTECTED_NETWORK: &str = "Protégé par un mot de passe";
+    pub const ENTERPRISE_NETWORK: &str = "Entreprise ou WEP";
+    pub const FORGET: &str = "Oublier";
+    pub const SCAN: &str = "Rechercher";
+    pub const OTHER_NETWORK: &str = "Autre réseau…";
+    pub const OTHER_NETWORK_SEARCH: &str = "Rejoindre un réseau caché";
+    pub const NETWORK_NAME: &str = "Nom du réseau";
+    pub const SECURITY_NONE: &str = "Aucune";
+    pub const SECURITY_PASSWORD: &str = "Mot de passe";
+    pub const SECURITY_WEP: &str = "WEP";
+    pub const SECURITY_ENTERPRISE: &str = "Entreprise";
+    pub const PEAP: &str = "PEAP";
+    pub const TTLS: &str = "TTLS";
+    pub const IDENTITY: &str = "Identifiant";
+    pub const PASSWORD: &str = "Mot de passe";
+    pub const WEP_KEY: &str = "Clé WEP";
+    pub const DOMAIN: &str = "Domaine du serveur (facultatif)";
+    pub const DOMAIN_HELP: &str =
+        "Ton établissement le donne : il prouve que c'est bien son serveur qui répond.";
+    pub const CANCEL: &str = "Annuler";
+    pub const JOIN: &str = "Rejoindre";
+    pub const NETWORK_REFUSED: &str = "Refusé : tu n'as pas le droit de changer ce réglage.";
+    pub const NETWORK_FAILED: &str = "Échec : le réseau n'a pas pu être rejoint.";
+    pub const NETWORK_WRONG_PASSWORD: &str = "Mot de passe incorrect : le réseau l'a refusé.";
 
     // « Apparence ».
     pub const THEME: &str = "Thème";
@@ -340,6 +477,8 @@ pub mod texts {
     pub const MAGNIFICATION_SEARCH: &str = "Intensité du grossissement";
     pub const AUTO_HIDE_SEARCH: &str = "Masquage du dock";
     pub const POSITION_SEARCH: &str = "Position du dock";
+    pub const DISPLAY_WORDS: &str = "écran moniteur affichage définition taille hdmi projecteur";
+    pub const NETWORK_WORDS: &str = "wifi internet réseau sans fil eduroam mot de passe";
     pub const THEME_WORDS: &str = "sombre clair nuit jour mode couleurs";
     pub const HOURS_WORDS: &str = "thème heure automatique matin soir";
     pub const WALLPAPER_WORDS: &str = "image arrière-plan bureau";
@@ -378,6 +517,25 @@ mod tests {
         assert_eq!(texts::hour(7 * 60 + 30), "07:30");
         assert_eq!(texts::hour(0), "00:00");
         assert_eq!(texts::hour(23 * 60 + 59), "23:59");
+    }
+
+    #[test]
+    fn display_values_read_as_in_the_menus() {
+        assert_eq!(texts::hertz(60_000), "60 Hz");
+        assert_eq!(texts::hertz(59_951), "59,95 Hz");
+        assert_eq!(texts::hertz(143_981), "143,98 Hz");
+        assert_eq!(texts::percent(1.25), "125 %");
+        for (scale, label) in SCALES.iter().zip(texts::SCALE_LABELS) {
+            assert_eq!(texts::percent(*scale), label);
+        }
+        assert_eq!(
+            texts::resolution(1920, 1080, true),
+            "1920 × 1080 (recommandée)"
+        );
+        assert_eq!(
+            texts::reverting_in(15),
+            "Retour aux réglages précédents dans 15 s."
+        );
     }
 
     #[test]

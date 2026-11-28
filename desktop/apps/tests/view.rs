@@ -100,7 +100,7 @@ type Started = Arc<Mutex<Vec<Command>>>;
 fn recorded(catalog: Catalog) -> (View, Started) {
     let started: Started = Arc::default();
     let record = Arc::clone(&started);
-    let spawn: launcher::app::Spawn = Arc::new(move |command: &Command| {
+    let spawn: launcher::app::Spawn = Arc::new(move |command: &Command, _: Option<&str>| {
         if let Ok(mut record) = record.lock() {
             record.push(command.clone());
         }
@@ -290,12 +290,35 @@ fn a_click_starts_a_tile_and_a_click_beside_closes() {
         let _ = ui.simulate(iced_test::simulator::click());
         ui.point_at(Point::new(20.0, layout.grid_top + grid.1 + 10.0));
         let _ = ui.simulate(iced_test::simulator::click());
-        let messages: Vec<Message> = ui.into_messages().collect();
+        // The tile under the pointer is followed for a drag to the dock (D-41d).
+        let messages: Vec<Message> = ui
+            .into_messages()
+            .filter(|m| !matches!(m, Message::Hover(..)))
+            .collect();
         assert!(
             matches!(messages.as_slice(), [Message::Launch(1), Message::Dismiss]),
             "{width} × {height}: {messages:?}"
         );
     }
+}
+
+/// Lot D-41d: a press on a tile that moves away drags the application to the dock, through
+/// the Wayland thread of the surface. Without Wayland (here), nothing starts: the view stays,
+/// and the tile still starts on a click.
+#[test]
+fn a_tile_dragged_without_wayland_leaves_the_view_open() {
+    let (mut view, _) = recorded(catalog());
+    let _ = view.update(Message::Resized(Size::new(1920.0, 1080.0)));
+    let mut view = view.opened();
+    let _ = view.update(Message::Pointer(Point::new(500.0, 300.0)));
+    let _ = view.update(Message::Hover(1, true));
+    let _ = view.update(Message::Button(true));
+    let _ = view.update(Message::Pointer(Point::new(700.0, 900.0)));
+    assert!(!view.closing, "no drag without the Wayland thread");
+    let _ = view.update(Message::Button(false));
+    let _ = view.update(Message::Hover(1, false));
+    let _ = view.update(Message::Launch(1));
+    assert_eq!(view.launched, Some(1));
 }
 
 /// Fading out, the view takes no more input: a right click opens no menu (lot UI-06).
