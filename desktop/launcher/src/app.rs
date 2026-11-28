@@ -69,6 +69,8 @@ pub enum Message {
     Theme(color::Theme),
     /// The logical size of the screen the surface is on, from iced_exwlshell (L-1).
     Screen(Option<(i32, i32)>),
+    /// An icon drawn by the worker thread (`raster::drawn`): it shows at the next frame.
+    IconDrawn,
 }
 
 /// Sources and what tells when their files are walked, as `crate::sources` gives them.
@@ -441,6 +443,7 @@ impl Launcher {
             service,
             screens,
             Subscription::run(crate::appearance).map(Message::Theme),
+            sherlock_ui::raster::drawn().map(|()| Message::IconDrawn),
         ])
     }
 
@@ -454,6 +457,7 @@ impl Launcher {
                 return Task::none();
             }
             Message::Screen(size) => return self.screen_changed(size),
+            Message::IconDrawn => return Task::none(),
             _ => {}
         }
         // Anything but its own entry closes the menu; Escape closes it alone.
@@ -1178,26 +1182,10 @@ fn glyph_handle(glyph: Glyph) -> svg::Handle {
         .unwrap_or_else(|| svg::Handle::from_memory(glyph.svg().into_bytes()))
 }
 
-/// An SVG icon as it is; a PNG inside a small SVG, which the SVG renderer reads by path, as
-/// the dock does: iced's `image` feature would bring its own decoders.
+/// An icon file, SVG or PNG: `sherlock_ui::raster` reads it, with its bounds (no file named
+/// inside an SVG is read), and draws it.
 pub fn icon_handle(path: &Path) -> svg::Handle {
-    if path.extension().is_some_and(|e| e == "svg") {
-        return svg::Handle::from_path(path);
-    }
-    svg::Handle::from_memory(picture_document(path).into_bytes())
-}
-
-/// A small SVG document that shows the picture in `path` (a PNG), for the SVG renderer.
-pub fn picture_document(path: &Path) -> String {
-    let href = path
-        .to_string_lossy()
-        .replace('&', "&amp;")
-        .replace('"', "&quot;")
-        .replace('<', "&lt;");
-    format!(
-        "<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" \
-         viewBox=\"0 0 1 1\"><image width=\"1\" height=\"1\" xlink:href=\"{href}\"/></svg>"
-    )
+    svg::Handle::from_path(path)
 }
 
 /// A key name in its cap, on the search row or on the selected result (`in_row`).

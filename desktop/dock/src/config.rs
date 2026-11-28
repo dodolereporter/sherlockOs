@@ -95,7 +95,8 @@ pub fn defaults(catalog: &Catalog, mimeapps: &KeyFile) -> Vec<String> {
 
 /// The user's `mimeapps.list` (`$XDG_CONFIG_HOME/mimeapps.list`), empty if absent.
 pub fn mimeapps(config_home: &Path) -> KeyFile {
-    std::fs::read_to_string(config_home.join("mimeapps.list"))
+    let path = config_home.join("mimeapps.list");
+    mime_apps::file::read_bounded(&path, mime_apps::file::MAX_SETTINGS_SIZE)
         .map(|text| KeyFile::parse(&text))
         .unwrap_or_default()
 }

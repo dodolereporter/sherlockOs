@@ -15,17 +15,21 @@ use crate::settings::File;
 pub enum Page {
     Sound,
     Appearance,
+    Keyboard,
     Touchpad,
     Lock,
+    Clipboard,
     DefaultApps,
 }
 
 impl Page {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 7] = [
         Self::Sound,
         Self::Appearance,
+        Self::Keyboard,
         Self::Touchpad,
         Self::Lock,
+        Self::Clipboard,
         Self::DefaultApps,
     ];
 
@@ -33,8 +37,10 @@ impl Page {
         match self {
             Self::Sound => t::SOUND,
             Self::Appearance => t::APPEARANCE,
+            Self::Keyboard => t::KEYBOARD,
             Self::Touchpad => t::TOUCHPAD,
             Self::Lock => t::LOCK,
+            Self::Clipboard => t::CLIPBOARD,
             Self::DefaultApps => t::DEFAULT_APPS,
         }
     }
@@ -44,8 +50,10 @@ impl Page {
         match self {
             Self::Sound => t::SOUND_ABOUT,
             Self::Appearance => t::APPEARANCE_ABOUT,
+            Self::Keyboard => t::KEYBOARD_ABOUT,
             Self::Touchpad => t::TOUCHPAD_ABOUT,
             Self::Lock => t::LOCK_ABOUT,
+            Self::Clipboard => t::CLIPBOARD_ABOUT,
             Self::DefaultApps => t::DEFAULT_APPS_ABOUT,
         }
     }
@@ -54,8 +62,10 @@ impl Page {
         match self {
             Self::Sound => Icon::Sound,
             Self::Appearance => Icon::Image,
+            Self::Keyboard => Icon::Keyboard,
             Self::Touchpad => Icon::Touchpad,
             Self::Lock => Icon::Lock,
+            Self::Clipboard => Icon::Document,
             Self::DefaultApps => Icon::Grid,
         }
     }
@@ -80,16 +90,25 @@ pub enum Setting {
     Speed,
     Typing,
     ShowClicks,
+    TapAndDrag,
+    DragLock,
+    SwipeDown,
+    Layout,
+    RepeatDelay,
+    RepeatRate,
+    Shortcuts,
     OutputDevice,
     OutputVolume,
     InputDevice,
     InputVolume,
     LockAfter,
+    ClipboardHistory,
+    ClipboardKeep,
     App(Kind),
 }
 
 impl Setting {
-    pub const ALL: [Self; 29] = [
+    pub const ALL: [Self; 38] = [
         Self::Theme,
         Self::LightFrom,
         Self::DarkFrom,
@@ -106,11 +125,20 @@ impl Setting {
         Self::Speed,
         Self::Typing,
         Self::ShowClicks,
+        Self::TapAndDrag,
+        Self::DragLock,
+        Self::SwipeDown,
+        Self::Layout,
+        Self::RepeatDelay,
+        Self::RepeatRate,
+        Self::Shortcuts,
         Self::OutputDevice,
         Self::OutputVolume,
         Self::InputDevice,
         Self::InputVolume,
         Self::LockAfter,
+        Self::ClipboardHistory,
+        Self::ClipboardKeep,
         Self::App(Kind::Browser),
         Self::App(Kind::Mail),
         Self::App(Kind::Editor),
@@ -141,11 +169,20 @@ impl Setting {
             Self::Speed => (Touchpad, t::SPEED, t::POINTER_WORDS),
             Self::Typing => (Touchpad, t::TYPING, t::TOUCHPAD_WORDS),
             Self::ShowClicks => (Touchpad, t::SHOW_CLICKS, t::POINTER_WORDS),
+            Self::TapAndDrag => (Touchpad, t::TAP_AND_DRAG, t::GESTURE_WORDS),
+            Self::DragLock => (Touchpad, t::DRAG_LOCK, t::GESTURE_WORDS),
+            Self::SwipeDown => (Touchpad, t::SWIPE_DOWN, t::GESTURE_WORDS),
+            Self::Layout => (Keyboard, t::LAYOUT, t::KEYBOARD_WORDS),
+            Self::RepeatDelay => (Keyboard, t::REPEAT_DELAY, t::REPEAT_WORDS),
+            Self::RepeatRate => (Keyboard, t::REPEAT_RATE, t::REPEAT_WORDS),
+            Self::Shortcuts => (Keyboard, t::SHORTCUTS, t::SHORTCUT_WORDS),
             Self::OutputDevice => (Sound, t::OUTPUT_DEVICE, t::SOUND_WORDS),
             Self::OutputVolume => (Sound, t::OUTPUT_VOLUME, t::SOUND_WORDS),
             Self::InputDevice => (Sound, t::INPUT_DEVICE, t::MICROPHONE_WORDS),
             Self::InputVolume => (Sound, t::INPUT_VOLUME, t::MICROPHONE_WORDS),
             Self::LockAfter => (Lock, t::LOCK_AFTER, t::LOCK_WORDS),
+            Self::ClipboardHistory => (Clipboard, t::CLIPBOARD_HISTORY, t::CLIPBOARD_WORDS),
+            Self::ClipboardKeep => (Clipboard, t::CLIPBOARD_KEEP, t::CLIPBOARD_WORDS),
             Self::App(kind) => (DefaultApps, kind.texts().0, t::APPS_WORDS),
         }
     }
@@ -167,7 +204,12 @@ impl Setting {
                 Self::ShowClicks => File::Pointer,
                 _ => File::Touchpad,
             },
+            Page::Keyboard => match self {
+                Self::Shortcuts => return None,
+                _ => File::Keyboard,
+            },
             Page::Lock => File::Lock,
+            Page::Clipboard => File::Clipboard,
             Page::Sound | Page::DefaultApps => return None,
         };
         Some(file)

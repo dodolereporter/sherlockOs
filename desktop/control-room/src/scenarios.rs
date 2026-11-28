@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 
 use appearance_config::Mode;
-use desktop_config::touchpad::Click;
+use desktop_config::touchpad::{Click, SwipeDown};
 use dock_config::{AutoHide, Position};
 use iced::{Pixels, Settings as IcedSettings};
 use iced_test::simulator::Simulator;
@@ -16,7 +16,7 @@ use sherlock_ui::color::{self, Theme};
 use sherlock_ui::control_room::{self as cr, texts as t};
 use sherlock_ui::{theme, typography};
 
-use crate::app::{App, Change, Config, Delay, Hour, Message, Sound};
+use crate::app::{App, Change, Config, Delay, Hour, LayoutChoice, Message, Sound};
 use crate::apps::{self, Kind};
 use crate::search::{Page, Setting};
 use crate::settings::{File, Paths, Settings};
@@ -69,6 +69,7 @@ fn the_files_are_found_where_the_programs_read_them() {
     assert_eq!(paths.wallpaper, Path::new("/cfg/sherlockos/wallpaper.conf"));
     assert_eq!(paths.touchpad, Path::new("/cfg/sherlockos/touchpad.conf"));
     assert_eq!(paths.pointer, Path::new("/cfg/sherlockos/pointer.conf"));
+    assert_eq!(paths.keyboard, Path::new("/cfg/sherlockos/keyboard.conf"));
 }
 
 #[test]
@@ -93,6 +94,12 @@ fn every_setting_is_written_and_read_back() {
         Change::Speed(75),
         Change::Typing(false),
         Change::ShowClicks(true),
+        Change::TapAndDrag(false),
+        Change::DragLock(true),
+        Change::SwipeDown(SwipeDown::Minimize),
+        Change::Layout(LayoutChoice::Known(2)),
+        Change::RepeatDelay(100),
+        Change::RepeatRate(0),
     ] {
         let _ = app.update(Message::Set(change));
     }
@@ -108,6 +115,12 @@ fn every_setting_is_written_and_read_back() {
     assert_eq!(s.wallpaper, written.wallpaper);
     assert_eq!(s.touchpad, written.touchpad);
     assert_eq!(s.pointer, written.pointer);
+    assert_eq!(s.keyboard, written.keyboard);
+    assert_eq!(s.keyboard.layout.as_deref(), Some("fr"));
+    assert_eq!(s.keyboard.variant, "bepo");
+    assert_eq!((s.keyboard.repeat_delay, s.keyboard.repeat_rate), (1000, 2));
+    assert!(!s.touchpad.tap_and_drag && s.touchpad.drag_lock);
+    assert_eq!(s.touchpad.swipe_down, SwipeDown::Minimize);
     assert_eq!(s.appearance.mode, Mode::Auto);
     assert_eq!(s.appearance.light_from.minutes(), 6 * 60 + 30);
     assert_eq!(s.wallpaper.wallpaper.as_deref(), Some("aurora"));
@@ -127,6 +140,8 @@ fn every_setting_is_written_and_read_back() {
     assert!(text(&app.paths.appearance).contains("AutoLightFrom=06:30"));
     assert!(text(&app.paths.dock).contains("Position=left"));
     assert!(text(&app.paths.pointer).contains("show-clicks = true"));
+    assert!(text(&app.paths.touchpad).contains("swipe-down = minimize"));
+    assert!(text(&app.paths.keyboard).contains("variant = bepo"));
     assert!(text(&app.paths.wallpaper).contains("wallpaper = aurora"));
     assert_eq!(text(&app.paths.lock), "idle-minutes = 15\n");
     assert_eq!(read.lock.idle_minutes, 15);
@@ -290,6 +305,71 @@ fn a_slider_writes_once_it_rests() {
 }
 
 #[test]
+fn the_keyboard_page_survives_a_restart_and_keeps_an_unknown_layout() {
+    let (_tmp, mut app) = bench_with(
+        "keyboard",
+        &[("sherlockos/keyboard.conf", "# mine\nlayout = sv\n")],
+    );
+    // A layout the menu does not offer is shown as such, and kept.
+    assert_eq!(
+        LayoutChoice::of(&app.settings.keyboard),
+        LayoutChoice::Other
+    );
+    let _ = app.update(Message::Set(Change::RepeatRate(50)));
+    let _ = app.update(Message::Set(Change::RepeatDelay(0)));
+    assert_eq!(
+        fs::read_to_string(&app.paths.keyboard).expect("file"),
+        "# mine\nlayout = sv\n",
+        "a slider writes once it rests"
+    );
+    let _ = app.flush();
+    app.finish_writes();
+    // Opened again, as after a restart: everything is there.
+    let (again, _) = App::new(Config {
+        paths: app.paths.clone(),
+        page: Page::Keyboard,
+    });
+    let kb = &again.settings.keyboard;
+    assert_eq!(kb.layout.as_deref(), Some("sv"));
+    assert_eq!((kb.repeat_delay, kb.repeat_rate), (150, 26));
+    // The system's layout empties the key: the compositor goes back to the system's.
+    let _ = app.update(Message::Set(Change::Layout(LayoutChoice::System)));
+    app.finish_writes();
+    let text = fs::read_to_string(&app.paths.keyboard).expect("file");
+    assert!(text.starts_with("# mine\nlayout = \n"), "{text}");
+    assert_eq!(Settings::load(&app.paths).0.keyboard.layout, None);
+    // Every layout offered has its name, and the field to try keeps a bounded text.
+    assert_eq!(
+        LayoutChoice::offered().len(),
+        cr::KEYBOARD_LAYOUTS.len() + 1
+    );
+    let _ = app.update(Message::TryKeys("a".repeat(cr::TRIAL_MAX + 50)));
+    assert_eq!(app.trial.chars().count(), cr::TRIAL_MAX);
+}
+
+#[test]
+fn the_right_click_offers_two_fingers_first_and_the_corner() {
+    let (_tmp, mut app) = bench("right-click", Vec::new());
+    assert_eq!(app.settings.touchpad.click, Click::Fingers);
+    let _ = app.update(Message::Go(Page::Touchpad));
+    app.settle();
+    let messages: Vec<Message> = {
+        let mut ui = simulator(&app, cr::WINDOW);
+        assert!(ui.find(t::TWO_FINGERS).is_ok());
+        ui.click(t::CORNER).expect("the corner is offered");
+        ui.into_messages().collect()
+    };
+    assert!(matches!(
+        messages.as_slice(),
+        [Message::Set(Change::Click(Click::Areas))]
+    ));
+    // Drag lock waits for tap and drag, which waits for tap to click.
+    let _ = app.update(Message::Set(Change::TapToClick(false)));
+    let mut ui = simulator(&app, cr::WINDOW);
+    assert!(ui.find(t::DRAG_LOCK).is_ok() && ui.find(t::SWIPE_MINIMIZE).is_ok());
+}
+
+#[test]
 fn the_hours_of_the_two_themes_never_meet() {
     let (_tmp, mut app) = bench("hours", Vec::new());
     let dark = app.settings.appearance.dark_from.minutes();
@@ -421,8 +501,10 @@ fn captures_of_the_pages_in_both_themes() {
         for (page, page_name) in [
             (Page::Sound, "sound"),
             (Page::Appearance, "appearance"),
+            (Page::Keyboard, "keyboard"),
             (Page::Touchpad, "touchpad"),
             (Page::Lock, "lock"),
+            (Page::Clipboard, "clipboard"),
             (Page::DefaultApps, "default-apps"),
         ] {
             let (tmp, mut app) = bench("capture", dirs.clone());
@@ -436,7 +518,7 @@ fn captures_of_the_pages_in_both_themes() {
             app.settle();
             // Sound and lock, short pages, in the wide window only: the captures take time.
             let sizes = match page {
-                Page::Sound | Page::Lock => &SIZES[..1],
+                Page::Sound | Page::Lock | Page::Clipboard => &SIZES[..1],
                 _ => &SIZES[..],
             };
             for &(size, size_name) in sizes {
