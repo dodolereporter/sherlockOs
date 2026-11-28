@@ -919,6 +919,7 @@ pub struct GlyphFade {
 
 /// `frames` (one, or a cycle) at `size`, in `tint`.
 pub fn glyph_fade(frames: Vec<String>, size: f32, tint: Color) -> GlyphFade {
+    let size = crate::ellipsis::at_least_a_pixel(size);
     GlyphFade { frames, size, tint }
 }
 

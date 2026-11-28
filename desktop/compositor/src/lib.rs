@@ -4,6 +4,8 @@
 //! Architecture and tests: `docs/compositor.md`.
 
 pub mod anim;
+pub mod background_effect;
+pub mod blur;
 pub mod capture;
 pub mod card;
 pub mod clicks;
@@ -227,6 +229,8 @@ pub struct State {
     socket_name: Option<OsString>,
     /// The program of Super + Space, if not the usual launcher (`launcher.rs`).
     launcher_program: Option<PathBuf>,
+    /// The program of Super + comma, if not Control Room (`launcher.rs`).
+    settings_program: Option<PathBuf>,
     /// The program of F4 and of the four finger pinch, if not the usual one (`launcher.rs`).
     applications_program: Option<PathBuf>,
     /// XWayland source in the loop, to stop it.
@@ -350,6 +354,8 @@ impl State {
                 },
             )
             .map_err(|err| err.error)?;
+        // The blur behind glass, asked for by any client (lot D-37, ADR 0027).
+        background_effect::create_global(&dh);
 
         Ok(Self {
             compositor_state: CompositorState::new::<Self>(&dh),
@@ -376,7 +382,7 @@ impl State {
             space: Space::default(),
             popups: PopupManager::default(),
             popup_grab: None,
-            screencast: screencast::Screencast::default(),
+            screencast: screencast::Screencast::new(&dh),
 
             reveals: fullscreen::Reveals::default(),
             unmapped_layers: Vec::new(),
@@ -405,13 +411,11 @@ impl State {
             x_display: None,
             socket_name: None,
             launcher_program: None,
+            settings_program: None,
             applications_program: None,
             xwayland: None,
             listener: None,
-            shell: {
-                screencast::create_globals(&dh);
-                shell::Shell::new(&dh)
-            },
+            shell: shell::Shell::new(&dh),
             snap_gap: sherlock_ui::window::SNAP_GAP,
             minimize_effect: genie::Effect::default(),
             redraw_epoch: 0,
@@ -775,6 +779,8 @@ pub struct ClientState {
     compositor_state: CompositorClientState,
     /// Connected through the shell socket: sees the globals of the shell (ADR 0021).
     shell: bool,
+    /// Sees the capture globals: the portal backend, on the shell socket (ADR 0028).
+    capture: bool,
 }
 
 impl ClientData for ClientState {
