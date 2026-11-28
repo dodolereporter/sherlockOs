@@ -2993,11 +2993,28 @@ compositor (`push_layers`), which knows the surfaces of the shell by their layer
 (`bar`, `dock`); their opacity follows. Only within 15 s after the compositor started, so that a
 bar started again later shows at once, and never with `--greeter`. A key or a click puts
 everything in place at once. The windows that open then fade in with their own opening (lot
-D-34). Not done yet: the wallpaper going from blurred at 1.05 to sharp at 1 (the compositor has
-no blur yet, lot D-37), and the windows of the last session reopened one by one.
+D-34).
+
+**The desktop revealed** (lot D-24g, `reveal_desktop`), as the curtain comes back from black at
+the opening, and as it goes up at each unlock:
+- the wallpaper comes back from a zoom of 1.05 to its size over 700 ms (`wallpaper::zoomed`,
+  grown around the center of the screen, cut by its edges), while the curtain, the blurred
+  picture of the lock, leaves it: from blurred and larger to sharp;
+- the windows shown reappear one after another, the front one first, 40 ms apart, each fading
+  in and growing as a window opens, over 250 ms; the last ones start together 500 ms after the
+  reveal at the latest, so that all is done within 800 ms (`arrival::reappear_delay`,
+  `WindowMotion::reappear`). Windows not drawn yet keep their own opening; minimized ones stay
+  in the dock; with window animations off, nothing moves.
+- A key or a click puts the windows in place at once (`end_arrival`).
+
+The blur itself is the curtain's picture fading out, not a blur radius that shrinks: the blur
+behind glass (lot D-37) applies to the surfaces that ask for it, not to the wallpaper. Not done
+yet: the windows of the last session reopened.
 
 Tests (`src/arrival.rs`): the bar starts out of the screen and is in place after the spring, the
-dock waits for its turn, and the travel of each. `tests/greeter.rs`: the session opens from
+dock waits for its turn, and the travel of each. The windows' turns and the zoom (lot D-24g); in `src/anim.rs`, a
+window hidden until its turn, then fading in, and a key ending it; `tests/session_lock.rs`, once
+unlocked, the window reappearing and the wallpaper zoomed, both done 800 ms later. `tests/greeter.rs`: the session opens from
 black, through the curtain, to the desktop. `tests/curtain.rs` draws the boards of the opening
 (6 frames) and of the lock (8 frames) with Mesa's software renderer, in `target/tmp/curtain/`.
 

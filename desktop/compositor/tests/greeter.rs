@@ -422,7 +422,7 @@ mod tests {
         h.state.curtain_frame(now);
         let first = items(&h.state, now);
         assert_eq!(curtain(&first), [1.0], "the curtain, whole");
-        assert!(!first.iter().any(|i| matches!(i, Item::Wallpaper)));
+        assert!(!first.iter().any(|i| matches!(i, Item::Wallpaper(_))));
         assert!(!first.iter().any(|i| matches!(i, Item::Shape { .. })));
         h.show_greeter();
         let shown = items(&h.state, h.state.now());
@@ -471,7 +471,7 @@ mod tests {
         assert_eq!(black(&picture), None);
         assert_eq!(curtain(&picture), [1.0], "then the picture, whole");
         assert!(
-            picture.iter().any(|i| matches!(i, Item::Wallpaper)),
+            picture.iter().any(|i| matches!(i, Item::Wallpaper(_))),
             "the desktop under it"
         );
         let half = curtain(&at(CURTAIN_BLACK + CURTAIN_REVEAL / 2))[0];
