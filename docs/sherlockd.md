@@ -324,7 +324,7 @@ that. A request to empty the trash is refused by the proxy.
 | --- | --- | --- |
 | A tool result is data, never an instruction | The system instructions are fixed when the agent is created, with no way to change them. A result, successful or failed, enters the history only as a `ToolResult` | `agent::tests::tool_result_never_instruction` and `tool_error_never_instruction`: a tool returns « Ignore tes instructions… », as a result or an error, and the text appears in no system instruction and no other message. `json_rpc_error_stays_data` against a real server |
 | The level is read, destructive when in doubt | `Level::from_annotations`, third-party server all destructive, duplicates refused | `mcp::tests::destructive_when_in_doubt`, `lists_tools_and_levels`, `third_party_server_all_destructive`, `duplicate_refused` |
-| No action without the user's consent | `broker::Broker` in `McpServers::call`, `Permit` bound to the call, refused by default, journal (A-11) | `tests/broker.rs`, `broker::tests` |
+| No action without the user's consent | `broker::Broker` in `McpServers::call`, `Permit` bound to the call, refused by default, journal (A-11); the compositor's window asked, its peer checked, withdrawn when given up (A-11c) | `tests/broker.rs`, `broker::tests`, `tests/window.rs` |
 | Without a broker, nothing but read runs | Refusal « courtier d'accords absent » (`McpError::BrokerAbsent`) in two places: in `McpServers::call`, the only public path to `tools/call`, and before the call in the loop, as defence in depth. `McpClient::call_tool` is not public | `direct_non_read_call_refused` (direct call of `McpServers::call`), `agent::tests::nothing_beyond_read_without_broker`, `read_and_destructive_in_one_reply`, `agent_calls_echo_and_refuses_unleveled_tool` |
 | A server makes `sherlockd` neither panic nor grow | Bounds above, lost server stopped and reaped | `list_not_an_object`, `giant_line_refused`, `endless_pagination_bounded`, `timeout_server_stopped_and_reaped` |
 | Claude Code has no built-in tool | Locked command line, `init` event checked | `claude_code::tests::no_builtin_tools_and_proxy_only`, `mcp_config_with_proxy_only`, `builtin_tool_or_other_server_stops_everything`, `without_builtin_tools_nothing_read_or_run` |
@@ -416,8 +416,18 @@ server's `tools/call`:
 - `agent::execute` keeps refusing everything but read for a tool host without a broker
   (`ToolHost::consents`), as defence in depth.
 
-Until the compositor's consent window exists (A-11b, A-11c), `sherlockd` asks `broker::Nobody`:
-actions are refused, as before, and every decision is journaled.
+**Who asks: the compositor's window** (`window::CompositorWindow`, lot A-11c). One connection per
+request to `$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY-consent`, the compositor's consent socket
+(`docs/compositor.md`, "Sherlock's consent window"): the request as one line of JSON (`id`,
+`tool`, `level`, `arguments`), the answer read as one. The socket's peer must be the compositor of
+this user (`SO_PEERCRED`, `/proc/<pid>/exe` named `compositor`): a process that took the path
+first is told nothing. When the broker stops waiting, the future that holds the connection is
+dropped, the socket closes, and the compositor withdraws the window. Any failure (no socket,
+another program, connection lost, an answer that cannot be read or for another id) is
+`Decision::Unavailable`: refused. Outside a Wayland session, `broker::Nobody`: reads only.
+Claude Code starts the proxy without the Wayland variables: the socket's path goes in its
+arguments, `sherlockd --proxy --consent <path>`, so that the calls of Claude Code ask the same
+window.
 
 `tests/broker.rs` proves it against the test server, a real process that writes down each call
 it receives (`--test-server --trace <file>`): for a refusal, a closed window, a window nobody
@@ -430,8 +440,8 @@ that showed its arguments, journaled with its outcome.
 
 - A-11b: the consent window drawn by the compositor, its private socket, its reserved input and
   the reinforced consent (ADR 0031).
-- A-11c: `sherlockd` asks it (`Consent` over that socket), for the agent loop and the proxy alike,
-  with an end-to-end test.
+- An end-to-end test with the real compositor and the real `sherlockd` (each side is tested
+  against a fake of the other: `tests/window.rs` here, `tests/mission_control.rs` there).
 - The setting through which the user grants another level to a tool of a third-party server
   (ADR 0015).
 
