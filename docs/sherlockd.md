@@ -24,6 +24,7 @@ The `sherlock/sherlockd` crate is a library and a binary.
 | `src/containers_server.rs`, `src/docker.rs` | The containers server, and its minimal client of the Docker Engine API over a Unix socket (A-14) |
 | `src/own_server.rs` | What Sherlock's own servers share: the serving loop, the levels' annotations, the cleaning of outside text |
 | `src/main.rs` | `--demo`, `--claude-code`, `--proxy`, `--test-server`, `--windows-server`, `--files-server` and `--containers-server` |
+| `tests/injection.rs` | Hidden instructions (lot A-20): a corpus of orders hidden in a file's content (plain, behind hidden characters, a fake end of data and a fake system line), a file's name, a saved page (hidden block, comment), a window's title and application id, a container's name, status and logs, a tool's result, read by a fake model that obeys every order it reads, through the agent loop and through the proxy as Claude Code: every order asked and refused, nothing changed on the system, every outcome of the journal after a granted decision; granted for what the user asked, only that runs; without a window, nothing but reads |
 | `tests/mcp.rs` | Client and loop against the test server, started as a real process, well-behaved or hostile |
 | `tests/proxy.rs` | The proxy as a real process, in front of the test server |
 | `tests/claude_code.rs` | The provider on recorded transcripts (`tests/transcripts/`), and against fake `claude` programs |
