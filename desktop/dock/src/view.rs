@@ -29,6 +29,8 @@ impl Dock {
             .width(bar.width)
             .height(bar.height)
             .style(dock::bar);
+        // The blur behind the glass, over its rounded shape (lot D-37).
+        let glass = sherlock_ui::glass::glass(glass, metrics::DOCK_RADIUS);
         let mut layers = vec![place(glass, bar.x, bar.y)];
         if let Some(separator) = layout.separator {
             let line = container(space())
