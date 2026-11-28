@@ -22,11 +22,12 @@ pub enum Page {
     Touchpad,
     Lock,
     Clipboard,
+    Accessibility,
     DefaultApps,
 }
 
 impl Page {
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 11] = [
         Self::Displays,
         Self::Sound,
         Self::Bluetooth,
@@ -36,6 +37,7 @@ impl Page {
         Self::Touchpad,
         Self::Lock,
         Self::Clipboard,
+        Self::Accessibility,
         Self::DefaultApps,
     ];
 
@@ -50,6 +52,7 @@ impl Page {
             Self::Touchpad => t::TOUCHPAD,
             Self::Lock => t::LOCK,
             Self::Clipboard => t::CLIPBOARD,
+            Self::Accessibility => t::ACCESSIBILITY,
             Self::DefaultApps => t::DEFAULT_APPS,
         }
     }
@@ -66,6 +69,7 @@ impl Page {
             Self::Touchpad => t::TOUCHPAD_ABOUT,
             Self::Lock => t::LOCK_ABOUT,
             Self::Clipboard => t::CLIPBOARD_ABOUT,
+            Self::Accessibility => t::ACCESSIBILITY_ABOUT,
             Self::DefaultApps => t::DEFAULT_APPS_ABOUT,
         }
     }
@@ -82,6 +86,7 @@ impl Page {
             Self::Touchpad => "touchpad",
             Self::Lock => "lock",
             Self::Clipboard => "clipboard",
+            Self::Accessibility => "accessibility",
             Self::DefaultApps => "apps",
         }
     }
@@ -101,6 +106,7 @@ impl Page {
             Self::Touchpad => Icon::Touchpad,
             Self::Lock => Icon::Lock,
             Self::Clipboard => Icon::Document,
+            Self::Accessibility => Icon::Eye,
             Self::DefaultApps => Icon::Grid,
         }
     }
@@ -150,11 +156,15 @@ pub enum Setting {
     Bluetooth,
     ClipboardHistory,
     ClipboardKeep,
+    ReduceMotion,
+    ReduceTransparency,
+    IncreaseContrast,
+    Effects,
     App(Kind),
 }
 
 impl Setting {
-    pub const ALL: [Self; 49] = [
+    pub const ALL: [Self; 53] = [
         Self::Arrangement,
         Self::Resolution,
         Self::Refresh,
@@ -196,6 +206,10 @@ impl Setting {
         Self::Bluetooth,
         Self::ClipboardHistory,
         Self::ClipboardKeep,
+        Self::ReduceMotion,
+        Self::ReduceTransparency,
+        Self::IncreaseContrast,
+        Self::Effects,
         Self::App(Kind::Browser),
         Self::App(Kind::Mail),
         Self::App(Kind::Editor),
@@ -251,6 +265,12 @@ impl Setting {
             Self::Bluetooth => (Bluetooth, t::BLUETOOTH_SWITCH, t::BLUETOOTH_WORDS),
             Self::ClipboardHistory => (Clipboard, t::CLIPBOARD_HISTORY, t::CLIPBOARD_WORDS),
             Self::ClipboardKeep => (Clipboard, t::CLIPBOARD_KEEP, t::CLIPBOARD_WORDS),
+            Self::ReduceMotion => (Accessibility, t::REDUCE_MOTION, t::MOTION_WORDS),
+            Self::ReduceTransparency => {
+                (Accessibility, t::REDUCE_TRANSPARENCY, t::TRANSPARENCY_WORDS)
+            }
+            Self::IncreaseContrast => (Accessibility, t::INCREASE_CONTRAST, t::CONTRAST_WORDS),
+            Self::Effects => (Accessibility, t::EFFECTS, t::EFFECTS_WORDS),
             Self::App(kind) => (DefaultApps, kind.texts().0, t::APPS_WORDS),
         }
     }
@@ -278,6 +298,7 @@ impl Setting {
             },
             Page::Lock => File::Lock,
             Page::Clipboard => File::Clipboard,
+            Page::Accessibility => File::Appearance,
             Page::Displays | Page::Sound | Page::Bluetooth | Page::Network | Page::DefaultApps => {
                 return None;
             }

@@ -16,6 +16,7 @@ pub mod panel;
 pub mod programs;
 pub mod quick;
 pub mod registrar;
+pub mod screen_share;
 pub mod shape;
 pub mod source;
 pub mod system;

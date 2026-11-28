@@ -67,6 +67,8 @@ pub enum Decision {
     TimedOut,
     /// No compositor to ask, or it went away during the request.
     Unavailable,
+    /// Not asked: the user already refused `MAX_REFUSALS` times in this session.
+    Stopped,
 }
 
 impl Decision {
@@ -76,6 +78,7 @@ impl Decision {
             Self::Denied => "denied",
             Self::TimedOut => "timed-out",
             Self::Unavailable => "unavailable",
+            Self::Stopped => "stopped",
         }
     }
 }
@@ -132,12 +135,20 @@ pub struct Refusal {
     pub decision: Decision,
 }
 
+/// Refusals of the user (or requests left unanswered) in one session, after which nothing more
+/// is asked: the calls beyond read are refused at once (`Decision::Stopped`). A model obeying a
+/// hidden instruction may ask again and again until a tired user grants (consent fatigue);
+/// each session is one request of Claude Code's (one proxy) or one agent.
+pub const MAX_REFUSALS: usize = 3;
+
 /// The broker of a session: who to ask, the journal, the number of the next request.
 pub struct Broker {
     consent: Box<dyn Consent>,
     journal: Journal,
     timeout: Duration,
     next: u64,
+    /// Requests refused or left unanswered so far.
+    refusals: usize,
 }
 
 impl Broker {
@@ -148,6 +159,7 @@ impl Broker {
             journal,
             timeout: CONSENT_TIMEOUT,
             next: 1,
+            refusals: 0,
         }
     }
 
@@ -182,10 +194,7 @@ impl Broker {
         let decision = if level == Level::Read {
             Decision::Granted
         } else {
-            match tokio::time::timeout(self.timeout, self.consent.ask(&request)).await {
-                Ok(decision) => decision,
-                Err(_) => Decision::TimedOut,
-            }
+            self.ask(&request).await
         };
         let written = self.journal.decision(&request, decision);
         if let Err(error) = &written {
@@ -206,6 +215,21 @@ impl Broker {
             arguments: arguments.clone(),
             level,
         })
+    }
+
+    /// Asks the user, within the answer delay; past `MAX_REFUSALS` refusals, asks no more.
+    async fn ask(&mut self, request: &Request) -> Decision {
+        if self.refusals >= MAX_REFUSALS {
+            return Decision::Stopped;
+        }
+        let decision = match tokio::time::timeout(self.timeout, self.consent.ask(request)).await {
+            Ok(decision) => decision,
+            Err(_) => Decision::TimedOut,
+        };
+        if matches!(decision, Decision::Denied | Decision::TimedOut) {
+            self.refusals += 1;
+        }
+        decision
     }
 
     /// Writes the outcome of the call of request `id`, with the tool's error when it failed
@@ -453,8 +477,9 @@ mod tests {
         }
     }
 
-    fn journal() -> (PathBuf, Journal) {
-        let dir = std::env::temp_dir().join(format!("sherlockd-broker-{}", std::process::id()));
+    fn journal(name: &str) -> (PathBuf, Journal) {
+        let dir =
+            std::env::temp_dir().join(format!("sherlockd-broker-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let path = dir.join("journal.jsonl");
         let journal = Journal::open(&path).unwrap();
@@ -463,7 +488,7 @@ mod tests {
 
     #[tokio::test]
     async fn only_a_consent_lets_an_action_run_and_every_decision_is_journaled() {
-        let (path, journal) = journal();
+        let (path, journal) = journal("decisions");
         let decisions = vec![Decision::Granted, Decision::Denied, Decision::Unavailable];
         let mut broker = Broker::new(Box::new(Fake(decisions, Vec::new())), journal);
         let args = json!({ "path": "/home/x/a\nforged" });
@@ -510,7 +535,7 @@ mod tests {
 
     #[test]
     fn a_session_is_a_plain_name_and_each_process_has_its_own() {
-        let (path, journal) = journal();
+        let (path, journal) = journal("sessions");
         assert_eq!(journal.for_session("c0ffee-1").session(), "c0ffee-1");
         for trapped in ["", "a b", "a\nb", "\"}", &"x".repeat(65)] {
             assert!(!valid_session(trapped), "{trapped:?}");
@@ -559,6 +584,31 @@ mod tests {
                 .await
                 .is_ok()
         );
+    }
+
+    #[tokio::test]
+    async fn after_three_refusals_nothing_more_is_asked() {
+        let (path, journal) = journal("refusals");
+        let decisions = vec![Decision::Denied, Decision::Granted, Decision::Denied];
+        let mut broker = Broker::new(Box::new(Fake(decisions, Vec::new())), journal)
+            .with_timeout(Duration::from_secs(5));
+        let args = json!({});
+        let mut got = Vec::new();
+        for _ in 0..6 {
+            let decision = match broker.authorize("vider", Level::Destructive, &args).await {
+                Ok(_) => Decision::Granted,
+                Err(refusal) => refusal.decision,
+            };
+            got.push(decision);
+        }
+        // The fake refuses what it has no answer for: the fourth request is its third refusal.
+        use Decision::{Denied, Granted, Stopped};
+        assert_eq!(got, [Denied, Granted, Denied, Denied, Stopped, Stopped]);
+        // A read still runs, unasked.
+        assert!(broker.authorize("lire", Level::Read, &args).await.is_ok());
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(text.matches("\"stopped\"").count(), 2, "{text}");
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 
     #[test]
