@@ -21,6 +21,7 @@ pub mod prefs;
 pub mod preview;
 pub mod probe;
 pub mod selection;
+pub mod shell;
 pub mod startup;
 pub mod transfer;
 pub mod trash;

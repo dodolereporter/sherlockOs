@@ -320,16 +320,18 @@ pub fn init(
     // Screenshots (lot D-35c), drawn the same way, between two frames.
     state.enable_screenshots(crate::capture::Settings::default());
     let weak = Rc::downgrade(&backend);
-    state.set_capturer(Box::new(move |state, target| {
+    state.set_capturer(Box::new(move |state, target, cursor| {
         let backend = weak.upgrade()?;
         let mut backend = backend.try_borrow_mut().ok()?;
         let Backend {
             scene,
             renderer,
             textures,
+            cursors,
             ..
         } = &mut *backend;
-        crate::capture::image(scene, renderer, textures, state, target)
+        let cursors = cursor.then_some(cursors);
+        crate::capture::image(scene, renderer, textures, state, target, cursors)
     }));
     // The screens' saved settings, and the hardware's part of a configuration (ADR 0025).
     state.remember_screens(desktop_config::displays::config_file(var));
