@@ -20,6 +20,10 @@ thiserror = "=2.0.21"
 # (a plain fill before a drop may be optimized away). Small, no dependency of its own.
 zeroize = { version = "=1.9.1", default-features = false, features = ["alloc"] }
 tracing = "=0.1.44"
+# The time limit of a Wi-Fi activation (lot D-20e) and the stream of its state: the timer and
+# the helpers of zbus's own runtime, already built for it (no interface toolkit, no tokio).
+async-io = "=2.6.0"
+futures-lite = { version = "=2.6.1", default-features = false, features = ["std"] }
 
 [lints]
 workspace = true

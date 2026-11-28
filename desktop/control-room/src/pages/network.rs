@@ -122,6 +122,7 @@ fn read() -> Task<Message> {
 fn say(problem: &Problem) -> &'static str {
     match problem {
         Problem::Refused(_) => t::NETWORK_REFUSED,
+        Problem::Failed(text) if text == nm::WRONG_PASSWORD => t::NETWORK_WRONG_PASSWORD,
         _ => t::NETWORK_FAILED,
     }
 }

@@ -199,7 +199,9 @@ command that stops is restarted 30 s later. A burst of watch lines (a volume sli
 dragged, a network reconnecting) gives a single refresh: the lines that follow within
 `metrics::EVENT_COALESCE_MS` (150 ms) of each other are drained before reading again, for
 `metrics::EVENT_COALESCE_MAX_MS` (500 ms) at most, so that a long drag still refreshes. When the
-bar stops, the monitors stop quietly and are not restarted. A read
+bar stops, the monitors stop quietly and are not restarted. A reading
+command that gives no answer in 10 s (`source::RUN_LIMIT`, Q-42) is killed and counts as a read
+error: the icon keeps its state and the next change reads again. A read
 error, such as an `upower` output without a battery section, is logged as a warning once, until
 the source reads fine again. The `upower-full.txt`, `nmcli-wifi.txt` and `pactl-55.txt` outputs (the last one in
 `desktop/system-services/fixtures`, with the sound shared with the media keys)
@@ -685,7 +687,7 @@ the keyboard row (`panels::KEYBOARD_ROW`): without one, it is left empty above t
 | --- | --- | --- | --- |
 | Wi-Fi | NetworkManager, system bus | `WirelessEnabled`, `WirelessHardwareEnabled`, the first device of type 2, its `ActiveAccessPoint` and `AccessPoints` | `WirelessEnabled`; `ActivateConnection` of a saved connection, else `AddAndActivateConnection` |
 | Bluetooth | BlueZ, system bus | `GetManagedObjects`: the first `Adapter1`, its `Powered`, its `Device1` and their `Battery1` | `Powered`; `Connect`, `Disconnect`, `Pair`, `Trusted`, `RemoveDevice`, `StartDiscovery`, `StopDiscovery` |
-| « Ne pas déranger » | `notifications.conf` (`notifications-config`) | `DoNotDisturb` | `NotificationsConfig::save`, atomic, other lines kept |
+| « Ne pas déranger » | `notifications.conf` (`notifications-config`) | `DoNotDisturb` | `NotificationsConfig::save`, atomic, other lines kept; read and written on a thread of its own (Q-42), never on the interface's |
 | Volume | `pactl` (PipeWire's PulseAudio server) | volume, mute, `get-default-sink` and its `Description` in `list sinks` | `set-sink-volume`, `set-sink-mute` on `@DEFAULT_SINK@` |
 | Brightness | `/sys/class/backlight`, logind | `brightness` and `max_brightness` of the firmware backlight, else the platform one, else a raw one | `Session.SetBrightness("backlight", name, value)` on `/org/freedesktop/login1/session/auto` |
 | Keyboard backlight | UPower, system bus; else `/sys/class/leds` and logind | `GetBrightness`, `GetMaxBrightness` of `org.freedesktop.UPower.KbdBacklight`; else the LED `…::kbd_backlight` | `SetBrightness`; else `Session.SetBrightness("leds", name, value)` |
@@ -729,13 +731,34 @@ refused.
 chevron on its right (« Réseaux Wi-Fi ») opens the list of networks after asking for a scan: one
 line per name (the access point in use, else the strongest), twelve at most, read again when
 the scan's results come (`PropertiesChanged` of the device's Wi-Fi interface, `AccessPointAdded`,
-`AccessPointRemoved`), a padlock on a
+`AccessPointRemoved`), the arcs of its signal on the left (`icon::wifi_level`), a padlock on a
 protected one, a check on the one in use. An open or saved network is joined at once. A new
-protected one asks for its password below its line (a hidden field, Enter or « Rejoindre »);
-NetworkManager keeps the connection, its password readable by root only. WPA and WPA2 personal
-(`wpa-psk`) and WPA3 personal (`sae`); WEP and enterprise networks say « Ce réseau se rejoint
-depuis les Réglages. », with « Ouvrir les Réglages », which runs `control-room --page network`
-(the window already open shows that page) and closes the panel (lot D-26n). The tile reads « Connexion… » until NetworkManager reports the network.
+protected one asks for its password below its line (a hidden field with an eye that shows it,
+Enter or « Rejoindre »); NetworkManager keeps the connection, its password readable by root
+only. WPA and WPA2 personal (`wpa-psk`) and WPA3 personal (`sae`); WEP and enterprise networks
+say « Ce réseau se rejoint depuis les Réglages. », with « Ouvrir les Réglages », which runs
+`control-room --page network` (the window already open shows that page) and closes the panel
+(lot D-26n). « Autre réseau… », at the end of the list,
+joins a hidden network by its name (32 bytes at most), its protection and its password
+(`802-11-wireless.hidden`, any access point).
+
+**Joining, to its end** (D-20e). `AddAndActivateConnection` and `ActivateConnection` answer
+before the network is joined: the bar then follows the activation they return (`StateChanged`
+of `org.freedesktop.NetworkManager.Connection.Active`, listened to before its `State` is read),
+for `network::ACTIVATION_LIMIT` (60 s) at most. The tile and the network's line read
+« Connexion… » until it ends, for a saved network too, and a second click waits. Activated, the
+network shows checked. Deactivated without secrets or after a failed login (reasons 9 and
+10), the password was wrong: the line and the tile say « Mot de passe incorrect », the field
+comes back under the line and shakes as on the lock screen (`panels::shake`). Another reason
+says « Connexion impossible », the limit « Le réseau ne répond pas ». A connection the bar
+created for that join is deleted when it fails: NetworkManager never keeps a wrong password. A
+saved network whose password is typed again keeps its connection: the new password replaces
+the old one in it (`Update` of its settings), then it is activated. The calls go through the
+bus for actions (`ACTION_TIMEOUT`, 60 s): polkit has time to ask for a password.
+
+**Forgetting.** A saved network, and the one in use, have a bin on their right (« Oublier ce
+réseau »), which asks for a confirmation under the line, then deletes every saved connection of
+that name (`Delete`, polkit `settings.modify.system`).
 
 **Bluetooth** (D-20d). As for the Wi-Fi, a chevron on the tile (« Appareils Bluetooth ») opens
 the list of devices (`quick/devices.rs`, services in `system/bluetooth.rs`):
@@ -823,6 +846,10 @@ network is not cleaned yet (it waits for D-20e, which changes `network.rs`).
 ![The control centre](../desktop/bar/screenshots/control-centre.png)
 ![The control centre in the light theme](../desktop/bar/screenshots/control-centre-light.png)
 ![The Wi-Fi networks, a password asked](../desktop/bar/screenshots/wifi-networks.png)
+
+![A wrong password, asked again](../desktop/bar/screenshots/wifi-wrong-password.png)
+
+![« Autre réseau… », the password shown](../desktop/bar/screenshots/wifi-other-network.png)
 ![The control centre without any service](../desktop/bar/screenshots/control-centre-empty.png)
 ![The same in the light theme](../desktop/bar/screenshots/control-centre-empty-light.png)
 
