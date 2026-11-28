@@ -366,6 +366,11 @@ impl Unfold {
         self.fade.value(now).clamp(0.0, 1.0)
     }
 
+    /// The spring's value at `now`, unclamped: it overshoots a little (the fan, lot D-21k2).
+    pub fn progress(&self, now: Duration) -> f32 {
+        self.spring.value(now) as f32
+    }
+
     /// Scale it is drawn at: never past 1, so that it never leaves its surface.
     pub fn scale(&self, now: Duration) -> f32 {
         let progress = (self.spring.value(now) as f32).clamp(0.0, 1.0);

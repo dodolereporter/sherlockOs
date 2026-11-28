@@ -101,12 +101,21 @@ fn gio(args: &[&str], input: &str) -> Result<(bool, String), Error> {
 /// Whether what `gio mount` said means the server wants a name and a password.
 fn wants_credentials(output: &str) -> bool {
     let lower = output.to_lowercase();
+    // The words differ with the version of gvfs and of Samba: a question gio could not ask
+    // (its input is closed), or the refusal itself, in its words or as an NT status.
     [
         "password",
         "authentication",
         "permission denied",
         "logon failure",
         "access denied",
+        "not permitted",
+        "user [",
+        "anonymous",
+        "nt_status_access",
+        "nt_status_logon",
+        "nt_status_wrong_password",
+        "unauthorized",
     ]
     .iter()
     .any(|word| lower.contains(word))
@@ -165,6 +174,22 @@ mod tests {
         ));
         assert!(wants_credentials("Failed to mount: Permission denied"));
         assert!(!wants_credentials("gio: smb://nas/: Host is down"));
+        // Other versions: the question it could not ask, an NT status, an errno.
+        assert!(wants_credentials(
+            "Authentication Required\nEnter user and password for share “nas”:\nUser [ada]: "
+        ));
+        assert!(wants_credentials(
+            "gio: smb://nas/: Failed to mount Windows share: NT_STATUS_ACCESS_DENIED"
+        ));
+        assert!(wants_credentials(
+            "gio: smb://nas/: Failed to mount Windows share: Operation not permitted"
+        ));
+        assert!(wants_credentials(
+            "gio: smb://nas/: Anonymous access denied"
+        ));
+        assert!(!wants_credentials(
+            "gio: smb://nas/: Failed to mount Windows share: Connection refused"
+        ));
         let c = Credentials {
             user: "ada".into(),
             domain: "WORKGROUP".into(),

@@ -740,8 +740,29 @@ changes, not its content.
   « Retirer du Dock ». The choice is checked, kept in `dock.conf` with the pinned list (one
   atomic write, off the interface thread), and the folder is read again in the new order. Out
   of the dock, the dock's own menu brings it back (« Afficher les téléchargements dans le
-  Dock »). For now the icon is the folder's and the content opens as the grid, whatever is
-  chosen: the stack of thumbnails, the fan and the list follow.
+  Dock »).
+- « Présenter le contenu comme » (lot D-21k2), as macOS's:
+  - « Éventail »: its first ten items rise in an arc over the icon, the first at the bottom, each
+    its icon over the dock's icon and its name in a pill on its left, the higher ones leaning
+    right; « Ouvrir dans Evidence » at the top. They come out of the icon one after the other on
+    the menus' spring (`FAN_STAGGER` apart), and fade back when it closes. Over a dock at the
+    bottom of the screen only: on a side, the grid.
+  - « Grille »: the glass grid, four columns; past four rows it scrolls (UI-11).
+  - « Liste »: a menu of its items with their glyphs, a folder marked with a chevron; an item
+    opens as in the grid. The submenus of the folders are not there yet.
+  - « Automatique » (the default): the fan for ten items at most, else the grid.
+- An item of the content, in any presentation, is dragged out to an application (lot D-21k2):
+  pressed on it, the pointer goes `DRAG_THRESHOLD` away. `dnd` starts the drag from the popup
+  under the pointer, offering the file's `file://` address in `text/uri-list` and
+  `text/plain;charset=utf-8`, to be copied; a PNG shows under the pointer, any other file the
+  glyph of its kind, drawn on the drag thread. The content stays open until the drop, then
+  closes.
+- « Afficher comme » « Pile » (the default, lot D-21k2): the icon is the stack of its three first
+  items, as macOS draws it, the first one in front and the two others behind it, turned and
+  shifted a little (`dock::stack_pile`). A PNG shows on its card, from its own bytes (512 KiB at
+  most, read on the watcher's thread, drawn by the raster thread, which only takes a PNG written
+  in the document); any other item shows the glyph of its kind, as in Evidence's lists. Empty, or
+  « Dossier », the folder's icon.
 
 The fan of macOS is not drawn: the grid is shown on every edge.
 
