@@ -42,6 +42,9 @@ use wayland_client::{
 
 /// The private type of a dragged application: its desktop id, in UTF-8.
 pub const MIME: &str = "application/x-sherlockos-desktop-id";
+/// The types a file dragged out of the stack is offered in (lot D-21k2): its `file://` address,
+/// as file managers and editors take it.
+pub const FILE_TYPES: [&str; 2] = ["text/uri-list", "text/plain;charset=utf-8"];
 /// Longest desktop id read from a drop.
 pub const MAX_ID_BYTES: usize = 255;
 /// Longest wait for the id once dropped.
@@ -63,6 +66,31 @@ pub enum Command {
     },
     /// The drag is over: the surface takes the pointer again from its next commit.
     Restore,
+    /// The pointer, pressed on an item of the downloads stack, moved far enough (lot D-21k2):
+    /// drag its `uri` out to an application, from the popup under the pointer, shown by `icon`
+    /// drawn `side` pixels wide at `scale`.
+    DragFile {
+        uri: String,
+        icon: DragIcon,
+        side: u32,
+        scale: i32,
+    },
+}
+
+/// What a dragged file looks like under the pointer, drawn on the thread.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DragIcon {
+    /// A picture or an icon file.
+    File(PathBuf),
+    /// An SVG document: the glyph of its kind.
+    Document(String),
+}
+
+/// What a source started here carries.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Payload {
+    App(String),
+    File(String),
 }
 
 /// What happens on the Wayland side.
@@ -152,6 +180,8 @@ struct Worker {
     manager: Option<WlDataDeviceManager>,
     /// Serial of the press of the pointer still held on the surface.
     pressed: Option<u32>,
+    /// The surface of the toolkit under the pointer: the stack's popup starts a file's drag.
+    pointed: Option<WlSurface>,
     /// Types of the offers received, by offer.
     offers: Vec<(WlDataOffer, Vec<String>)>,
     /// The offer of an application dragged over the surface.
@@ -180,6 +210,7 @@ fn run(
         shm: None,
         manager: None,
         pressed: None,
+        pointed: None,
         offers: Vec::new(),
         over: None,
         dragging: None,
@@ -273,6 +304,12 @@ impl Worker {
                 surface.set_input_region(None);
                 return;
             }
+            Command::DragFile {
+                uri,
+                icon,
+                side,
+                scale,
+            } => return self.drag_file(uri, icon, side, scale, qh),
         };
         let (Some(manager), Some(device), Some(serial)) =
             (&self.manager, &self.device, self.pressed)
@@ -281,7 +318,7 @@ impl Worker {
             self.send(Event::DragEnded(false));
             return;
         };
-        let source = manager.create_data_source(qh, id);
+        let source = manager.create_data_source(qh, Payload::App(id));
         source.offer(MIME.to_owned());
         source.set_actions(DndAction::Copy);
         // Drawn here, off the interface thread.
@@ -355,6 +392,43 @@ impl Worker {
     fn forget(&mut self, offer: &WlDataOffer) {
         self.offers.retain(|o| o.0 != *offer);
         offer.destroy();
+    }
+
+    /// Drags the file at `uri` out of the popup under the pointer, offered in `FILE_TYPES`, to be
+    /// copied: the downloads stay where they are.
+    fn drag_file(
+        &mut self,
+        uri: String,
+        icon: DragIcon,
+        side: u32,
+        scale: i32,
+        qh: &QueueHandle<Self>,
+    ) {
+        let (Some(manager), Some(device), Some(serial), Some(origin)) =
+            (&self.manager, &self.device, self.pressed, &self.pointed)
+        else {
+            tracing::debug!("file drag not started: no press seen");
+            self.send(Event::DragEnded(false));
+            return;
+        };
+        let source = manager.create_data_source(qh, Payload::File(uri));
+        for kind in FILE_TYPES {
+            source.offer(kind.to_owned());
+        }
+        source.set_actions(DndAction::Copy);
+        // Drawn here, off the interface thread.
+        let pixels = match icon {
+            DragIcon::File(path) => sherlock_ui::raster::rasterize_file(&path, side),
+            DragIcon::Document(svg) => sherlock_ui::raster::rasterize(svg.as_bytes(), side),
+        };
+        let icon = pixels.and_then(|rgba| self.icon_surface(&rgba, side, scale, qh));
+        device.start_drag(Some(&source), origin, icon.as_ref(), serial);
+        if let Some((old, old_icon)) = self.dragging.replace((source, icon)) {
+            old.destroy();
+            if let Some(old_icon) = old_icon {
+                old_icon.destroy();
+            }
+        }
     }
 
     fn drag_ended(&mut self, source: &WlDataSource, taken: bool) {
@@ -460,17 +534,21 @@ impl Dispatch<WlPointer, ()> for Worker {
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
-        // Only a button still held may start a drag: the press's serial, until its release.
-        if let wl_pointer::Event::Button {
-            serial,
-            state: WEnum::Value(state),
-            ..
-        } = event
-        {
-            worker.pressed = match state {
-                wl_pointer::ButtonState::Pressed => Some(serial),
-                _ => None,
-            };
+        match event {
+            // Only a button still held may start a drag: the press's serial, until its release.
+            wl_pointer::Event::Button {
+                serial,
+                state: WEnum::Value(state),
+                ..
+            } => {
+                worker.pressed = match state {
+                    wl_pointer::ButtonState::Pressed => Some(serial),
+                    _ => None,
+                };
+            }
+            wl_pointer::Event::Enter { surface, .. } => worker.pointed = Some(surface),
+            wl_pointer::Event::Leave { .. } => worker.pointed = None,
+            _ => {}
         }
     }
 }
@@ -570,18 +648,25 @@ impl Dispatch<WlDataOffer, ()> for Worker {
     }
 }
 
-impl Dispatch<WlDataSource, String> for Worker {
+impl Dispatch<WlDataSource, Payload> for Worker {
     fn event(
         worker: &mut Self,
         source: &WlDataSource,
         event: wl_data_source::Event,
-        id: &String,
+        payload: &Payload,
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
         match event {
-            wl_data_source::Event::Send { mime_type, fd } if mime_type == MIME => {
-                let data = id.clone().into_bytes();
+            wl_data_source::Event::Send { mime_type, fd } => {
+                let data = match payload {
+                    Payload::App(id) if mime_type == MIME => id.clone().into_bytes(),
+                    Payload::File(uri) if mime_type == FILE_TYPES[0] => {
+                        format!("{uri}\r\n").into_bytes()
+                    }
+                    Payload::File(uri) if mime_type == FILE_TYPES[1] => uri.clone().into_bytes(),
+                    _ => return,
+                };
                 // Written off this thread: the reader may be slow, or never read.
                 let _ = thread::Builder::new()
                     .name("app-dnd-send".into())

@@ -23,7 +23,11 @@ layer surface. This is what lets its menus be real `xdg_popup`s.
 
 The right-click menu and its submenu are popups of their own (lot E-02b), so they leave the
 window, as on macOS. The menu's popup is larger than the menu by the room of its shadow, its input
-region the menu only. Its anchor rectangle is chosen so that the menu's corner lands on the
+region the menu only. Every surface of Evidence starts transparent (`shell::surface_style`, lot
+Q-57): iced's default fills a surface with the theme's background, which painted the room of
+the shadow around the menu black. The window paints its own body instead (`theme::window`,
+the same color, so it looks the same, under winit too). A capture of the menu's popup on a
+transparent background checks that its corner stays clear and the menu itself is painted. Its anchor rectangle is chosen so that the menu's corner lands on the
 clicked point both ways: below right, or above left when the compositor flips it at the
 screen's edge (`flip_x`, `flip_y`, `slide_x`, `slide_y`). The submenu is a child popup anchored
 beside its entry, which the compositor flips to the left the same way. The popups grab the
@@ -367,6 +371,14 @@ are built once (`sherlock_ui::component::icon` caches the SVG handles).
   the next connection reads them first (lot E-07b, `keyring`). Without a keyring, or with a
   locked one, nothing is kept and the sheet asks again; every call to the keyring has a 5 s
   limit and runs off the interface thread. The password never reaches a log.
+  « Se connecter en tant que… » (lot Q-56), in a server's right-click menu (with « Ouvrir » and,
+  once connected, « Éjecter ») and as the button beside it, opens the sheet even when the guest
+  gets in; a guest connection is closed first, since gvfs would keep it. The sheet also opens
+  when a folder of a connected server cannot be read (a share the guest may not open), and the
+  refusals `gio mount` reports are read in the words of more versions of gvfs and Samba: the
+  question it could not ask on its closed input (« User [ »), an NT status
+  (`NT_STATUS_ACCESS_DENIED`, `NT_STATUS_LOGON_FAILURE`), « Operation not permitted », a refused
+  anonymous access.
 - Trash: deleting moves to the freedesktop trash (shared with Plasma, GNOME, `gio trash`).
   The trash view lists the original name, the deletion date read from the record, and the
   origin. Emptying asks first and deletes only what was listed when the question was asked.

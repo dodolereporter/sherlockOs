@@ -642,7 +642,7 @@ fn downloads(count: usize) -> dock::stack::Stack {
         "notes.txt",
         "capture.jpg",
     ];
-    let items = (0..count)
+    let items: Vec<dock::stack::Shown> = (0..count)
         .map(|n| {
             let name = names[n % names.len()];
             let folder = name == "Projets";
@@ -659,10 +659,17 @@ fn downloads(count: usize) -> dock::stack::Stack {
             }
         })
         .collect();
+    // The cards of its icon (D-21k2): a real picture in front, then the glyphs of the kinds.
+    let mut pile = dock::stack::pile(&items);
+    let picture = std::fs::read(fixtures().join("../screenshots/trash.png"));
+    if let (Some(front), Ok(bytes)) = (pile.first_mut(), picture) {
+        *front = sherlock_ui::dock::PileCard::Png(bytes);
+    }
     dock::stack::Stack {
         folder: PathBuf::from("/home/me/Downloads"),
         name: String::from("Downloads"),
         items,
+        pile,
     }
 }
 
@@ -695,6 +702,11 @@ fn the_downloads_stack_opens_its_grid() {
         dock.menu_lines(index)[2].checked,
         "« Date d'ajout » by default"
     );
+    // « Grille » (D-21k2: « Automatique » would give a fan for a few items).
+    let _ = dock.set_stack(dock_config::stack::Stack {
+        view: dock_config::stack::View::Grid,
+        ..dock.stack_settings()
+    });
     for (count, name) in [(6, "dock-stack-grid"), (16, "dock-stack-grid-full")] {
         let _ = dock.update(Message::Stack(Some(downloads(count))));
         let _ = dock.press_icon(index);
@@ -856,4 +868,84 @@ fn the_stack_menu_sorts_shows_and_removes_it() {
     settings.shown = true;
     let _ = dock.set_stack(settings);
     assert!(dock.items.iter().any(|i| i.name == "Downloads"), "back");
+}
+
+/// Lot D-21k2: « Automatique » opens a few items as a fan rising over the icon, its items coming
+/// out of it one after the other, the first at the bottom, « Ouvrir dans Evidence » at the top;
+/// many items as the grid; « Liste » as a menu. `dock-stack-fan`, `dock-stack-fan-opening`,
+/// `dock-stack-list`.
+#[test]
+fn the_stack_opens_as_a_fan_a_grid_or_a_list() {
+    use dock::stack::{Presentation, presentation};
+    use dock_config::stack::View;
+    assert_eq!(presentation(View::Automatic, 6, true), Presentation::Fan);
+    assert_eq!(presentation(View::Automatic, 30, true), Presentation::Grid);
+    assert_eq!(
+        presentation(View::Automatic, 6, false),
+        Presentation::Grid,
+        "fan at the bottom only"
+    );
+    assert_eq!(presentation(View::List, 6, true), Presentation::List);
+    let _theme = in_theme(Theme::Dark);
+    let mut dock = sample();
+    let _ = dock.update(Message::Surface(Id::unique()));
+    let _ = dock.update(Message::Stack(Some(downloads(6))));
+    let _ = dock.tick(Duration::from_secs(5));
+    let index = dock.items.len() - 1;
+    assert_eq!(dock.items[index].name, "Downloads");
+    let _ = dock.press_icon(index);
+    // Halfway: the lower rows are out, the higher ones still coming.
+    let _ = dock.tick(dock.now() + Duration::from_millis(120));
+    let (width, height) = sherlock_ui::dock::fan_size(6);
+    {
+        let ui = Simulator::with_size(
+            dock::settings(),
+            (width, height),
+            on_desktop(dock.view_menu()),
+        );
+        assert!(capture(ui, "dock-stack-fan-opening").expect("screenshot") > 2_000);
+    }
+    unfolded(&mut dock);
+    {
+        let mut ui = Simulator::with_size(
+            dock::settings(),
+            (width, height),
+            on_desktop(dock.view_menu()),
+        );
+        assert!(ui.find("photo.png").is_ok() && ui.find("Ouvrir dans Evidence").is_ok());
+        assert!(capture(ui, "dock-stack-fan").expect("screenshot") > 2_000);
+    }
+    // The fan of the most items it shows: ten, the oldest at the top.
+    let _ = dock.update(Message::StackOpen(usize::MAX));
+    let _ = dock.tick(dock.now() + Duration::from_secs(1));
+    let _ = dock.update(Message::Stack(Some(downloads(10))));
+    let _ = dock.tick(dock.now() + Duration::from_secs(5));
+    let _ = dock.press_icon(index);
+    unfolded(&mut dock);
+    {
+        let (width, height) = sherlock_ui::dock::fan_size(10);
+        let ui = Simulator::with_size(
+            dock::settings(),
+            (width, height),
+            on_desktop(dock.view_menu()),
+        );
+        assert!(capture(ui, "dock-stack-fan-ten").expect("screenshot") > 2_000);
+    }
+    let _ = dock.update(Message::StackOpen(usize::MAX));
+    let _ = dock.tick(dock.now() + Duration::from_secs(1));
+    let _ = dock.set_stack(dock_config::stack::Stack {
+        view: View::List,
+        ..dock.stack_settings()
+    });
+    let _ = dock.tick(dock.now() + Duration::from_secs(5));
+    let _ = dock.press_icon(index);
+    unfolded(&mut dock);
+    let (width, height) = sherlock_ui::dock::list_size(6);
+    let mut ui = Simulator::with_size(
+        dock::settings(),
+        (width, height),
+        on_desktop(dock.view_menu()),
+    );
+    assert!(ui.find("Projets").is_ok());
+    assert!(capture(ui, "dock-stack-list").expect("screenshot") > 2_000);
 }
