@@ -155,7 +155,7 @@ pub mod texts {
     pub const DISPLAYS_ABOUT: &str = "La définition, la taille et la place de chaque écran.";
 
     // « Écrans ».
-    pub const ARRANGEMENT: &str = "Disposition";
+    pub const ARRANGEMENT: &str = "Disposition des écrans";
     pub const ARRANGEMENT_HELP: &str = "Glisse les écrans pour les placer comme sur ton bureau.";
     pub const RESOLUTION: &str = "Résolution";
     pub const RESOLUTION_HELP: &str = "Plus elle est haute, plus l'image est fine.";

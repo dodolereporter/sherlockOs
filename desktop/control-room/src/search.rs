@@ -267,10 +267,12 @@ pub fn search(query: &str) -> Vec<Hit> {
                 return None;
             }
             let marks: Vec<Range<usize>> = words.iter().filter_map(|w| find(name, w)).collect();
+            // The name itself first: two pages may name a setting alike (« Disposition »).
             let rank = match fold(name) {
-                n if n.starts_with(&whole) => 0,
-                n if n.contains(&whole) || !marks.is_empty() => 1,
-                _ => 2,
+                n if n == whole => 0,
+                n if n.starts_with(&whole) => 1,
+                n if n.contains(&whole) || !marks.is_empty() => 2,
+                _ => 3,
             };
             Some((rank, Hit { setting, marks }))
         })
