@@ -3,7 +3,7 @@
 //! read from its palette (`palette`): no component looks at the theme itself.
 
 use std::sync::OnceLock;
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::time::Instant;
 
 use crate::motion::{self, Fade};
@@ -444,9 +444,27 @@ pub fn active() -> Theme {
     }
 }
 
-/// The palette shown: that of the active theme, or a mix of both during a fade.
+/// The renderer's buffers have no alpha (tiny-skia presents through softbuffer, whose
+/// Wayland buffers are `XRGB8888`): the glass is drawn opaque (lot UI-09).
+static OPAQUE_GLASS: AtomicBool = AtomicBool::new(false);
+
+/// Tells whether the program's buffers keep their alpha (`false` with tiny-skia): without it,
+/// every glass of the palette is laid over the theme's desktop color first, so that the bar,
+/// the dock and the bubbles show the color they would over the desktop, not a mix with black.
+/// `surface::Shadowed` calls it when it learns the renderer.
+pub fn set_opaque_glass(opaque: bool) {
+    OPAQUE_GLASS.store(opaque, Ordering::Relaxed);
+}
+
+/// The palette shown: that of the active theme, or a mix of both during a fade; with opaque
+/// glass when the renderer has no alpha (`set_opaque_glass`).
 pub fn palette() -> &'static Palette {
-    Palette::at_step(mix_step())
+    let step = mix_step();
+    if OPAQUE_GLASS.load(Ordering::Relaxed) {
+        Palette::opaque_at_step(step)
+    } else {
+        Palette::at_step(step)
+    }
 }
 
 /// The theme a program shows, followed with a fade (`motion::THEME_FADE`). The program calls
@@ -784,6 +802,28 @@ impl Palette {
         }
     }
 
+    /// This palette drawn into buffers without alpha: each glass laid over the desktop color
+    /// (lot UI-09). What goes over a glass (veils, borders, texts) stays as it is: it is
+    /// blended into the glass before the buffer loses its alpha.
+    pub fn opaque(&self) -> Self {
+        let solid = |glass: Color| glass.over(self.desktop);
+        Self {
+            glass: solid(self.glass),
+            menu_glass: solid(self.menu_glass),
+            dock_glass: solid(self.dock_glass),
+            top_bar_glass: solid(self.top_bar_glass),
+            ..*self
+        }
+    }
+
+    /// `at_step`, with opaque glass.
+    pub fn opaque_at_step(step: u8) -> &'static Self {
+        static STEPS: OnceLock<Vec<Palette>> = OnceLock::new();
+        let steps =
+            STEPS.get_or_init(|| (0..=MIX_STEPS).map(|s| Self::at_step(s).opaque()).collect());
+        &steps[usize::from(step.min(MIX_STEPS))]
+    }
+
     /// Mix of every color: `t` is 0 for `self`, 1 for `other`.
     pub fn mix(&self, other: &Self, t: f32) -> Self {
         let discs = |a: [Color; 3], b: [Color; 3]| [0, 1, 2].map(|i| a[i].lerp(b[i], t));
@@ -871,6 +911,46 @@ impl Palette {
 
 #[cfg(test)]
 mod tests {
+
+    /// Lot UI-09: the texts of the bar, the dock's menu and the bubbles read at 4.5 to 1 on
+    /// their glass as each renderer draws it: translucent over the desktop and its discs (the
+    /// GPU, lavapipe), and opaque (tiny-skia, whose buffers lose the alpha). Before the opaque
+    /// glass, tiny-skia laid it over black: « 12 % » of a low battery came out at 3.1 to 1.
+    #[test]
+    fn the_shell_texts_read_on_the_glass_of_every_renderer() {
+        let mut failures = Vec::new();
+        for p in [&Palette::DARK, &Palette::LIGHT] {
+            let opaque = p.opaque();
+            let behind: Vec<Color> = std::iter::once(p.desktop).chain(p.desktop_discs).collect();
+            let surfaces = [
+                ("top bar", p.top_bar_glass, opaque.top_bar_glass),
+                ("bubble", p.glass, opaque.glass),
+                ("menu", p.menu_glass, opaque.menu_glass),
+            ];
+            for (name, glass, solid) in surfaces {
+                assert!(solid.a >= 1.0, "{name}: opaque");
+                let mut on: Vec<Color> = behind.iter().map(|b| glass.over(*b)).collect();
+                on.push(solid);
+                for below in on {
+                    for (what, text) in [
+                        ("text", p.text_primary),
+                        ("secondary", p.text_secondary),
+                        ("low battery", p.amber_text),
+                        ("accent", p.accent_text),
+                    ] {
+                        let ratio = text.contrast(below);
+                        if ratio < 4.5 {
+                            failures.push(format!("{what} on {name} {below:?}: {ratio:.2}"));
+                        }
+                    }
+                }
+            }
+            // The dock's glass, opaque in software, keeps its tint over the desktop.
+            assert_eq!(opaque.dock_glass, p.dock_glass.over(p.desktop));
+        }
+        assert!(failures.is_empty(), "{failures:#?}");
+    }
+
     use super::*;
 
     #[test]
