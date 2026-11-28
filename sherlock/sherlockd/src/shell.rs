@@ -36,7 +36,7 @@ const MAX_DESCRIPTION: usize = 300;
 /// plan first, in a block the shell reads. In French, since the model reads it.
 pub const PLAN_INSTRUCTIONS: &str = "Avant d'appeler le moindre outil, annonce ton plan une seule fois, dans un \
      bloc <plan>…</plan> qui contient seulement une liste JSON d'étapes, chacune \
-     {\"titre\": …, \"description\": …, \"outil\": …} (l'outil que l'étape appellera, sans \
+     {\"title\": …, \"description\": …, \"tool\": …} (l'outil que l'étape appellera, sans \
      préfixe). Écris le bloc avant tout autre texte, puis agis. Sans outil à appeler, pas de \
      bloc.";
 
@@ -175,9 +175,9 @@ pub fn plan(text: &str) -> Option<(Vec<Value>, String)> {
                 )
             };
             json!({
-                "title": field("titre", MAX_TITLE),
+                "title": field("title", MAX_TITLE),
                 "description": field("description", MAX_DESCRIPTION),
-                "tool": field("outil", MAX_TITLE),
+                "tool": field("tool", MAX_TITLE),
             })
         })
         .collect();
@@ -428,8 +428,8 @@ mod tests {
 
     #[test]
     fn the_plan_announced_first_is_read_and_its_steps_taken_in_order() {
-        let text = "Voici.\n<plan>[{\"titre\":\"Lire\",\"description\":\"La liste.\",\"outil\":\"list\"},\
-                    {\"titre\":\"Relancer\",\"description\":\"\",\"outil\":\"restart\"}]</plan>";
+        let text = "Voici.\n<plan>[{\"title\":\"Lire\",\"description\":\"La liste.\",\"tool\":\"list\"},\
+                    {\"title\":\"Relancer\",\"description\":\"\",\"tool\":\"restart\"}]</plan>";
         let mut events = Events::default();
         let shown = events.message(&Message::Assistant(ModelReply::Text(text.into())));
         assert_eq!(shown[0]["event"], "plan");

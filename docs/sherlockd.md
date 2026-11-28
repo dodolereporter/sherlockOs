@@ -311,7 +311,7 @@ read from Claude Code's stream (`ClaudeCode::ask_with`):
 
 **The plan first** (lot A-19e). The system instructions of `--ask` ask the model to announce
 its plan before calling any tool, once, in a `<plan>…</plan>` block holding only a JSON list of
-steps `{"titre", "description", "outil"}` (`shell::PLAN_INSTRUCTIONS`, in French: the model
+steps `{"title", "description", "tool"}` (`shell::PLAN_INSTRUCTIONS`, in French: the model
 reads it). The first readable block of a request becomes the `plan` event, 12 steps at most,
 titles of 120 bytes and descriptions of 300 at most; the rest of the text stays a `text`. A
 block that is not such a list stays text. Each call then takes the first step of the plan for
