@@ -40,13 +40,8 @@ pub enum Action {
     /// Copies the text to the clipboard (the calculator).
     Copy(String),
     Session(Power),
-    /// « Demander à Sherlock »: `command` started with the path of a private file that holds
-    /// `request` (`ask::request_file`), never the request itself: every local account reads
-    /// the arguments of a process.
-    Ask {
-        command: Command,
-        request: String,
-    },
+    /// « Demander à Sherlock »: the query, for the panel « Demande à Sherlock » (lot A-19).
+    Ask(String),
     /// Shown, does nothing.
     Disabled,
 }
