@@ -196,6 +196,117 @@ mod tests {
         assert!(ui.find("Supprimer").is_ok());
     }
 
+    fn from(id: u32, app: &str, summary: &str) -> Arc<Notification> {
+        Arc::new(Notification::new(
+            id,
+            Request {
+                app_name: app.to_owned(),
+                summary: summary.to_owned(),
+                body: String::from("Un message de démonstration."),
+                ..Request::default()
+            },
+        ))
+    }
+
+    fn messages_of(
+        app: &Notifications,
+        act: impl FnOnce(&mut Simulator<'_, Message>),
+    ) -> Vec<Message> {
+        let mut ui = Simulator::with_size(
+            notifications::settings(),
+            (SURFACE_WIDTH, HEIGHT),
+            app.view(window::Id::unique()),
+        );
+        act(&mut ui);
+        ui.into_messages().collect()
+    }
+
+    /// D-23d: three bubbles of « Courrier » pile up behind the newest, « Discussion » below;
+    /// « 2 autres notifications » opens the pile. `notifications-pile`, `notifications-pile-open`.
+    #[test]
+    fn the_bubbles_of_one_application_pile_up_and_open() {
+        let (sink, inbox) = Inbox::new();
+        let core = Core::new(sink, None);
+        let mut app = Notifications::new(core, inbox);
+        for note in [
+            from(1, "Courrier", "Réunion à 15 h"),
+            from(2, "Discussion", "Camille : on y va ?"),
+            from(3, "Courrier", "Facture de novembre"),
+            from(4, "Courrier", "Votre colis arrive"),
+        ] {
+            let _ = app.update(Message::Core(CoreEvent::Show(note)));
+        }
+        settle(&mut app);
+        capture(&app, "notifications-pile");
+        let more = ui::text::more(2);
+        let messages = messages_of(&app, |ui| {
+            let _ = ui.click(more.as_str());
+        });
+        assert!(
+            messages
+                .iter()
+                .any(|m| matches!(m, Message::Expand(a, true) if a == "Courrier")),
+            "{messages:?}"
+        );
+        for message in messages {
+            let _ = app.update(message);
+        }
+        settle(&mut app);
+        capture(&app, "notifications-pile-open");
+        let messages = messages_of(&app, |ui| {
+            assert!(ui.find("Réunion à 15 h").is_ok());
+            let _ = ui.click(ui::text::SHOW_LESS);
+        });
+        assert!(
+            messages
+                .iter()
+                .any(|m| matches!(m, Message::Expand(_, false)))
+        );
+    }
+
+    /// D-23d: under the pointer a bubble shows « × », which dismisses it; swiped to the right
+    /// past a third of its width it goes, a shorter swipe springs back. `notifications-hover`.
+    #[test]
+    fn a_bubble_goes_with_its_close_button_or_a_swipe() {
+        let (sink, inbox) = Inbox::new();
+        let core = Core::new(sink, None);
+        let mut app = Notifications::new(core.clone(), inbox);
+        for (app_name, summary) in [("Courrier", "Un"), ("Discussion", "Deux")] {
+            let id = core.notify(Request {
+                app_name: app_name.to_owned(),
+                summary: summary.to_owned(),
+                ..Request::default()
+            });
+            let note = core.open(id).expect("open");
+            let _ = app.update(Message::Core(CoreEvent::Show(note)));
+        }
+        settle(&mut app);
+        // Serial 2, the newest, is on top.
+        let _ = app.update(Message::Hover(2, true));
+        capture(&app, "notifications-hover");
+        // « × » at the right end of the header of the bubble on top.
+        let messages = messages_of(&app, |ui| {
+            ui.point_at(Point::new(
+                ui::WIDTH - ui::PADDING - 8.0,
+                ui::PADDING + 10.0,
+            ));
+            let _ = ui.simulate(simulator::click());
+        });
+        assert!(
+            messages.iter().any(|m| matches!(m, Message::Dismiss(2))),
+            "{messages:?}"
+        );
+        // A short swipe springs back, a long one dismisses.
+        let _ = app.update(Message::Swipe(1, 30.0));
+        std::thread::sleep(ui::SWIPE_END + Duration::from_millis(50));
+        let _ = app.update(Message::Frame(Instant::now()));
+        let _ = app.update(Message::Swipe(1, ui::WIDTH * 0.6));
+        std::thread::sleep(ui::SWIPE_END + Duration::from_millis(50));
+        let _ = app.update(Message::Frame(Instant::now()));
+        assert!(core.open(1).is_none(), "swiped away");
+        assert!(core.open(2).is_some());
+    }
+
     #[test]
     fn a_click_on_a_button_or_on_the_bubble() {
         let app = bubbles();

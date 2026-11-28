@@ -70,7 +70,7 @@ then `image-path` (also `image_path`), then `app_icon`.
 | --- | --- |
 | Raw pixels `(iiibiiay)` | Yes: 8 bits per sample, RGB or RGBA, 256 per side at most (`notifications::MAX_PIXELS_SIDE`; more is refused) |
 | An absolute path or a `file://` URI | PNG and SVG, read by the daemon when the notification comes (below). A URI with `%` escapes is not decoded |
-| An icon name of the theme (`firefox`) | Not yet: the initial of the application on a blue tile. The lookup will come from the shared icon theme crate of batch D-22b |
+| An icon name of the theme (`firefox`) | Looked up in the user's theme by `icon-theme` (D-23d), at 40 px, then read with the same checks as a path; not found or refused, the initial of the application on a blue tile |
 
 The picture shows in the 20 px tile of the header, as on the board.
 
@@ -167,7 +167,27 @@ right edge; it slides out the same way, and the bubbles below close up. Both fol
 34, 2 % overshoot, settled in under 300 ms). Frames are asked for only while something moves.
 
 **Pointer.** A click closes the bubble or runs its default action; a button runs its action. The
-pointer over a bubble holds its timer, which goes on with the time it had left once it leaves;
+click counts on release, after a press on the bubble, and the press darkens it: the hover and
+press veils of `animated::hoverable` fade in over the glass, under the text (D-23d).
+
+**Closing** (D-23d). Under the pointer a bubble shows « × » at the right end of its header
+(`notifications::close_button`, the size of the tile, so that nothing moves): it closes the
+notification, dismissed (reason 2), with no action. Swiped to the right with two fingers, the
+bubble follows them, held back to a quarter of the way to the left; once they rest 120 ms
+(`SWIPE_END`), past a third of its width (`SWIPE_DISMISS`) it slides on out and is dismissed,
+else it springs back.
+
+**Piles** (D-23d). The bubbles of one application pile up behind its newest one, as on macOS:
+each one behind is an empty card the height of the one in front, 6 lower (`PILE_STEP`), two
+levels showing (`PILE_DEPTH`), so that no text shows through the glass. The newest says
+« 2 autres notifications »; a click on it, or on an edge of the pile, opens it into a plain
+stack, its newest bubble then saying « Afficher moins ». A pile of one closes by itself.
+
+![A pile of three bubbles above another application](../desktop/notifications/screenshots/pile.png)
+![The pile opened](../desktop/notifications/screenshots/pile-open.png)
+![« × » under the pointer](../desktop/notifications/screenshots/hover.png)
+
+The pointer over a bubble holds its timer, which goes on with the time it had left once it leaves;
 a replacement meanwhile does not restart it. A bubble on its way out takes no click: its
 messages name the bubble, not the id, which a replacement may already have reused.
 
@@ -343,7 +363,6 @@ with the bar and the dock.
 
 ## What this batch does not do
 
-- Theme icon names: after the shared icon lookup of D-22b.
 - Muting in game mode: there is no game mode yet; it will set Do not disturb, or a state of its
   own in the same file.
 - Sound, `ActivationToken` (specification 1.2, optional), `x-` and `category` hints: read and
