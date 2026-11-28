@@ -2477,8 +2477,12 @@ released after it. A window without content gets no miniature in a thumbnail.
   Nothing overlaps, and each window travels little: what is above stays above, what is on the
   left stays on the left.
 - **Each window** is drawn with its title bar (lot D-08), its border, its corners and a shadow
-  at its scale; its title is written below it, in a pill of menu glass. Under the pointer, it
-  has a border of the accent color, 3 px outside its frame (`HIGHLIGHT_WIDTH`). A maximized
+  at its scale. Under the pointer (or selected with the arrows), it has a border of the accent
+  color, 3 px outside its frame (`HIGHLIGHT_WIDTH`), its title below it in a pill of menu glass,
+  and a « × » of 24 (`CLOSE_SIZE`) on its top left corner, as in Sequoia (lot D-33c): both fade
+  in and out in 150 ms (`HOVER_FADE`); the other windows show no title. The « × » turns the red
+  of the close buttons under the pointer; a click on it asks the window to close (as its title
+  bar's button), and the view stays open: the window leaves the grid once gone. A maximized
   window gets its corners back as it shrinks.
 - **The wallpaper** is dimmed by the scrim of the theme (`palette().scrim`), more as the view
   opens. No blur: the compositor has none yet (see "What rendering does not do yet").
@@ -2527,6 +2531,16 @@ everything, without its title. Dropped on a thumbnail, it moves to that workspac
 goes back to its slot. A click on a thumbnail goes to that workspace without the slide of the
 row (`State::stop_workspace_slide`): the view closes on the windows of the arriving workspace.
 The bar follows through `ext-workspace-v1`, as for any switch.
+
+**Textures (lot D-33c).** A window's title is drawn at the size it has in the grid, so its
+texture is made once, not at every frame of the opening; the textures are kept per scale (a
+thumbnail's name on two screens of different scales no longer makes its texture again at each
+frame), and Mission Control's are freed as soon as the view is no longer shown. A window shrunk
+past 1.5 texels per pixel (the grid, the thumbnails) is sampled 4 × 4 times over each pixel's
+footprint by the clip shader (`shaders/clip.frag`, with `GL_OES_standard_derivatives`; one
+sample without it): the thumbnails of the strip, shrunk some 10 times, no longer shimmer.
+
+![Mission Control at 1920 × 1080, the pointer on « Firefox »](../desktop/compositor/screenshots/mission-control-1920-dark.png)
 
 ### Input while it is open
 
