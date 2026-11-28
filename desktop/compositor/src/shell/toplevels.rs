@@ -18,8 +18,8 @@ use crate::State;
 
 /// Version of the global. Version 2 adds the `snapped` state of a screen, version 3 the global
 /// menu, version 4 `show_windows` for App Expose, version 5 the `attention` state of a window
-/// (lot Q-52).
-const VERSION: u32 = 5;
+/// (lot Q-52), version 6 `kill` (lot D-21i).
+const VERSION: u32 = 6;
 
 /// First version with the global menu.
 const APP_MENU_SINCE: u32 = 3;
@@ -299,6 +299,7 @@ impl Dispatch<SherlockShellToplevelV1, u32> for State {
             Request::Activate => state.activate(&window),
             Request::Minimize => state.minimize(&window),
             Request::Close => State::close(&window),
+            Request::Kill => state.force_quit(&window),
             Request::MoveToWorkspace { workspace } => state.move_to_workspace(&window, &workspace),
             _ => {}
         }
