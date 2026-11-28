@@ -44,9 +44,22 @@ pub const MEASURE_ROOM: f32 = 480.0;
 
 // Behavior.
 
-/// Bubbles shown at once; the others wait their turn. A choice of D-23: four bubbles of three
-/// lines fit above the dock of the 900 high reference screen.
+/// Bubbles shown at once at most; the others wait their turn. A choice of D-23: four bubbles of
+/// three lines fit above the dock of the 900 high reference screen.
 pub const MAX_VISIBLE: usize = 4;
+/// The room a bubble of three lines takes in the stack, its gap included, and the room kept
+/// for the dock under the stack: what `visible_for` counts with (D-23c).
+pub const BUBBLE_ROOM: f32 = 128.0;
+pub const DOCK_ROOM: f32 = 100.0;
+
+/// Bubbles shown at once on a screen `height` logical pixels high: as many as fit between the
+/// bar and the dock, one at least, `MAX_VISIBLE` at most. 1280 × 800 at 1.5 (533) shows two,
+/// 1366 × 768 at 1.25 (614) three, 1920 × 1080 at 1.5 (720) and taller four.
+pub fn visible_for(height: f32) -> usize {
+    let top = metrics::TOP_BAR_MARGIN_TOP + metrics::TOP_BAR_HEIGHT + BELOW_BAR;
+    let room = (height - top - DOCK_ROOM).max(0.0);
+    ((room / BUBBLE_ROOM) as usize).clamp(1, MAX_VISIBLE)
+}
 /// Time a bubble stays when its application gives none. A choice of D-23.
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(6);
 /// Characters kept of the body, the title, the application name and an action label: a bubble
@@ -55,14 +68,37 @@ pub const MAX_BODY_CHARS: usize = 300;
 pub const MAX_SUMMARY_CHARS: usize = 120;
 pub const MAX_APP_NAME_CHARS: usize = 48;
 pub const MAX_LABEL_CHARS: usize = 24;
-/// Action buttons shown on a bubble: three compact buttons fit its width.
+/// Action buttons on one row of a bubble: three compact buttons share its width. With more
+/// actions, the first `MAX_BUTTONS - 1` stay and « Options » lists the others, as on macOS.
 pub const MAX_BUTTONS: usize = 3;
+/// Actions an « Options » list shows at most.
+pub const MAX_OPTIONS: usize = 8;
+/// Lines of body a bubble shows at most; a word longer than its width breaks.
+pub const BODY_LINES: f32 = 4.0;
+/// Line height of the body, relative to its size.
+pub const BODY_LINE_HEIGHT: f32 = 1.3;
 /// Largest side of the raw pixels of a notification: the tile is 20 px.
 pub const MAX_PIXELS_SIDE: u32 = 256;
 /// Notifications waiting for room at most; beyond, the oldest ones close, kept in the history.
 pub const MAX_WAITING: usize = 50;
 /// Notifications the history keeps, the newest ones.
 pub const HISTORY: usize = 100;
+/// The bubbles of one application pile up behind its newest one (D-23d): each level shows
+/// `PILE_STEP` of the one behind, `PILE_DEPTH` levels at most, as on macOS.
+pub const PILE_STEP: f32 = 6.0;
+pub const PILE_DEPTH: usize = 2;
+/// Swiped to the right past this share of its width, a bubble goes; the fingers rest
+/// `SWIPE_END` before the swipe is over. Pulled the other way, it moves this share only.
+pub const SWIPE_DISMISS: f32 = 0.35;
+pub const SWIPE_END: Duration = Duration::from_millis(120);
+pub const SWIPE_RESISTANCE: f32 = 0.25;
+/// A wheel line turned sideways moves a bubble this much.
+pub const SWIPE_LINE: f32 = 40.0;
+/// The cross of « × », inside its button the size of the tile.
+pub const CLOSE_GLYPH: f32 = 12.0;
+/// The theme icon of a notification is looked up at twice the tile (screens at scale 2).
+pub const ICON_LOOKUP_SIZE: u32 = 40;
+
 /// The spring of a bubble sliding in and out, and of the stack closing up: the spring of an
 /// opening window.
 pub const SPRING: motion::Spring = motion::OPEN_SPRING;
@@ -71,6 +107,15 @@ pub const SPRING: motion::Spring = motion::OPEN_SPRING;
 pub mod text {
     /// Shown when an application does not give its name.
     pub const UNKNOWN_APP: &str = "Application";
+    /// The button that lists the actions beyond the row, as on macOS.
+    pub const OPTIONS: &str = "Options";
+    /// « × » on a bubble under the pointer.
+    pub const CLOSE: &str = "Fermer";
+    /// Under a pile of bubbles, and under the pile opened.
+    pub fn more(count: usize) -> String {
+        crate::panels::text::more(count)
+    }
+    pub const SHOW_LESS: &str = "Afficher moins";
 }
 
 #[cfg(feature = "iced")]
@@ -119,6 +164,75 @@ mod styles {
         }
     }
 
+    /// The action buttons of a notification (D-23c), for a bubble and for the notification
+    /// centre: up to `MAX_BUTTONS` share one row, each label on one line ending with « … »;
+    /// with more, the first `MAX_BUTTONS - 1` stay and « Options » (`toggle`) opens the others
+    /// below, `MAX_OPTIONS` at most, as on macOS. `actions`: the label and the message of each,
+    /// in order; the first one is the primary button.
+    pub fn action_row<'a, Message: Clone + 'a>(
+        actions: Vec<(&'a str, Message)>,
+        options_open: bool,
+        toggle: Message,
+    ) -> iced::Element<'a, Message> {
+        use iced::Length;
+        use iced::widget::{Column, Row};
+        let one = |label: &'a str, primary: bool, message: Message| {
+            let font = if primary {
+                typography::UI_SEMIBOLD
+            } else {
+                typography::UI
+            };
+            let label = container(crate::ellipsis::ellipsis(label).font(font))
+                .center_x(Length::Fill)
+                .center_y(Length::Fill);
+            iced::widget::button(label)
+                .width(Length::Fill)
+                .height(BUTTON_HEIGHT)
+                .padding([0.0, BUTTON_PADDING])
+                .style(action(primary))
+                .on_press(message)
+        };
+        let mut actions = actions.into_iter();
+        let crowded = actions.len() > MAX_BUTTONS;
+        let kept = if crowded {
+            MAX_BUTTONS - 1
+        } else {
+            MAX_BUTTONS
+        };
+        let mut line = Row::new().spacing(BUTTON_GAP);
+        for (i, (label, message)) in actions.by_ref().take(kept).enumerate() {
+            line = line.push(one(label, i == 0, message));
+        }
+        if !crowded {
+            return line.into();
+        }
+        line = line.push(one(text::OPTIONS, false, toggle));
+        let mut all = Column::new().push(line).spacing(BUTTON_GAP);
+        if options_open {
+            for (label, message) in actions.take(MAX_OPTIONS) {
+                all = all.push(one(label, false, message));
+            }
+        }
+        all.into()
+    }
+
+    /// « × » of a bubble under the pointer (D-23d): the size of the application's tile, so that
+    /// the header keeps its height when it shows.
+    pub fn close_button<'a, Message: Clone + 'a>(on_press: Message) -> iced::Element<'a, Message> {
+        let tint = crate::color::palette().text_secondary;
+        let glyph = crate::component::icon(crate::icon::Icon::Close, CLOSE_GLYPH, tint);
+        let content = container(glyph).center(iced::Length::Fill);
+        let mut control = crate::component::Control::new(
+            content,
+            theme::icon_button,
+            Some(on_press),
+            TILE_RADIUS,
+        );
+        control.label = Some(text::CLOSE);
+        control.button = control.button.width(TILE).height(TILE).padding(0);
+        control.into()
+    }
+
     /// An action: the first one is the primary button of the board, the others secondary.
     pub fn action(primary: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
         move |theme, status| {
@@ -151,6 +265,21 @@ mod tests {
             }
         }
         assert!(crate::color::DEEPEST.contrast(crate::color::BLUE_BRIGHT) >= 4.5);
+    }
+
+    #[test]
+    fn as_many_bubbles_show_as_the_screen_holds() {
+        assert_eq!(visible_for(533.3), 2);
+        assert_eq!(visible_for(614.4), 3);
+        assert_eq!(visible_for(720.0), 4);
+        assert_eq!(visible_for(2160.0), MAX_VISIBLE);
+        assert_eq!(visible_for(200.0), 1);
+        // Four bubbles of three lines fit above the dock on each screen that shows four.
+        for height in [720.0, 900.0, 1080.0] {
+            let top = metrics::TOP_BAR_MARGIN_TOP + metrics::TOP_BAR_HEIGHT + BELOW_BAR;
+            let n = visible_for(height) as f32;
+            assert!(top + n * BUBBLE_ROOM + DOCK_ROOM <= height, "{height}");
+        }
     }
 
     #[test]

@@ -69,6 +69,8 @@ struct State {
     /// The history changed since `Changed` was last sent: the expiry thread sends it, out of
     /// the method call that changed it.
     changed: bool,
+    /// Bubbles the screen has room for (`ui::visible_for`); `MAX_VISIBLE` until it is known.
+    visible: Option<usize>,
 }
 
 impl State {
@@ -124,6 +126,19 @@ impl Core {
             .name(String::from("expiry"))
             .spawn(move || core.expire_forever())
             .map(|_| ())
+    }
+
+    /// The screen of the bubbles is `height` logical pixels high: as many bubbles show as it
+    /// has room for. More room shows the waiting ones at once; less lets the bubbles shown
+    /// finish, the next ones waiting.
+    pub fn set_screen_height(&self, height: f32) {
+        let mut events = Vec::new();
+        let mut state = self.lock();
+        state.visible = Some(ui::visible_for(height));
+        promote(&mut state, Instant::now(), &mut events);
+        drop(state);
+        self.tick.notify_all();
+        self.send(events);
     }
 
     /// `Notify`: the id of the notification. `replaces_id` is kept when it names a notification
@@ -208,6 +223,13 @@ impl Core {
         self.send(events);
         true
     }
+    /// « × » or a swipe: the notification closes, dismissed by the user, with no action.
+    pub fn dismiss(&self, id: u32) {
+        if self.close(id) {
+            self.signal_closed(id, Reason::Dismissed);
+        }
+    }
+
     /// A click on the bubble: its default action, if it has one, then it closes.
     pub fn click(&self, id: u32) {
         self.click_activated(id, None);
@@ -304,6 +326,24 @@ impl Core {
     }
 
     /// Empties the history (« Tout effacer » of the centre).
+    /// Takes `ids` out of the history; those still open close, dismissed.
+    pub fn remove(&self, ids: &[u32]) {
+        let mut state = self.lock();
+        state.history.retain(|note| !ids.contains(&note.id));
+        state.changed = true;
+        let open: Vec<u32> = state
+            .open
+            .iter()
+            .map(|o| o.note.id)
+            .filter(|id| ids.contains(id))
+            .collect();
+        drop(state);
+        self.tick.notify_all();
+        for id in open {
+            self.dismiss(id);
+        }
+    }
+
     pub fn clear_history(&self) {
         let mut state = self.lock();
         state.history.clear();
@@ -449,7 +489,8 @@ fn overflow(state: &mut State) {
 
 /// Shows the next waiting notifications, in the order they came, while there is room.
 fn promote(state: &mut State, now: Instant, events: &mut Vec<Event>) {
-    let mut room = ui::MAX_VISIBLE.saturating_sub(state.open.iter().filter(|o| o.shown).count());
+    let visible = state.visible.unwrap_or(ui::MAX_VISIBLE);
+    let mut room = visible.saturating_sub(state.open.iter().filter(|o| o.shown).count());
     for open in state.open.iter_mut().filter(|o| !o.shown) {
         if room == 0 {
             break;
@@ -501,6 +542,37 @@ mod tests {
         let shown: Vec<_> = events.try_iter().map(|e| format!("{e:?}")).collect();
         assert!(shown[0].starts_with("Close(2)") && shown[1].contains("id: 5"));
         assert!(!core.close(2));
+    }
+
+    #[test]
+    fn a_short_screen_shows_fewer_bubbles_at_once() {
+        let (core, events) = core();
+        core.set_screen_height(533.3);
+        for i in 0..5 {
+            core.notify(request(&i.to_string(), 0));
+        }
+        assert_eq!(core.shown(), [1, 2]);
+        let _ = events.try_iter().count();
+        // A taller screen shows the waiting ones at once; a shorter one lets them finish.
+        core.set_screen_height(1080.0);
+        assert_eq!(core.shown(), [1, 2, 3, 4]);
+        assert_eq!(events.try_iter().count(), 2);
+        core.set_screen_height(533.3);
+        assert_eq!(core.shown(), [1, 2, 3, 4]);
+        assert!(core.close(1) && core.close(2));
+        assert_eq!(core.shown(), [3, 4]);
+    }
+
+    #[test]
+    fn removed_notifications_leave_the_history_and_the_screen() {
+        let (core, _events) = core();
+        let ids: Vec<u32> = (0..3)
+            .map(|i| core.notify(request(&i.to_string(), 0)))
+            .collect();
+        core.remove(&ids[..2]);
+        let left: Vec<u32> = core.history().iter().map(|n| n.id).collect();
+        assert_eq!(left, [ids[2]]);
+        assert!(core.open(ids[0]).is_none() && core.open(ids[2]).is_some());
     }
 
     #[test]
