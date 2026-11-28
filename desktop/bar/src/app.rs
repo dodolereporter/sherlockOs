@@ -446,6 +446,13 @@ impl Bar {
                     |done| Message::HistoryDone(done.map_err(|e| e.to_string())),
                 );
             }
+            Message::Quick(quick::Message::OpenNetworkSettings) => {
+                // Control Room's network page, in its window if it is open (lot D-26n).
+                let (program, args) =
+                    (crate::programs::CONTROL_ROOM, crate::programs::NETWORK_PAGE);
+                self.programs.start_with(program, &args);
+                return self.close_panel();
+            }
             Message::Quick(message) => {
                 self.quick.now = animated::clock();
                 return self.quick.update(message).map(Message::Quick);
@@ -1456,6 +1463,13 @@ mod tests {
             Action::Settings.trailing(),
             sherlock_ui::component::Trailing::Shortcut("Super+,")
         );
+    }
+
+    #[test]
+    fn a_network_joined_from_the_settings_opens_its_page() {
+        let (mut bar, record) = recorded();
+        let _ = bar.update(Message::Quick(quick::Message::OpenNetworkSettings));
+        assert_eq!(ran(&record), ["control-room"]);
     }
 
     #[test]
