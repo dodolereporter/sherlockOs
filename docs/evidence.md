@@ -23,7 +23,11 @@ layer surface. This is what lets its menus be real `xdg_popup`s.
 
 The right-click menu and its submenu are popups of their own (lot E-02b), so they leave the
 window, as on macOS. The menu's popup is larger than the menu by the room of its shadow, its input
-region the menu only. Its anchor rectangle is chosen so that the menu's corner lands on the
+region the menu only. Every surface of Evidence starts transparent (`shell::surface_style`, lot
+Q-57): iced's default fills a surface with the theme's background, which painted the room of
+the shadow around the menu black. The window paints its own body instead (`theme::window`,
+the same color, so it looks the same, under winit too). A capture of the menu's popup on a
+transparent background checks that its corner stays clear and the menu itself is painted. Its anchor rectangle is chosen so that the menu's corner lands on the
 clicked point both ways: below right, or above left when the compositor flips it at the
 screen's edge (`flip_x`, `flip_y`, `slide_x`, `slide_y`). The submenu is a child popup anchored
 beside its entry, which the compositor flips to the left the same way. The popups grab the

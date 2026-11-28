@@ -115,10 +115,12 @@ impl App {
             ui::divider(),
             self.status_bar(),
         ];
+        // The window's body is painted here: on Wayland its surface starts transparent.
         let mut layers: Vec<Element<'_, Message>> = vec![
             container(page)
                 .width(Length::Fill)
                 .height(Length::Fill)
+                .style(theme::window)
                 .into(),
         ];
         // On Wayland the menu is in popups of its own (`popup`); drawn here under winit only.
