@@ -649,6 +649,11 @@ impl State {
         if let Some(pointer) = self.seat.get_pointer() {
             self.pointer_motion(pointer.current_location(), self.now().as_millis() as u32);
         }
+        // Sherlock's consent window, hidden while locked, shows again: armed only after
+        // `ARMING`, the keyboard taken back (lot A-20).
+        if self.consent_shown() {
+            self.consent_appears();
+        }
         self.queue_redraw();
     }
 
