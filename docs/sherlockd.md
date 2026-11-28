@@ -23,8 +23,9 @@ The `sherlock/sherlockd` crate is a library and a binary.
 | `src/files_server.rs`, `src/folders.rs` | The files server: the allowed folders, the paths resolved without leaving them (A-13) |
 | `src/containers_server.rs`, `src/docker.rs` | The containers server, and its minimal client of the Docker Engine API over a Unix socket (A-14) |
 | `src/services_server.rs` | The services server: the systemd units over D-Bus, their journal through `journalctl` (A-16) |
+| `src/settings_server.rs` | The settings server: every setting of Control Room, by its functions (A-17) |
 | `src/own_server.rs` | What Sherlock's own servers share: the serving loop, the levels' annotations, the cleaning of outside text |
-| `src/main.rs` | `--demo`, `--claude-code`, `--proxy`, `--test-server`, `--windows-server`, `--files-server`, `--containers-server` and `--services-server` |
+| `src/main.rs` | `--demo`, `--claude-code`, `--proxy`, `--test-server`, `--windows-server`, `--files-server`, `--containers-server`, `--services-server` and `--settings-server` |
 | `tests/mcp.rs` | Client and loop against the test server, started as a real process, well-behaved or hostile |
 | `tests/proxy.rs` | The proxy as a real process, in front of the test server |
 | `tests/claude_code.rs` | The provider on recorded transcripts (`tests/transcripts/`), and against fake `claude` programs |
@@ -392,6 +393,7 @@ cargo test -p sherlockd
 | `tests/front_next.rs` | The scenario « relance front-next » against a fake Docker daemon: seen exited, logs read as data, a password masked, the consent asked once at the action level, the restart called once, the journal; refused, nothing; hostile names never reach the daemon; a Compose service restarted by its labels |
 | `src/services_server.rs` | Levels, unit names refused, journal entries (priority, date, bytes, a secret masked) |
 | `tests/services_server.rs` | Against a fake systemd on two private buses and a fake `journalctl`: a failed service explained from its logs (data, a password masked, an injection inert); a user unit restarted with a consent, a system unit with the reinforced one and polkit's interactive flag; polkit's refusal and an unknown unit said; hostile names refused; refused, nothing |
+| `tests/settings_server.rs` | On a configuration folder, a fake `pactl` and a fake NetworkManager on a private bus: each setting changed and read back as Control Room reads it; a value the parser refuses, a path, an unknown key, a line break never written; the sound set, a device chosen by name only; Wi-Fi switched off; a network forgotten with the reinforced consent; refused, nothing |
 | `tests/mcp.rs` | Tool list, third-party server, successful call, direct call refused, refusal in the conversation, JSON-RPC error that stays data, turn limit, crashing server, timeout (server stopped and reaped), malformed list, duplicates, endless pagination, giant line, server not found, silent server |
 
 The silent server test runs `sleep`, present on any Linux machine and on the CI. The provider tests
@@ -579,6 +581,31 @@ systemd units of the user (the session bus) and of the system (the system bus), 
 **Sherlock explains a service in failure from its logs** (`tests/services_server.rs`, the A-16
 criterion): the failed units listed, the state of front-next (`exit-code`, three restarts), its
 journal (`EADDRINUSE` on port 3000) reach the model as data; the explanation is the model's.
+
+## The settings server (lot A-17, ADR 0036, proposed)
+
+`sherlockd --settings-server` is one of Sherlock's own servers, started by `servers()`: every
+setting Control Room shows, by the same functions.
+
+- **The settings files** (appearance, keyboard, touchpad, pointer, lock, clipboard history,
+  wallpaper, dock) go through the `settings-files` crate, taken out of Control Room for this:
+  `Settings::set_key` puts the key's line in the file's text in memory, the file's own parser
+  reads it, and only a value it understands is written, by `Settings::update` (only the keys
+  that change, with `mime_apps::write_atomically`). A value with a control character, a key
+  that is not in the server's table, a setting that is a path (the wallpaper's file, the lock's
+  background) are refused. Do not disturb goes through `notifications-config`.
+- **The sound** through `pactl` (`system-services::audio`): a volume from 0 to 100, muted or
+  not, the default output or microphone chosen only among those `pactl` lists. **Wi-Fi and
+  Bluetooth** through NetworkManager and BlueZ on the system bus (`system-services`), which ask
+  polkit where their policy wants it. The screens are read only: they change live with the
+  compositor, from Control Room (ADR 0025).
+- Accessibility (D-26p) joins `apparence` once its keys are in `appearance-config`.
+
+| Tool | Level |
+| --- | --- |
+| `lire_reglages` (`domaine`: `apparence`, `clavier`, `pave_tactile`, `pointeur`, `verrouillage`, `presse_papiers`, `fond_ecran`, `dock`, `ne_pas_deranger`, `ecrans`, `son`, `wifi`, `bluetooth`) | read |
+| `changer_reglage` (`domaine`, `reglage`, `valeur`), `regler_son`, `choisir_appareil_son`, `activer_wifi`, `activer_bluetooth` | action |
+| `oublier_reseau` (`ssid`): its password goes with it | destructive |
 
 ## What will come next
 

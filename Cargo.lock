@@ -682,6 +682,7 @@ dependencies = [
  "iced_test",
  "image",
  "mime-apps",
+ "settings-files",
  "sherlock-ui",
  "system-services",
  "tracing",
@@ -3485,6 +3486,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "settings-files"
+version = "0.0.0"
+dependencies = [
+ "appearance-config",
+ "desktop-config",
+ "dock-config",
+ "mime-apps",
+ "tracing",
+]
+
+[[package]]
 name = "sha2"
 version = "0.10.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3550,10 +3562,14 @@ name = "sherlockd"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "desktop-config",
  "libc",
+ "notifications-config",
  "rustix 1.1.6",
  "serde",
  "serde_json",
+ "settings-files",
+ "system-services",
  "thiserror 2.0.21",
  "tokio",
  "tracing",
