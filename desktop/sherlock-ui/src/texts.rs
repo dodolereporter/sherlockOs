@@ -310,6 +310,8 @@ pub mod evidence {
     pub const MENU_WINDOW: &str = "Fenêtre";
     pub const PARENT_FOLDER: &str = "Dossier parent";
     pub const SHOW_PREVIEW: &str = "Aperçu";
+    /// The toolbar button that shows or hides the preview (lot E-08).
+    pub const PREVIEW_BUTTON: &str = "Afficher ou masquer l'aperçu (Ctrl+Alt+P)";
     pub const REFRESH: &str = "Actualiser";
     pub const SELECT_ALL: &str = "Tout sélectionner";
     pub const CLOSE_WINDOW: &str = "Fermer la fenêtre";
