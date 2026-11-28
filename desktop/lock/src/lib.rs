@@ -9,6 +9,7 @@ pub mod background;
 pub mod form;
 pub mod machine;
 pub mod pam;
+pub mod view;
 
 use std::sync::{Arc, Mutex};
 
@@ -19,13 +20,27 @@ use sherlock_ui::{color, theme, typography};
 
 use crate::app::{Lock, Mascot, Message};
 
+/// Keeps the memory of this program to itself (lot D-25k, ADR 0023): no other process of the
+/// user may trace it nor read `/proc/<pid>/mem`, where the password passes, and no core dump is
+/// written, by the kernel nor by systemd-coredump, even when it aborts on a panic.
+pub fn keep_memory_private() -> rustix::io::Result<()> {
+    use rustix::process::{DumpableBehavior, Resource, Rlimit, set_dumpable_behavior, setrlimit};
+    set_dumpable_behavior(DumpableBehavior::NotDumpable)?;
+    let none = Rlimit {
+        current: Some(0),
+        maximum: Some(0),
+    };
+    setrlimit(Resource::Core, none)
+}
+
 /// Runs `work` on a thread of its own once the runtime runs the task (never in the tests, which
-/// only call `update`), and hands its result to the program as a message.
-pub(crate) fn in_background<T: Send + 'static>(
+/// only call `update`), and hands its result to the program as a message. The login screen
+/// reads its background with it too.
+pub fn in_background<T: Send + 'static, M: Send + 'static>(
     name: &'static str,
     work: impl FnOnce() -> Option<T> + Send + 'static,
-    message: impl Fn(Option<T>) -> Option<Message> + Send + 'static,
-) -> iced::Task<Message> {
+    message: impl Fn(Option<T>) -> Option<M> + Send + 'static,
+) -> iced::Task<M> {
     let answer = async move {
         let (sender, receiver) = iced::futures::channel::oneshot::channel();
         let spawned = std::thread::Builder::new()
@@ -111,8 +126,10 @@ pub fn run(rescue: bool) -> Result<(), Error> {
     };
     iced_exwlshell::daemon(boot, namespace, Lock::update, Lock::view)
         .theme(|_: &Lock, _| Some(theme::theme()))
+        // Transparent: the compositor shows the picture of the lock behind (lot D-24d) until
+        // this program's own fades in over it; the rescue mode fills its screen itself.
         .style(|_, _| iced::theme::Style {
-            background_color: color::palette().system_screen.into(),
+            background_color: iced::Color::TRANSPARENT,
             text_color: color::palette().text_primary.into(),
         })
         .subscription(Lock::subscription)
@@ -133,4 +150,15 @@ pub fn run(rescue: bool) -> Result<(), Error> {
 
 fn namespace() -> String {
     String::from("sherlockos-lock")
+}
+
+#[cfg(test)]
+mod hardening_tests {
+    #[test]
+    fn the_memory_is_kept_private_and_never_dumped() {
+        use rustix::process::{DumpableBehavior, Resource, dumpable_behavior, getrlimit};
+        super::keep_memory_private().unwrap();
+        assert_eq!(dumpable_behavior().unwrap(), DumpableBehavior::NotDumpable);
+        assert_eq!(getrlimit(Resource::Core).current, Some(0));
+    }
 }

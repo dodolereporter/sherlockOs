@@ -792,8 +792,26 @@ bus for actions (`ACTION_TIMEOUT`, 60 s): polkit has time to ask for a password.
 réseau »), which asks for a confirmation under the line, then deletes every saved connection of
 that name (`Delete`, polkit `settings.modify.system`).
 
+**Outputs and inputs** (D-20g). A chevron at the right of the volume row (« Sorties et
+entrées ») opens the page of the sound (`quick/sound.rs`), as the Sound module of macOS:
+« Sortie », the outputs of `pactl list sinks` (speakers, HDMI, a Bluetooth headset), and
+« Entrée », the inputs of `pactl list sources` without the monitors of the outputs, 16 each at
+most, the one in use checked. A click moves the sound to another (`set-default-sink`,
+`set-default-source`), checked at once. Under the inputs, the slider of the microphone in use
+and its mute button (`set-source-volume`, `set-source-mute`), one call at a time, the latest
+value winning, and a read meanwhile never moves it while it is held. Every call runs on a
+thread of its own. While the page is open, `pactl subscribe` (the watcher of D-35d, which now
+also follows the inputs: `on source #`) reads it again: a headset plugged in, an output chosen
+elsewhere. Without an input, « Aucun micro ».
+
+![The outputs and the inputs](../desktop/bar/screenshots/sound-devices.png)
+
 **Bluetooth** (D-20d). As for the Wi-Fi, a chevron on the tile (« Appareils Bluetooth ») opens
-the list of devices (`quick/devices.rs`, services in `system/bluetooth.rs`):
+the list of devices (`quick/devices.rs`, services in `system_services::bluetooth`, shared with Control Room since D-26o): A device paired is
+renamed by its `Alias` (`bluetooth::rename`: control characters left out, 64 characters at
+most), and its alias is the name shown; `bluetooth::changes` gives a stream of what BlueZ
+announces (properties of `/org/bluez/…`, devices added and removed), for a view that follows
+them.
 
 - **« Mes appareils »**: the paired devices, the connected ones first, each with the glyph of
   its kind (headphones, mouse, keyboard, phone, computer, gamepad, else Bluetooth), from
@@ -806,7 +824,7 @@ the list of devices (`quick/devices.rs`, services in `system/bluetooth.rs`):
   `Trusted=true` and `Connect`. One device at a time; its line reads « Connexion… » or
   « Appairage… ».
 - **The agent.** For each pairing only, the bar serves `org.bluez.Agent1` at
-  `/org/sherlockos/bar/agent` and registers it (`KeyboardDisplay`), and unregisters it at the
+  `/org/sherlockos/agent` and registers it (`KeyboardDisplay`), and unregisters it at the
   end, whatever the end. It answers BlueZ alone: the unique name that owns `org.bluez`, read
   with `GetNameOwner` when the agent is registered, compared with the sender of every call; and
   about the device being paired alone. Anything else gets `org.bluez.Error.Rejected`. Its
