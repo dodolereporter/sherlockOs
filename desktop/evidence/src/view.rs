@@ -118,6 +118,9 @@ impl App {
             let (menu, items, sub) = (&closing.menu, &closing.items, &closing.sub);
             layers.push(self.context_menu(menu, items, sub, false));
         }
+        if let Some(folded) = self.folded_layer() {
+            layers.push(folded);
+        }
         if let Some(suggestions) = self.path_suggestions() {
             layers.push(suggestions);
         }
@@ -194,13 +197,17 @@ impl App {
         if let Some(branch) = self.repo.as_ref().and_then(|r| r.branch.as_deref()) {
             line = line.push(ui::branch_chip(t::branch(branch)));
         }
-        let search = ui::search_field(
-            &t::search_placeholder(&self.location_name()),
-            &self.search,
-            Some(Message::Search),
-            SEARCH,
-            metrics::SEARCH_WIDTH,
-        );
+        let search: Element<'_, Message> = if self.search_folded() {
+            ui::toolbar_button(Icon::Search, t::SEARCH, Some(Message::OpenSearch)).into()
+        } else {
+            ui::search_field(
+                &t::search_placeholder(&self.location_name()),
+                &self.search,
+                Some(Message::Search),
+                SEARCH,
+                metrics::SEARCH_WIDTH,
+            )
+        };
         // The path bar takes the room left between the buttons and the search.
         let line = line.push(search);
         container(line)
