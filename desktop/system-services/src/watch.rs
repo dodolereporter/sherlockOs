@@ -29,10 +29,11 @@ pub const RESTART_MAX: Duration = Duration::from_secs(30);
 /// Lines of `pactl subscribe` closer than this are one change: a slider dragged elsewhere.
 const BURST: Duration = Duration::from_millis(40);
 
-/// The lines of `pactl subscribe` that tell the default output may have changed: an output, or
-/// the server (the default output chosen), not the streams of the applications.
+/// The lines of `pactl subscribe` that tell the default output may have changed: an output, an
+/// input (the microphone, D-20g), or the server (the default ones chosen), not the streams of
+/// the applications.
 pub fn sound_changed(line: &str) -> bool {
-    line.contains(" on sink #") || line.contains(" on server")
+    line.contains(" on sink #") || line.contains(" on source #") || line.contains(" on server")
 }
 
 /// Sleeps `delay`, waking every `CHECK`; `false` once nobody wants the watcher.
@@ -280,6 +281,8 @@ mod tests {
         assert!(sound_changed("Event 'change' on server #-1"));
         assert!(!sound_changed("Event 'change' on sink-input #120"));
         assert!(!sound_changed("Event 'new' on client #7"));
+        assert!(sound_changed("Event 'change' on source #3"));
+        assert!(!sound_changed("Event 'change' on source-output #9"));
     }
 
     #[test]
@@ -322,8 +325,8 @@ mod tests {
         let dir = folder("sysfs");
         let light = dir.join("amdgpu_bl1");
         std::fs::create_dir_all(&light).unwrap();
-        std::fs::write(light.join("brightness"), "51").unwrap();
-        std::fs::write(light.join("actual_brightness"), "51").unwrap();
+        std::fs::write(light.join("brightness"), "051").unwrap();
+        std::fs::write(light.join("actual_brightness"), "051").unwrap();
         std::fs::write(light.join("max_brightness"), "255").unwrap();
         let count = Arc::new(AtomicUsize::new(0));
         let wanted = Arc::new(AtomicBool::new(true));

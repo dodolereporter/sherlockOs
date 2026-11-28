@@ -12,6 +12,7 @@ pub mod drag_image;
 pub mod git;
 pub mod icons;
 pub mod keyring;
+pub mod layout;
 pub mod listing;
 pub mod menu;
 pub mod menubar;

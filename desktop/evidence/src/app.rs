@@ -313,9 +313,11 @@ pub enum Message {
     /// overtaken by a more recent navigation.
     Loaded(u64, Result<Vec<Entry>, ()>),
     /// Preview prepared off the interface thread.
-    Preview(PathBuf, Preview),
+    Preview(PathBuf, Preview, Option<preview::Real>),
     /// A program was started, or could not be.
     Launched(bool),
+    /// A program or a launcher was not handed to xdg-open.
+    ProgramRefused,
     /// Installed applications and associations, read off the interface thread.
     Catalog(Arc<mime_apps::Catalog>),
     /// Application icons, decoded off the interface thread.
@@ -412,9 +414,13 @@ pub struct App {
     pub(crate) sort: Sort,
     pub(crate) show_hidden: bool,
     pub(crate) show_preview: bool,
+    /// The preview was asked for while the width had folded it: it stays, the columns fold.
+    pub(crate) preview_pinned: bool,
     pub(crate) search: String,
     pub(crate) repo: Option<Repo>,
     pub(crate) preview: Preview,
+    /// What the selected file really is, when its name hides it (audit I-3).
+    pub(crate) disguise: Option<preview::Real>,
     clipboard: Option<(Clip, Vec<PathBuf>)>,
     /// Item being renamed and its new name.
     pub(crate) renaming: Option<(PathBuf, String)>,
@@ -511,9 +517,11 @@ impl App {
             sort: Sort::default(),
             show_hidden: false,
             show_preview: true,
+            preview_pinned: false,
             search: String::new(),
             repo: None,
             preview: Preview::Info,
+            disguise: None,
             clipboard: None,
             renaming: None,
             menu: None,
@@ -671,6 +679,11 @@ impl App {
         }
     }
 
+    /// The panes and columns the window's width leaves room for (lot E-05).
+    pub fn panes(&self) -> crate::layout::Panes {
+        crate::layout::Panes::at(self.size.width, self.show_preview, self.preview_pinned)
+    }
+
     pub fn can_go_back(&self) -> bool {
         !self.history.is_empty()
     }
@@ -795,12 +808,12 @@ impl App {
         }
         self.preview_path.clone_from(&path);
         self.preview = Preview::Info;
+        self.disguise = None;
         match (wanted, path) {
-            (Some(entry), Some(path)) => {
-                Task::perform(async move { preview::load(&entry) }, move |preview| {
-                    Message::Preview(path.clone(), preview)
-                })
-            }
+            (Some(entry), Some(path)) => Task::perform(
+                async move { (preview::load(&entry), preview::disguise(&entry)) },
+                move |(preview, disguise)| Message::Preview(path.clone(), preview, disguise),
+            ),
             _ => Task::none(),
         }
     }
@@ -1035,6 +1048,12 @@ impl App {
                     error: true,
                 });
             }
+            Message::ProgramRefused => {
+                self.notice = Some(Notice {
+                    text: texts::IS_PROGRAM.into(),
+                    error: true,
+                });
+            }
             Message::Launched(started) => {
                 if !started {
                     self.notice = Some(Notice {
@@ -1078,9 +1097,10 @@ impl App {
                     return self.loaded(result);
                 }
             }
-            Message::Preview(path, preview) => {
+            Message::Preview(path, preview, disguise) => {
                 if self.preview_path.as_ref() == Some(&path) {
                     self.preview = preview;
+                    self.disguise = disguise;
                     self.preview_fade = Some(Fade::new(0.0, 1.0, self.now(), motion::FADE));
                 }
             }
@@ -1445,9 +1465,9 @@ impl App {
     // Lasso.
 
     /// Top left corner of the listing's rows in the window, below its column headers.
-    fn list_origin() -> Point {
+    fn list_origin(&self) -> Point {
         Point::new(
-            metrics::SIDEBAR_WIDTH + metrics::BORDER_WIDTH + metrics::LIST_PADDING,
+            self.panes().sidebar_width() + metrics::LIST_PADDING,
             metrics::TITLE_BAR_HEIGHT
                 + metrics::TOOLBAR_HEIGHT
                 + metrics::LIST_HEADER_HEIGHT
@@ -1458,12 +1478,12 @@ impl App {
     /// Height of the visible part of the listing.
     fn list_height(&self) -> f32 {
         let below = metrics::BORDER_WIDTH + metrics::STATUS_BAR_HEIGHT;
-        self.size.height - Self::list_origin().y - below
+        self.size.height - self.list_origin().y - below
     }
 
     /// A point of the window in the content of the listing, scroll included.
     fn in_list(&self, at: Point) -> (f32, f32) {
-        let origin = Self::list_origin();
+        let origin = self.list_origin();
         (at.x - origin.x, at.y - origin.y + self.scroll.0)
     }
 
@@ -1508,7 +1528,7 @@ impl App {
         if !self.lasso.as_ref().is_some_and(|l| l.dragging) {
             return 0.0;
         }
-        let y = self.pointer.y - Self::list_origin().y;
+        let y = self.pointer.y - self.list_origin().y;
         let (offset, height) = (self.scroll.0, self.list_height());
         let content = metrics::LIST_TOP_GAP + self.entries.len() as f32 * metrics::LIST_ROW_HEIGHT;
         let speed = edge_scroll(
@@ -1827,7 +1847,7 @@ impl App {
             + metrics::LIST_HEADER_HEIGHT
             + 3.0 * metrics::BORDER_WIDTH
             + metrics::LIST_TOP_GAP;
-        let left = metrics::SIDEBAR_WIDTH + metrics::LIST_PADDING + metrics::LIST_ROW_HEIGHT;
+        let left = self.panes().sidebar_width() + metrics::LIST_PADDING + metrics::LIST_ROW_HEIGHT;
         self.open_menu(Point::new(left, top + row - self.scroll.0));
     }
 
@@ -1835,13 +1855,8 @@ impl App {
     /// menu opens again there, as in any file manager; elsewhere it only closes.
     fn reopen(&mut self) -> Task<Message> {
         self.menu = None;
-        let origin = Self::list_origin();
-        let preview = if self.show_preview {
-            metrics::PREVIEW_WIDTH + metrics::BORDER_WIDTH
-        } else {
-            0.0
-        };
-        let right = self.size.width - preview - metrics::LIST_PADDING;
+        let origin = self.list_origin();
+        let right = self.size.width - self.panes().preview_width() - metrics::LIST_PADDING;
         let (x, y) = (self.pointer.x, self.pointer.y);
         let inside = x >= origin.x && x < right && y >= origin.y;
         if !inside || y >= origin.y + self.list_height() {
@@ -2111,7 +2126,14 @@ impl App {
             Command::ViewList => {}
             Command::EditPath => return self.start_path_edit(false, None),
             Command::GoToFolder => return self.start_path_edit(true, None),
-            Command::TogglePreview => self.show_preview = !self.show_preview,
+            // Space shows a preview the width had folded, rather than hiding a hidden one.
+            Command::TogglePreview if self.show_preview && !self.panes().preview => {
+                self.preview_pinned = true;
+            }
+            Command::TogglePreview => {
+                self.show_preview = !self.show_preview;
+                self.preview_pinned = false;
+            }
             Command::DeviceOpen | Command::DeviceUnmount | Command::DeviceEject => {
                 let Some(id) = self.device_menu.clone() else {
                     return Task::none();
@@ -2177,9 +2199,28 @@ impl App {
         let Some(entry) = self.selection.focus().and_then(|i| self.entries.get(i)) else {
             return Task::none();
         };
-        let mut open = Process::new("xdg-open");
-        open.arg(&entry.path);
-        self.launch(open)
+        let path = entry.path.clone();
+        self.open_blind(path)
+    }
+
+    /// Opens a file no application was chosen for, with `xdg-open`, unless it is a program or
+    /// a launcher: `xdg-open` may run those, depending on the desktop (audit I-14).
+    pub(crate) fn open_blind(&mut self, path: PathBuf) -> Task<Message> {
+        let mut command = Process::new("xdg-open");
+        command.arg(&path);
+        if let Some(parent) = path.parent() {
+            command.current_dir(parent);
+        }
+        sherlock_ui::gpu::for_child(&mut command);
+        Task::perform(
+            async move {
+                if preview::is_program(&path) {
+                    return None;
+                }
+                Some(spawn_reaped(&mut command))
+            },
+            |started| started.map_or(Message::ProgramRefused, Message::Launched),
+        )
     }
 
     /// Opens with an application without touching the defaults.
@@ -2195,21 +2236,7 @@ impl App {
     fn launch(&mut self, mut command: Process) -> Task<Message> {
         // The program gets the environment Evidence started with, not its renderer choice.
         sherlock_ui::gpu::for_child(&mut command);
-        Task::perform(
-            async move {
-                match command.spawn() {
-                    Ok(mut child) => {
-                        std::thread::spawn(move || child.wait());
-                        true
-                    }
-                    Err(error) => {
-                        tracing::warn!(%error, "launch failed");
-                        false
-                    }
-                }
-            },
-            Message::Launched,
-        )
+        Task::perform(async move { spawn_reaped(&mut command) }, Message::Launched)
     }
 
     fn paste(&mut self) -> Task<Message> {
@@ -2383,6 +2410,20 @@ fn read_location(
                     Some(entry)
                 })
                 .collect())
+        }
+    }
+}
+
+/// Starts a program without waiting for it; a thread reaps it when it ends.
+fn spawn_reaped(command: &mut Process) -> bool {
+    match command.spawn() {
+        Ok(mut child) => {
+            std::thread::spawn(move || child.wait());
+            true
+        }
+        Err(error) => {
+            tracing::warn!(%error, "launch failed");
+            false
         }
     }
 }
