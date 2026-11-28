@@ -34,6 +34,7 @@ pub mod proxy;
 pub mod scripted;
 pub mod services_server;
 pub mod settings_server;
+pub mod shell;
 pub mod test_server;
 pub mod window;
 pub mod windows_server;

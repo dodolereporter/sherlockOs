@@ -24,6 +24,8 @@ use system_services::Problem;
 use system_services::audio::{Device, Pactl};
 
 use crate::apps::{self, Choice, Kind};
+use crate::displays;
+use crate::pages::displays::{Change as DisplayChange, Displays};
 use crate::pages::network::{Change as NetworkChange, Net};
 use crate::search::{self, Hit, Page, Setting};
 use crate::settings::{File, Paths, Settings};
@@ -213,6 +215,8 @@ pub enum Message {
     Bluetooth(crate::bluetooth::Msg),
     /// Where the page scrolls to for the setting opened: from, to.
     ScrollTo(Option<(f64, f64)>),
+    /// The « Écrans » page: the compositor's screens and what is changed of them.
+    Displays(DisplayChange),
 }
 
 /// Something that comes in and goes out: a spring from 0 to 1, and a fade.
@@ -314,6 +318,8 @@ pub struct App {
     closing: bool,
     pub(crate) theme: ThemeFade,
     origin: Instant,
+    /// The screens, while the « Écrans » page is open or a change waits for « Garder ».
+    pub(crate) displays: Displays,
     /// The Wi-Fi, while the « Réseau » page is open.
     pub(crate) network: Net,
 }
@@ -351,6 +357,7 @@ impl App {
             closing: false,
             theme: ThemeFade::default(),
             origin: Instant::now(),
+            displays: Displays::default(),
             network: Net::default(),
         };
         let load = Task::perform(async move { thumbnails::load(&dirs) }, |found| {
@@ -409,6 +416,7 @@ impl App {
             || self.spotlight.is_some()
             || self.theme.running()
             || self.save_at.is_some()
+            || self.displays.confirm.is_some()
     }
 
     pub fn subscription(&self) -> Subscription<Message> {
@@ -444,6 +452,12 @@ impl App {
             receiver
         })
         .map(Message::Theme);
+        // Its own Wayland connection, only while the screens are shown or a change waits.
+        let screens = match self.page == Page::Displays || self.displays.confirm.is_some() {
+            true => Subscription::run(follow_screens)
+                .map(|e| Message::Displays(DisplayChange::Event(e))),
+            false => Subscription::none(),
+        };
         // Changes made elsewhere: the files, and the sound while its page is open.
         let files = Subscription::run_with(self.followed_files(), crate::follow::files)
             .map(|()| Message::FilesChanged);
@@ -466,7 +480,7 @@ impl App {
         };
         let asked = Subscription::run(crate::instance::asked).map(Message::Show);
         Subscription::batch([
-            frames, tab, keys, appearance, files, sound, bluetooth, network, asked,
+            frames, tab, keys, appearance, screens, files, sound, bluetooth, network, asked,
         ])
     }
 
@@ -583,6 +597,7 @@ impl App {
             Message::Focus(direction) => return focus::advance(direction),
             Message::Frame(instant) => {
                 self.theme.tick(instant);
+                self.tick_displays(instant);
                 if self
                     .leaving
                     .is_some_and(|(_, at)| now >= at + cr::PAGE_FADE)
@@ -691,6 +706,7 @@ impl App {
                 }
             }
             Message::Catalog(catalog) => self.catalog = Some(catalog),
+            Message::Displays(change) => self.update_displays(change),
             Message::TryKeys(text) => {
                 self.trial = text.chars().take(cr::TRIAL_MAX).collect();
             }
@@ -913,6 +929,19 @@ impl Writes {
 /// Closes the window.
 fn close_window() -> Task<Message> {
     window::latest().and_then(window::close)
+}
+
+/// The screens of the compositor, from a thread of their own (`displays::run`), which stops
+/// once the subscription is dropped.
+fn follow_screens() -> impl iced::futures::Stream<Item = displays::Event> {
+    let (sender, receiver) = iced::futures::channel::mpsc::unbounded();
+    let started = std::thread::Builder::new()
+        .name("screens".into())
+        .spawn(move || displays::run(|event| sender.unbounded_send(event).is_ok()));
+    if let Err(error) = started {
+        tracing::warn!(%error, "the screens cannot be read");
+    }
+    receiver
 }
 
 /// The file that holds a change.
