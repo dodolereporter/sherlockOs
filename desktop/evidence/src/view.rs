@@ -18,7 +18,8 @@ use sherlock_ui::theme::{self, Tone};
 use sherlock_ui::{color, metrics, typography};
 
 use crate::app::{
-    App, Command, HintTarget, Location, Menu, MenuItem, Message, RENAME, SEARCH, Sub, WindowAction,
+    App, Command, HintTarget, Location, Menu, MenuItem, Message, RENAME, SEARCH, Sub, ViewMode,
+    WindowAction, view_label,
 };
 use crate::clock;
 use crate::devices::Volume;
@@ -28,9 +29,23 @@ use crate::listing::{Column as SortColumn, Entry, Kind};
 use crate::pathbar::visible;
 use crate::preview::{Preview, Real};
 
+mod columns;
+mod gallery;
+mod grid;
 mod path;
+mod search;
 
 /// Vertical rule between two panels.
+/// The header of a group of the list (lot E-15b): its name, over a rule, a row high.
+fn group_header<'a>(label: &'static str) -> Element<'a, Message> {
+    container(ui::section_label(label))
+        .width(Length::Fill)
+        .height(metrics::LIST_ROW_HEIGHT)
+        .padding([0.0, metrics::LIST_ROW_PADDING])
+        .align_y(Alignment::End)
+        .into()
+}
+
 fn vline<'a>() -> Element<'a, Message> {
     container(space())
         .width(metrics::BORDER_WIDTH)
@@ -111,6 +126,7 @@ impl App {
             self.toolbar(),
             ui::divider(),
             self.tab_bar(),
+            self.filter_bar(),
             body.height(Length::Fill),
             ui::divider(),
             self.status_bar(),
@@ -222,8 +238,30 @@ impl App {
             self.can_go_forward().then_some(Message::Forward),
         );
         let forward = self.hinted(forward, HintTarget::Forward);
+        // The views, as the Finder's four buttons (lot E-13).
+        let views = ui::icon_segmented(
+            ViewMode::ALL
+                .into_iter()
+                .map(|mode| {
+                    let glyph = match mode {
+                        ViewMode::Icons => Icon::Grid,
+                        ViewMode::List => Icon::Rows,
+                        ViewMode::Columns => Icon::Columns,
+                        ViewMode::Gallery => Icon::Gallery,
+                    };
+                    let on = self.view_available(mode).then_some(Message::SetView(mode));
+                    (glyph, view_label(mode), self.view_mode == mode, on)
+                })
+                .collect(),
+        );
+        // How the folder is presented: its sort and its groups (lot E-15b).
+        let presentation = ui::toolbar_button(
+            Icon::Arrange,
+            t::PRESENTATION,
+            Some(Message::PresentationMenu),
+        );
         let trail = self.path_bar();
-        let mut line = row![back, forward, trail]
+        let mut line = row![back, forward, views, presentation, trail]
             .spacing(metrics::GAP_ICON)
             .align_y(Alignment::Center);
         if let Some(branch) = self.repo.as_ref().and_then(|r| r.branch.as_deref()) {
@@ -474,16 +512,28 @@ impl App {
             )
             .spacing(metrics::LIST_COLUMN_GAP)
             .align_y(Alignment::Center);
-        let headers = container(headers)
-            .height(metrics::LIST_HEADER_HEIGHT)
-            .padding([0.0, metrics::LIST_ROW_PADDING])
-            .align_y(Alignment::Center);
+        let headers: Element<'_, Message> = match self.view_mode {
+            ViewMode::Icons => self.grid_header(),
+            ViewMode::Columns => self.columns_header(),
+            // The gallery names its item under it: nothing above, at the headers' height.
+            ViewMode::Gallery => space().height(metrics::LIST_HEADER_HEIGHT).into(),
+            _ => container(headers)
+                .height(metrics::LIST_HEADER_HEIGHT)
+                .padding([0.0, metrics::LIST_ROW_PADDING])
+                .align_y(Alignment::Center)
+                .into(),
+        };
 
         // The content of a folder that opens rises a few pixels while fading in. With no
         // group opacity in iced, the fade is a veil of the window background laid on top,
         // which fades away.
         let reveal = self.content_fade.as_ref().map_or(1.0, |f| f.value(now));
-        let content: Element<'_, Message> = if self.entries.is_empty() {
+        let content: Element<'_, Message> = if self.view_mode == ViewMode::Gallery {
+            self.gallery_view()
+        } else if self.view_mode == ViewMode::Columns {
+            // The columns keep the folders above an empty one (lot E-13b).
+            self.columns_view(now, (1.0 - reveal) * metrics::LIST_SLIDE)
+        } else if self.entries.is_empty() {
             let empty = match (in_trash, self.search.is_empty()) {
                 (_, false) => t::NO_MATCH,
                 (true, true) => t::EMPTY_TRASH_VIEW,
@@ -493,7 +543,12 @@ impl App {
                 .center(Length::Fill)
                 .into()
         } else {
-            scroll(self.rows(now, (1.0 - reveal) * metrics::LIST_SLIDE, shown))
+            let slide = (1.0 - reveal) * metrics::LIST_SLIDE;
+            let content = match self.view_mode {
+                ViewMode::Icons => self.tiles(slide),
+                _ => self.rows(now, slide, shown),
+            };
+            scroll(content)
                 .id(crate::app::LIST)
                 .on_scroll(|v| Message::Scrolled(v.absolute_offset().y, v.bounds().height))
                 .height(Length::Fill)
@@ -524,7 +579,8 @@ impl App {
     /// listing of 5,000 files lays out only a few dozen widgets.
     fn rows(&self, now: Duration, slide: f32, shown: [bool; 4]) -> Element<'_, Message> {
         let row_height = metrics::LIST_ROW_HEIGHT;
-        let total = self.entries.len();
+        // Rows, the groups' headers counted (lot E-15b).
+        let total = self.row_count();
         let (offset, _) = self.scroll;
         let visible = self.size.height;
         // Only the visible rows (plus a margin) are built, between two spacers that hold the
@@ -539,7 +595,10 @@ impl App {
         let after = (total - last) as f32 * row_height;
         let rows = Column::new()
             .push(space().height(before))
-            .extend((first..last).map(|i| self.row(i, &self.entries[i], shown)))
+            .extend((first..last).map(|r| match self.item_of_row(r) {
+                Some(i) => self.row(i, &self.entries[i], shown),
+                None => group_header(self.header_at(r).unwrap_or_default()),
+            }))
             .push(space().height(after))
             .width(Length::Fill);
         // The selection is drawn under the rows, in the first layer of the stack, which sets
@@ -598,9 +657,17 @@ impl App {
                     .push(block(row_height));
             }
             _ => {
+                // Runs of selected rows: a group's header splits a run (lot E-15b).
+                let mut runs: Vec<(usize, usize)> = Vec::new();
+                for row in self.selection.iter().map(|i| self.row_of(i)) {
+                    match runs.last_mut() {
+                        Some((_, end)) if *end == row => *end = row + 1,
+                        _ => runs.push((row, row + 1)),
+                    }
+                }
                 let mut y = 0.0;
-                for run in self.selection.runs() {
-                    let (start, end) = ((*run.start()).max(first), (*run.end() + 1).min(last));
+                for (start, end) in runs {
+                    let (start, end) = (start.max(first), end.min(last));
                     if start >= end {
                         continue;
                     }
@@ -634,10 +701,32 @@ impl App {
                 .width(Length::Fill)
                 .into(),
         };
-        let name = row![ui::icon(entry.icon(), metrics::LIST_ICON, tint), name]
-            .spacing(metrics::GAP_ICON)
-            .align_y(Alignment::Center)
-            .width(Length::Fill);
+        // The triangle of a folder, turned down once unfolded, a step to the right for each
+        // level (lot E-13d).
+        let triangle: Element<'a, Message> = if entry.kind == Kind::Folder {
+            let turn = if self.is_unfolded(&entry.path) {
+                Icon::ChevronDown
+            } else {
+                Icon::Chevron
+            };
+            let glyph = ui::icon(turn, more::DISCLOSURE, color::palette().text_tertiary);
+            mouse_area(container(glyph).center(more::DISCLOSURE))
+                .on_press(Message::Disclose(entry.path.clone()))
+                .interaction(iced::mouse::Interaction::Pointer)
+                .into()
+        } else {
+            space().width(more::DISCLOSURE).into()
+        };
+        let indent = space().width(f32::from(entry.depth) * more::DISCLOSURE_INDENT);
+        let name = row![
+            indent,
+            triangle,
+            ui::icon(entry.icon(), metrics::LIST_ICON, tint),
+            name
+        ]
+        .spacing(metrics::GAP_ICON)
+        .align_y(Alignment::Center)
+        .width(Length::Fill);
         let [w_date, w_size, w_kind, w_last] = metrics::LIST_COLUMNS;
         let last: Element<'a, Message> = match (&entry.origin, entry.git) {
             (Some(origin), _) => ellipsis(self.origin_label(origin))
@@ -1242,6 +1331,7 @@ impl App {
                     Sub::OpenWith => t::OPEN_WITH,
                     Sub::SortBy => more::SORT_BY,
                     Sub::View => more::VIEW,
+                    Sub::GroupBy => t::GROUP_BY,
                 };
                 let open = submenu_open == Some(sub);
                 let toggle = Message::Submenu((!open).then_some(sub));
