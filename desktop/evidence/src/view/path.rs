@@ -252,11 +252,10 @@ impl App {
     }
 
     /// The folders folded behind « … », in a menu under it, fading in and out.
-    pub(super) fn folded_layer(&self) -> Option<Element<'_, Message>> {
+    /// The menu of the folders folded behind « … », fading and sliding in and out; its entries
+    /// answer only while it is open.
+    pub(crate) fn folded_panel(&self) -> Element<'_, Message> {
         let level = self.folded.level(self.now());
-        if level <= 0.0 || self.folded.items.is_empty() {
-            return None;
-        }
         let live = self.folded.open;
         let rows = self.folded.items.iter().map(|(label, location)| {
             let icon = ui::icon(
@@ -269,13 +268,22 @@ impl App {
         });
         let menu = ui::floating_menu(rows, metrics::CONTEXT_SUBMENU_WIDTH);
         let slide = (1.0 - level) * more::COMPLETION_SLIDE;
-        let menu = reveal(menu).opacity(level).offset(0.0, -slide);
-        let top = metrics::TITLE_BAR_HEIGHT
-            + metrics::BORDER_WIDTH
-            + (metrics::TOOLBAR_HEIGHT + metrics::BREADCRUMB_HEIGHT) / 2.0
-            + metrics::MENU_PADDING;
-        let menu = pin(menu).x(self.folded.x).y(top);
-        if !live {
+        reveal(menu).opacity(level).offset(0.0, -slide).into()
+    }
+
+    /// The menu of « … » under it, in the window: under winit only, on Wayland it is a popup of
+    /// its own (lot E-04d).
+    pub(super) fn folded_layer(&self) -> Option<Element<'_, Message>> {
+        if self.menus_in_popups()
+            || self.folded.level(self.now()) <= 0.0
+            || self.folded.items.is_empty()
+        {
+            return None;
+        }
+        let menu = pin(self.folded_panel())
+            .x(self.folded.x)
+            .y(super::folded_top());
+        if !self.folded.open {
             return Some(Element::from(menu).map(|_| Message::Inert));
         }
         let catcher = mouse_area(space().width(Length::Fill).height(Length::Fill))

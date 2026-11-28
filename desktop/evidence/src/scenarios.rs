@@ -1981,3 +1981,29 @@ fn the_menu_and_its_submenu_are_popups_on_wayland() {
     bench.send(Message::Inert);
     assert!(bench.app.popups.menu.is_none(), "gone once folded back");
 }
+
+/// On Wayland the menu of « … » is a popup of its own, under « … » (lot E-04d): it opens with
+/// the menu, goes once it has faded out, and a click outside closes it at once.
+#[test]
+fn the_folded_folders_are_a_popup_on_wayland() {
+    let mut bench = Bench::new("folded-popup");
+    let deep = "projet/un-dossier-au-nom-assez-long/deuxieme-niveau/troisieme/quatrieme/fin";
+    fs::create_dir_all(bench.path(deep)).expect("folders");
+    bench.app.pretend_wayland();
+    bench.send(Message::Resized(iced::Size::new(720.0, 460.0)));
+    bench.send(Message::Go(Location::Folder(bench.path(deep))));
+    bench.send(Message::Folded(true));
+    let popup = bench.app.popups.folded.expect("a popup");
+    assert!(bench.app.popup_view(popup).is_some());
+    // The compositor closes it on a click outside: the menu goes at once.
+    bench.send(Message::WindowClosed(popup));
+    assert!(!bench.app.folded.open && bench.app.popups.folded.is_none());
+    // Closed from the keyboard: the popup stays while it fades, then goes.
+    bench.send(Message::Folded(true));
+    assert!(bench.app.popups.folded.is_some());
+    bench.press(Named::Escape);
+    assert!(bench.app.popups.folded.is_some(), "fading out");
+    bench.app.settle();
+    bench.send(Message::Inert);
+    assert!(bench.app.popups.folded.is_none());
+}
