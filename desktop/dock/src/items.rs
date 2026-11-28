@@ -26,6 +26,8 @@ pub enum Kind {
     Window(String),
     /// The trash, last (lot D-21j): full or empty.
     Trash(bool),
+    /// A stack, before the trash (lot D-21k): its folder.
+    Stack(std::path::PathBuf),
 }
 
 /// What an icon stands for, by identity rather than by place: the place of an icon changes
@@ -39,6 +41,7 @@ pub enum Target {
     /// An `app_id` without desktop entry.
     Window(String),
     Trash,
+    Stack,
 }
 
 /// How an icon is drawn.
@@ -97,9 +100,25 @@ impl Item {
         }
     }
 
+    /// A stack named `name`, the downloads folder: the theme's `folder-download`, else the
+    /// tile from sherlock-ui.
+    pub fn stack(folder: std::path::PathBuf, name: &str, themed: Option<&Path>) -> Self {
+        let glyph = match themed {
+            Some(path) => Glyph::File(icon_handle(path)),
+            None => Glyph::File(svg::Handle::from_memory(dock::stack_icon().into_bytes())),
+        };
+        Self {
+            kind: Kind::Stack(folder),
+            name: name.to_owned(),
+            glyph,
+            pinned: false,
+        }
+    }
+
     pub fn target(&self) -> Target {
         match &self.kind {
             Kind::Trash(_) => Target::Trash,
+            Kind::Stack(_) => Target::Stack,
             Kind::Applications => Target::Applications,
             Kind::Sherlock => Target::Sherlock,
             Kind::App(entry) => Target::App(entry.id.clone()),
@@ -113,7 +132,7 @@ impl Item {
         match &self.kind {
             Kind::App(entry) => Some(entry.id.as_str()),
             Kind::Sherlock => Some(SHERLOCK),
-            Kind::Applications | Kind::Window(_) | Kind::Trash(_) => None,
+            Kind::Applications | Kind::Window(_) | Kind::Trash(_) | Kind::Stack(_) => None,
         }
     }
 
@@ -129,7 +148,7 @@ impl Item {
         match &self.kind {
             Kind::App(entry) => entry.owns(app_id),
             Kind::Window(id) => id == app_id,
-            Kind::Sherlock | Kind::Applications | Kind::Trash(_) => false,
+            Kind::Sherlock | Kind::Applications | Kind::Trash(_) | Kind::Stack(_) => false,
         }
     }
 }
@@ -142,6 +161,8 @@ pub struct Builder<'a> {
     pub sherlock: bool,
     /// The trash at the end, full (`Some(true)`) or empty; none without a trash folder.
     pub trash: Option<bool>,
+    /// The downloads stack before it: its folder and its name (lot D-21k).
+    pub stack: Option<(&'a Path, &'a str)>,
     pub catalog: &'a Catalog,
     pub lookup: &'a IconLookup,
     /// Size the icon files are looked up for: a fully magnified icon.
@@ -194,7 +215,11 @@ impl Builder<'_> {
             };
             items.push(item);
         }
-        // The trash last, after the separator, as on macOS (lot D-21j).
+        // The stack, then the trash last, after the separator, as on macOS (lots D-21j, k).
+        if let Some((folder, name)) = self.stack {
+            let themed = self.lookup.find("folder-download", self.icon_size);
+            items.push(Item::stack(folder.to_path_buf(), name, themed.as_deref()));
+        }
         if let Some(full) = self.trash {
             items.push(Item::trash(full));
         }
@@ -272,6 +297,7 @@ mod tests {
             applications: true,
             sherlock: true,
             trash: None,
+            stack: None,
             catalog: &catalog,
             lookup: &lookup,
             icon_size: 88,
@@ -333,6 +359,7 @@ mod tests {
             applications: false,
             sherlock: false,
             trash: Some(true),
+            stack: Some((Path::new("/home/me/Downloads"), "Downloads")),
             catalog: &catalog,
             lookup: &lookup,
             icon_size: 88,
@@ -340,16 +367,17 @@ mod tests {
         };
         let pinned = ["org.example.Files".to_owned()];
         let (items, separator) = builder.build(&pinned, None);
-        assert_eq!(names(&items), ["Fichiers", "Corbeille"]);
+        assert_eq!(names(&items), ["Fichiers", "Downloads", "Corbeille"]);
         assert_eq!(separator, Some(1));
-        assert_eq!(items[1].kind, Kind::Trash(true));
-        assert_eq!(items[1].target(), Target::Trash);
-        assert!(items[1].pin_id().is_none() && !items[1].pinned);
+        assert_eq!(items[2].kind, Kind::Trash(true));
+        assert_eq!(items[2].target(), Target::Trash);
+        assert_eq!(items[1].target(), Target::Stack);
+        assert!(items[1].pin_id().is_none() && !items[2].pinned);
         let Placeholder(windows) = Placeholder::new("terminal", None);
         let (items, separator) = builder.build(&pinned, Some(&windows));
         assert_eq!(
             names(&items),
-            ["Fichiers", "Terminal d'exemple", "Corbeille"]
+            ["Fichiers", "Terminal d'exemple", "Downloads", "Corbeille"]
         );
         assert_eq!(separator, Some(1));
     }

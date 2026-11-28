@@ -114,15 +114,16 @@ impl Dock {
         // The pointer is tracked over the whole surface: `mouse_area` also reports where the
         // pointer enters, which the bare enter event does not carry.
         let layers = stack(layers).width(Length::Fill).height(Length::Fill);
-        mouse_area(layers)
+        let area = mouse_area(layers)
             .on_move(|point| Message::Pointer(Pointer::Moved(point)))
             .on_exit(Message::Pointer(Pointer::Left))
             .on_press(Message::Pointer(Pointer::Pressed(mouse::Button::Left)))
             .on_release(Message::Pointer(Pointer::Released))
             .on_right_press(Message::Pointer(Pointer::Pressed(mouse::Button::Right)))
             .on_middle_press(Message::Pointer(Pointer::Pressed(mouse::Button::Middle)))
-            .on_scroll(Message::Scroll)
-            .into()
+            .on_scroll(Message::Scroll);
+        // The closed hand while an icon is dragged, wherever the pointer goes.
+        sherlock_ui::pointer::held(area, self.held().is_some()).into()
     }
 
     /// The name of the icon closest to the pointer, past the magnified icons (board: 108 above
@@ -201,6 +202,10 @@ impl Dock {
                     .color(color::palette().text_secondary);
                 header = header.push(count);
             }
+            if let Some(count) = menu.grid {
+                let grid = self.view_grid(header.into(), count);
+                return sherlock_ui::glass::glass(grid, metrics::MENU_RADIUS);
+            }
             let mut entries: Vec<Element<'_, Message>> = vec![header.into()];
             for (index, line) in menu.entries.iter().enumerate() {
                 if line.starts_group {
@@ -233,6 +238,50 @@ impl Dock {
         reveal(panel)
             .opacity(opacity)
             .scale(menu.unfold.scale(self.now), origin)
+            .into()
+    }
+}
+
+impl Dock {
+    /// The grid of the downloads stack (lot D-21k): its newest items, `count` at most, four to
+    /// a row, then « Ouvrir dans Evidence ».
+    fn view_grid<'a>(&'a self, header: Element<'a, Message>, count: usize) -> Element<'a, Message> {
+        let items = self.stack.as_ref().map_or(&[][..], |s| &s.items[..]);
+        let cells: Vec<Element<'a, Message>> = items
+            .iter()
+            .take(count)
+            .enumerate()
+            .map(|(index, item)| {
+                let picture =
+                    ui::icon(item.icon, dock::STACK_ICON, color::palette().text_secondary);
+                dock::stack_cell(picture, &item.name, Message::StackOpen(index))
+            })
+            .collect();
+        let mut rows = iced::widget::Column::new().spacing(dock::STACK_GAP);
+        if cells.is_empty() {
+            let empty = container(ui::description(dock::text::STACK_EMPTY))
+                .center_x(Length::Fill)
+                .center_y(dock::STACK_CELL.1);
+            rows = rows.push(empty);
+        }
+        let mut cells = cells.into_iter().peekable();
+        while cells.peek().is_some() {
+            let line: Vec<_> = cells.by_ref().take(dock::STACK_COLUMNS).collect();
+            rows = rows.push(iced::widget::Row::from_vec(line).spacing(dock::STACK_GAP));
+        }
+        let footer = ui::menu_item(
+            dock::text::OPEN_IN_EVIDENCE,
+            Trailing::None,
+            Some(Message::StackFolder),
+        );
+        let content = iced::widget::column![header, rows, space::vertical(), footer]
+            .width(Length::Fill)
+            .height(Length::Fill);
+        container(content)
+            .padding(dock::STACK_PADDING)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .style(sherlock_ui::theme::menu)
             .into()
     }
 }

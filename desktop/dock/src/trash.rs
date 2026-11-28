@@ -61,7 +61,7 @@ pub fn watch(trash: PathBuf) -> impl Stream<Item = bool> {
     let spawned = std::thread::Builder::new()
         .name(String::from("watch-trash"))
         .spawn(move || {
-            if let Err(error) = run(&trash.join("files"), &trash, &sender) {
+            if let Err(error) = follow(&trash.join("files"), || full(&trash), &sender) {
                 tracing::warn!(%error, "cannot follow the trash");
             }
         });
@@ -71,22 +71,28 @@ pub fn watch(trash: PathBuf) -> impl Stream<Item = bool> {
     receiver
 }
 
-fn run(files: &Path, trash: &Path, sender: &mpsc::UnboundedSender<bool>) -> io::Result<()> {
+/// Sends `read()` each time it changes, read again at each change in `dir`, waiting for `dir`
+/// while it is missing; returns once the receiver is gone (lots D-21j, D-21k).
+pub(crate) fn follow<T: PartialEq + Clone>(
+    dir: &Path,
+    read: impl Fn() -> T,
+    sender: &mpsc::UnboundedSender<T>,
+) -> io::Result<()> {
     let mut last = None;
-    let send = |last: &mut Option<bool>| {
-        let now = full(trash);
-        if *last == Some(now) {
+    let send = |last: &mut Option<T>| {
+        let now = read();
+        if last.as_ref() == Some(&now) {
             return true;
         }
-        *last = Some(now);
+        *last = Some(now.clone());
         sender.unbounded_send(now).is_ok()
     };
     loop {
         if !send(&mut last) {
             return Ok(());
         }
-        wait_for_dir(files)?;
-        let watcher = Inotify::new(files)?;
+        wait_for_dir(dir)?;
+        let watcher = Inotify::new(dir)?;
         loop {
             if !send(&mut last) {
                 return Ok(());
