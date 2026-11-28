@@ -60,6 +60,10 @@ pub enum Target {
     Workspace(usize),
     /// The « × » of a window under the pointer, which closes it (lot D-33c).
     Close(Window),
+    /// The « + » after the thumbnails, and the « × » of the thumbnail under the pointer: add a
+    /// workspace, remove that one (lot D-33c).
+    AddWorkspace,
+    RemoveWorkspace(usize),
 }
 
 impl Target {
@@ -67,7 +71,7 @@ impl Target {
     pub fn window(&self) -> Option<&Window> {
         match self {
             Self::Window(window) | Self::Close(window) => Some(window),
-            Self::Workspace(_) => None,
+            Self::Workspace(_) | Self::AddWorkspace | Self::RemoveWorkspace(_) => None,
         }
     }
 }
@@ -117,6 +121,8 @@ pub struct Overview {
     hovered: Option<Target>,
     /// The titles shown or fading, one per window the pointer was on.
     titles: Vec<TitleFade>,
+    /// The workspace just added by its « + », by index, and when: its thumbnail fades in.
+    arrived: Option<(usize, Duration)>,
     press: Option<Press>,
     /// App Expose: only the windows of these ids, without the strip of the workspaces. Kept
     /// while the view closes, so that they go back the way they came.
@@ -149,9 +155,21 @@ impl Overview {
         self.held.is_none() && self.motion.is_some_and(|m| !m.is_done(now, PRECISION))
     }
 
-    /// A title is fading in or out at `now`.
+    /// A title is fading in or out at `now`, or a new thumbnail.
     fn titles_fading(&self, now: Duration) -> bool {
-        self.titles.iter().any(|t| t.running(now))
+        let arriving = self.arrived.is_some_and(|(_, at)| now < at + mc::ARRIVAL);
+        arriving || self.titles.iter().any(|t| t.running(now))
+    }
+
+    /// How much the thumbnail `index` has faded in at `now`: 1 but for a new one.
+    fn arrival(&self, index: usize, now: Duration) -> f32 {
+        match self.arrived {
+            Some((i, at)) if i == index => {
+                let t = now.saturating_sub(at).as_secs_f32() / mc::ARRIVAL.as_secs_f32();
+                t.clamp(0.0, 1.0)
+            }
+            _ => 1.0,
+        }
     }
 
     /// How much of the title and the « × » of `window` is shown at `now`.
@@ -523,6 +541,18 @@ impl State {
             .collect()
     }
 
+    /// The « + » after the thumbnails of `output`: none past 9 workspaces, nor in App Expose.
+    pub fn overview_add_button(&self, output: &Output) -> Option<RectF> {
+        if self.workspaces().list().len() >= crate::shell::MAX_WORKSPACES {
+            return None;
+        }
+        let last = *self.overview_strip(output).last()?;
+        let side = f64::from(mc::ADD_SIZE);
+        let x = last.loc.x + last.size.w + f64::from(mc::ADD_GAP);
+        let y = last.loc.y + (last.size.h - side) / 2.0;
+        Some(Rectangle::new((x, y).into(), (side, side).into()))
+    }
+
     /// What is at `at` in the open view: a thumbnail, or a window in its slot.
     pub fn overview_target(&self, at: Point<f64, Logical>) -> Option<Target> {
         let outputs: Vec<Output> = self.space.outputs().cloned().collect();
@@ -545,8 +575,26 @@ impl State {
         }
         for output in &outputs {
             let strip = self.overview_strip(output);
+            // The « × » of the thumbnail under the pointer, when another workspace remains.
+            let hovered = match self.overview.hovered {
+                Some(Target::Workspace(i) | Target::RemoveWorkspace(i)) => Some(i),
+                _ => None,
+            };
+            let thumb = hovered.and_then(|i| Some((i, *strip.get(i)?)));
+            if let Some((index, thumb)) = thumb.filter(|_| strip.len() > 1) {
+                let (x, y) = close_center(thumb);
+                if (at.x - x).hypot(at.y - y) <= f64::from(mc::CLOSE_SIZE) / 2.0 {
+                    return Some(Target::RemoveWorkspace(index));
+                }
+            }
             if let Some(index) = strip.iter().position(|r| r.contains(at)) {
                 return Some(Target::Workspace(index));
+            }
+            if self
+                .overview_add_button(output)
+                .is_some_and(|r| r.contains(at))
+            {
+                return Some(Target::AddWorkspace);
             }
         }
         outputs.iter().find_map(|output| {
@@ -600,6 +648,7 @@ impl State {
         // The « × » under the pointer stands for its window.
         let current = (self.overview.hovered.as_ref()).map(|t| match t {
             Target::Close(window) => Target::Window(window.clone()),
+            Target::RemoveWorkspace(index) => Target::Workspace(*index),
             other => other.clone(),
         });
         let at = current
@@ -623,7 +672,7 @@ impl State {
                         }
                         self.leave_overview(None);
                     }
-                    None => {}
+                    Some(Target::AddWorkspace | Target::RemoveWorkspace(_)) | None => {}
                 }
                 return;
             }
@@ -702,6 +751,17 @@ impl State {
             // leaves the grid once gone.
             (Some(Target::Close(window)), _, Some(Target::Close(over))) if over == window => {
                 State::close(&window);
+            }
+            (Some(Target::AddWorkspace), _, Some(Target::AddWorkspace)) => {
+                if self.add_workspace() {
+                    let index = self.workspaces().list().len() - 1;
+                    self.overview.arrived = Some((index, self.now()));
+                }
+            }
+            (Some(Target::RemoveWorkspace(index)), _, Some(Target::RemoveWorkspace(over)))
+                if over == index =>
+            {
+                self.remove_workspace(index);
             }
             (None, _, None) => self.leave_overview(None),
             _ => {}
@@ -815,7 +875,17 @@ pub(crate) fn push_items(
         }
     }
     let target = dragged.and(overview.hovered.clone());
-    push_strip(items, state, (output, view), (progress, target), colors);
+    let hovered = dragged
+        .is_none()
+        .then(|| overview.hovered.clone())
+        .flatten();
+    push_strip(
+        items,
+        state,
+        (output, view),
+        (progress, target, hovered, now),
+        colors,
+    );
     items.append(&mut pushed);
     if let Some(screen) = state.space.output_geometry(output) {
         let dim = colors.dim.premultiplied();
@@ -897,7 +967,7 @@ fn push_tile(
                 scale,
                 background,
                 color: colors.label_text,
-                close: true,
+                icon: Some(ui_decorations::Button::Close.icon(false)),
             },
             alpha: look.label,
         });
@@ -919,7 +989,7 @@ fn push_tile(
             scale,
             background: colors.label,
             color: colors.label_text,
-            close: false,
+            icon: None,
         };
         items.push(Item::Label {
             key: Key::of(owner.clone(), Part::Label),
@@ -1005,19 +1075,75 @@ fn push_strip(
     items: &mut Vec<Item>,
     state: &State,
     (output, view): (&Output, &View),
-    (progress, target): (f64, Option<Target>),
+    (progress, target, hovered, now): (f64, Option<Target>, Option<Target>, Duration),
     colors: Colors,
 ) {
     let Some(screen) = state.space.output_geometry(output) else {
         return;
     };
-    let drop = |i: usize| target == Some(Target::Workspace(i));
     let (scale, fade) = (view.scale as f32, progress.clamp(0.0, 1.0) as f32);
+    // A round button of the strip: a disc and an icon, at the view's scale.
+    let push_button = |items: &mut Vec<Item>, key, rect: RectF, icon, background| {
+        let pixels = (rect.size.w * view.scale).round().max(1.0) as u32;
+        items.push(Item::Label {
+            key,
+            rect: view.rect(rect),
+            label: Label {
+                text: String::new(),
+                size: (pixels, pixels),
+                scale,
+                background,
+                color: colors.label_text,
+                icon: Some(icon),
+            },
+            alpha: fade,
+        });
+    };
+    let drop = |i: usize| target == Some(Target::Workspace(i));
     let rise = (1.0 - progress) * (strip_height() + f64::from(mc::STRIP_MARGIN));
     let active = state.workspaces().active_index();
     let list = state.workspaces().list();
+    // The « + » after the thumbnails: menu glass, accent under the pointer.
+    if let Some(mut add) = state.overview_add_button(output) {
+        add.loc.y -= rise;
+        let background = match hovered == Some(Target::AddWorkspace) {
+            true => colors.highlight,
+            false => colors.label,
+        };
+        push_button(
+            items,
+            Key::of(None, Part::AddWorkspace),
+            add,
+            mc::ADD_ICON,
+            background,
+        );
+    }
+    let fade_all = fade;
     for (index, mut thumb) in state.overview_strip(output).into_iter().enumerate() {
         thumb.loc.y -= rise;
+        let fade = fade_all * state.overview.arrival(index, now);
+        // The « × » of the thumbnail under the pointer, when another workspace remains.
+        let shown = matches!(
+            hovered,
+            Some(Target::Workspace(i) | Target::RemoveWorkspace(i)) if i == index
+        );
+        if shown && list.len() > 1 {
+            let side = f64::from(mc::CLOSE_SIZE);
+            let (x, y) = close_center(thumb);
+            let rect = Rectangle::new((x - side / 2.0, y - side / 2.0).into(), (side, side).into());
+            let background = match hovered == Some(Target::RemoveWorkspace(index)) {
+                true => BarColors::of(color::palette()).close_hover,
+                false => colors.label,
+            };
+            let icon = ui_decorations::Button::Close.icon(false);
+            push_button(
+                items,
+                Key::of(None, Part::ThumbnailClose(index)),
+                rect,
+                icon,
+                background,
+            );
+        }
         let k = thumb.size.w / f64::from(screen.size.w);
         let radius = mc::THUMBNAIL_RADIUS * scale;
         let name = strings::mission_control::workspace(index + 1);
@@ -1032,7 +1158,7 @@ fn push_strip(
                 scale,
                 background: colors.label,
                 color: colors.label_text,
-                close: false,
+                icon: None,
             },
             alpha: fade,
         });

@@ -49,6 +49,10 @@ pub enum Part {
     Thumbnail(usize),
     ThumbnailBorder(usize),
     ThumbnailLabel(usize),
+    /// The « × » of a thumbnail under the pointer, and the « + » after the thumbnails (lot
+    /// D-33c).
+    ThumbnailClose(usize),
+    AddWorkspace,
     /// The on-screen display of the media keys (lot D-35).
     Osd,
     /// The screenshot tool (lots D-35c, D-35e): its shapes (dim, area, handles, toolbar,
