@@ -1805,6 +1805,54 @@ fn path_bar_captures() {
     }
 }
 
+/// Tabs (lot D-27b): Ctrl+T opens one on this folder, each keeps its folder, Ctrl+Tab goes
+/// from one to the other, the middle button opens a folder in a tab behind, Enter on several
+/// folders opens each in a tab, a tab dragged moves, Ctrl+W closes.
+#[test]
+fn tabs_keep_their_folders() {
+    let mut bench = Bench::new("tabs");
+    fs::create_dir_all(bench.path("projet/docs")).expect("folder");
+    bench.press(Named::F5);
+    let projet = Location::Folder(bench.path("projet"));
+    bench.ctrl("t");
+    assert_eq!(bench.app.tab_list().len(), 2);
+    assert!(bench.app.tab_bar_level() > 0.0);
+    bench.select("src");
+    bench.press(Named::Enter);
+    let src = Location::Folder(bench.path("projet/src"));
+    assert_eq!(bench.app.tab_list(), [projet.clone(), src.clone()]);
+    bench.key(Key::Named(Named::Tab), Modifiers::CTRL);
+    assert_eq!(bench.app.location, projet);
+    // The middle button on a folder: a tab behind, the folder shown stays.
+    let docs = bench
+        .names()
+        .iter()
+        .position(|n| *n == "docs")
+        .expect("docs");
+    bench.send(Message::MiddleClick(docs));
+    assert_eq!(bench.app.tab_list().len(), 3);
+    assert_eq!(bench.app.location, projet);
+    // Enter on two folders: each in a tab, the first shown.
+    bench.click("docs");
+    click_with(&mut bench, "src", Modifiers::CTRL);
+    bench.press(Named::Enter);
+    assert_eq!(bench.app.tab_list().len(), 5);
+    // A tab dragged over another takes its place.
+    let before = bench.app.tab_list();
+    bench.send(Message::PressTab(0));
+    bench.send(Message::OverTab(1));
+    bench.send(Message::Released);
+    let after = bench.app.tab_list();
+    assert_eq!(
+        (after[0].clone(), after[1].clone()),
+        (before[1].clone(), before[0].clone())
+    );
+    // Ctrl+W closes the active one.
+    bench.ctrl("w");
+    assert_eq!(bench.app.tab_list().len(), 4);
+    let _ = bench.app.view();
+}
+
 /// Ctrl+Z undoes a rename, a move to the trash and a new folder, Ctrl+Maj+Z redoes them
 /// (lot E-10).
 #[test]
