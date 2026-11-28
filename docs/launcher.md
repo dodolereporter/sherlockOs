@@ -36,7 +36,7 @@ first three show the applications alone, as in D-22a.
 | Result | 46 high, radius 10, tile of 30 at radius 8, name in medium weight, a 12 px line under it | Same; the line of an application is its `GenericName`; the selected row takes the selection blue and the « Entrée » key cap |
 | Application icon | A line icon on a blue tile (« Conteneurs ») | The application's own icon, 30 px, from its icon theme (`icon-theme`); its initial on the blue tile when it has none |
 | Other tiles | Settings: a cream glyph on `#3A4A63`; files: a cream document on `#2B5F86` | System commands on the settings tile, files and folders on the files tile, the calculator on the application tile; glyphs of 16 on the grid of `sherlock_ui::icon` |
-| « Demander à Sherlock » | Cream row, Sherlock, title semibold `#14233B`, line `#2B3A54` « Tab pour lui passer la recherche » | Same, with the logo; « Bientôt » for now (see Sherlock); a blue ring of 2 when selected, which the board does not show |
+| « Demander à Sherlock » | Cream row, Sherlock, title semibold `#14233B`, line `#2B3A54` « Tab pour lui passer la recherche » | Same, with the logo (see Sherlock); a blue ring of 2 when selected, which the board does not show |
 | Nothing found | Not on the board | « Aucun résultat » in secondary text, one row high; it only shows without the Sherlock source, which always answers |
 
 The light theme takes the light board's values: white glass at 0.88, night blue veils at the
@@ -240,25 +240,45 @@ disabled. A real index (watching changes, more folders) is a later batch.
 
 ### Sherlock
 
-« Demander à Sherlock » is always the last row when the query is not empty. sherlockd has no
-interface for the shell yet, nor an option that takes a request: it knows `--demo`,
-`--claude-code` (a demonstration, its request on standard input), `--proxy` and
-`--test-server`. The row is therefore shown disabled, its line « Bientôt », and Enter does
-nothing. `ask::ASK_OPTION` names the option once it exists (`--ask`): the row then runs
-`<terminal> -e sherlockd --ask <file>`, without a shell (tested with the option set). The query
-is never in the arguments, which every local account reads (`ps`, `/proc/*/cmdline`, S-11): it
-is written when the row is chosen into a new file of `$XDG_RUNTIME_DIR/sherlockd-requests/`,
-0600 from its creation in 0700 folders, which sherlockd reads then removes.
+« Demander à Sherlock » is always the last row when the query is not empty, its line « Tab
+pour lui passer la recherche ». Tab in the field, or the row chosen, opens the panel « Demande à
+Sherlock » in place of the results (lot A-19, `sherlock.rs`, after the Sherlock board): the panel
+grows to its height (560 at most, less on a short screen), the query is the first request.
 
-What the interface should provide, for the launcher and the rest of the shell:
+- **Header**: Sherlock in his small round bubble, in 3D on the GPU (`sherlock_3d::Sherlock3d`,
+  the model read on the pool at the first opening), the still picture in software; he thinks
+  while a request runs, is happy after an answer and sorry after a failure, 2.5 s, then rests.
+- **The conversation**, scrolled to its end: each request in a soft accent bubble on the right,
+  Sherlock's texts as they come, « Le plan de Sherlock » with each step (its number, the tool,
+  its arguments ending with « … », the state as the board says it: « Attend ton accord »,
+  « Libre », « Avec ton accord », « … · fait », « Refusée », « Erreur »), then the answer, or why
+  there is none. « Sherlock réfléchit… » while it runs. Each part fades in and rises by 8 as
+  it comes, over 220 ms (lot A-19c, `sherlock::shown`): frames are asked for only that long.
+- **The plan announced first** (lot A-19e): when sherlockd hands the plan Sherlock announced
+  before acting (its `plan` event), « Le plan de Sherlock » lists its steps as on the board:
+  number, title, description and tool, then the state of the call that took the step
+  (« Prévue » before one does). The calls outside the plan come after it, as before.
+- **The field** « Ta demande » at the bottom: Enter asks the next request, once the one running
+  has ended. Escape comes back to the search, the conversation kept for the next opening.
 
-- a way to hand over a request as typed, from another program of the session, without a shell
-  and without a terminal: a socket of the user session (D-Bus or a Unix socket under
-  `$XDG_RUNTIME_DIR`) with a call like `Ask(text) -> conversation id`;
-- that Sherlock's own panel opens on that conversation, so the launcher can close at once;
-- an error the launcher can show when sherlockd is not running;
-- the board's « Tab pour lui passer la recherche »: Tab would hand over the query instead of
-  Enter, once the call exists.
+- **The journal** (lot A-19d, `journal.rs`), from the header's « Journal » button, as on the
+  board: « Tout ce que Sherlock fait est noté ». The consent broker's journal
+  (`$XDG_STATE_HOME/sherlock/journal.jsonl`) is read on the pool, its last 256 KiB at most (the
+  line cut by the start of the reading left out), 60 entries at most, newest first, again when a
+  request ends: the time, then « A lu : tool », « tool, avec ton accord », « tool : refusé »
+  (« pas de réponse », « personne pour donner l'accord »), « (erreur) » after a failed outcome.
+  Each outcome goes to the last decision of its call (the numbers start again with each
+  session). « Cette conversation » shows those since its first request, « Tout » all of them;
+  « Conversation » comes back.
+
+Each request runs `sherlockd --ask` (beside the session's programs, `$SHERLOCKOS_BIN`, or in
+the `PATH`), without a shell: the request and the exchanges answered so far (20 at most) go on
+its standard input, never in its arguments, which every local account reads. Its events
+(`docs/sherlockd.md`, « The shell's conversation ») are read on a thread of their own, lines of
+256 KiB at most, 10,000 events at most. The panel only shows the states the consent broker
+decided: the consent window stays the compositor's. Without sherlockd: « Sherlock ne répond pas :
+son service (sherlockd) est introuvable. »; offline: « Pas de connexion à Internet… »; without
+Claude Code or its login, sherlockd's own words.
 
 ### Keyboard
 
@@ -458,7 +478,6 @@ RUST_LOG=launcher=debug cargo run -p launcher
   not drawn, the initial shows instead.
 - The files come from a bounded walk, not an index: past 4 levels or 20 000 entries, a file is
   not found.
-- « Demander à Sherlock » is disabled until sherlockd takes requests from the shell.
 - Without `wl-copy`, a copied result lives while the launcher is open, unless a clipboard
   manager takes it; since the launcher keeps the keyboard, it cannot be pasted elsewhere
   meanwhile. `wl-clipboard` is not yet a package of the image (`distro/`): to add with the
@@ -523,8 +542,13 @@ RUST_LOG=launcher=debug cargo run -p launcher
 - calculator (`calc.rs`): priorities, `^` to the right, unary minus, modulo and percent, comma
   and point, division by zero, invalid expressions, a lone number, deep nesting, the writing of
   results;
-- « Demander à Sherlock » (`ask.rs`): disabled without the option, the query in one argument
-  with it.
+- « Demander à Sherlock » (`ask.rs`): the query as typed. The panel (`sherlock.rs`, lot A-19):
+  the events fill an exchange and Sherlock's mood follows; the reasons without an answer; a fake
+  `sherlockd` read line by line, which gets `--ask` alone as argument and the request on its
+  input. `tests/launcher.rs`: Tab opens the panel, which says when sherlockd is not there, then
+  the plan and its states as injected events tell them (`launcher-sherlock`,
+  `launcher-sherlock-1366`); `tests/sources.rs`: Enter on Sherlock's row opens it, Escape comes
+  back. Never the real sherlockd nor Claude Code.
 - single instance: the lock taken, our own id never signalled, a stand-in launcher (a copy of
   the test program) closed by `SIGTERM`, the file emptied by a normal close and the lock free
   again, a live `sleep` and a dead id never signalled, a linked lock file refused, odd file

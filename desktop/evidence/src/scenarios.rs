@@ -1854,6 +1854,27 @@ fn undo_and_redo_with_the_keyboard() {
     assert!(bench.app.notice.as_ref().is_some_and(|n| !n.error));
 }
 
+/// A change made by another program shows without F5 (lot E-09): the listing is read again,
+/// the selection kept, but not while a menu is open.
+#[test]
+fn a_change_made_elsewhere_shows_without_f5() {
+    let mut bench = Bench::new("watched");
+    bench.select("a.txt");
+    fs::write(bench.path("projet/b.txt"), "b").expect("write");
+    bench.send(Message::RightClick(None));
+    bench.send(Message::FolderChanged(bench.path("projet")));
+    assert!(
+        !bench.names().contains(&"b.txt"),
+        "not while the menu is open"
+    );
+    bench.press(Named::Escape);
+    assert!(bench.names().contains(&"b.txt"));
+    // A change of another folder is not this one's.
+    fs::write(bench.path("projet/c.txt"), "c").expect("write");
+    bench.send(Message::FolderChanged(bench.path("ailleurs")));
+    assert!(!bench.names().contains(&"c.txt"));
+}
+
 /// A server that wants a name and a password opens the sheet that asks for them (lot E-07b);
 /// Escape or « Annuler » close it.
 #[test]

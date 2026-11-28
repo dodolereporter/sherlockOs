@@ -221,7 +221,12 @@ fn every_application_starts_with_two_letters_and_enter() {
 
 #[test]
 fn only_the_launcher_keys_are_taken() {
-    assert!(key(keyboard::key::Named::Tab).is_none());
+    assert!(key(keyboard::key::Named::Home).is_none());
+    // Tab hands the query over to Sherlock (A-19).
+    assert!(matches!(
+        key(keyboard::key::Named::Tab),
+        Some(Message::Key(app::Key::Tab))
+    ));
     assert!(matches!(
         key(keyboard::key::Named::Escape),
         Some(Message::Key(app::Key::Escape))
@@ -576,4 +581,163 @@ fn the_typing_board() {
     }
     color::set_active(Theme::Dark);
     board.save(tmp.join("launcher-board.png")).expect("board");
+}
+
+/// Lot A-19: Tab hands the query over to Sherlock; his panel shows the request, his texts, the
+/// plan with the state of each step, and the answer, as `sherlockd --ask` tells them (injected
+/// here: never the real sherlockd, nor Claude Code). `launcher-sherlock` on the reference
+/// screen, `launcher-sherlock-1366` on 1366 × 768.
+#[test]
+fn tab_opens_sherlocks_panel_with_the_plan_and_its_states() {
+    use serde_json::json;
+    for (name, screen) in [
+        ("launcher-sherlock", (1920.0, 1080.0)),
+        ("launcher-sherlock-1366", (1366.0, 768.0)),
+    ] {
+        let (launcher, _) = recorded();
+        let mut launcher = launcher
+            .with_screen(screen)
+            .with_sherlockd("/nonexistent/sherlockd".into());
+        let _ = launcher.update(Message::Query("Relance front-next".into()));
+        let _ = launcher.update(Message::Key(app::Key::Tab));
+        assert!(launcher.sherlock);
+        // The service is not there: said at once; then a request that runs, told by events.
+        assert!(launcher.conversation.exchanges[0].failure.is_some());
+        launcher.conversation.exchanges.clear();
+        launcher
+            .conversation
+            .exchanges
+            .push(launcher::sherlock::Exchange {
+                request: "Relance front-next".into(),
+                ..Default::default()
+            });
+        for event in [
+            json!({"event": "text", "text": "Je regarde l'état du conteneur avant de le relancer."}),
+            json!({"event": "step", "id": "a", "tool": "containers_list", "summary": "{}", "state": "waiting"}),
+            json!({"event": "state", "id": "a", "state": "granted", "level": "lecture"}),
+            json!({"event": "state", "id": "a", "state": "done"}),
+            json!({"event": "step", "id": "b", "tool": "container_restart", "summary": "{\"name\":\"front-next\"}", "state": "waiting"}),
+        ] {
+            let _ = launcher.update(Message::Sherlock(event));
+        }
+        settled(&mut launcher);
+        {
+            let mut ui = Simulator::with_size(
+                launcher::settings(),
+                (look::WIDTH, launcher.height()),
+                launcher.view_panel(),
+            );
+            assert!(ui.find("Attend ton accord").is_ok());
+            assert!(ui.find("Libre · fait").is_ok());
+        }
+        assert!(capture(&launcher, name).expect("screenshot written") > 2_000);
+        let _ = launcher.update(Message::Sherlock(
+            json!({"event": "state", "id": "b", "state": "granted", "level": "action"}),
+        ));
+        let _ = launcher.update(Message::Sherlock(
+            json!({"event": "answer", "text": "front-next tourne de nouveau."}),
+        ));
+        assert!(!launcher.conversation.running());
+        assert_eq!(launcher.conversation.exchanges[0].steps[1].state, "granted");
+    }
+}
+
+/// Lot A-19d: the journal in the panel, read from a journal of the test: the newest first, those
+/// of the conversation, or all of them. `launcher-journal`.
+#[test]
+fn the_journal_shows_what_sherlock_did_by_conversation_or_all() {
+    let dir = std::env::temp_dir().join(format!("launcher-journal-view-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("journal.jsonl");
+    let (launcher, _) = recorded();
+    let mut launcher = launcher
+        .with_screen((1920.0, 1080.0))
+        .with_sherlockd("/nonexistent/sherlockd".into())
+        .with_journal(path.clone());
+    let _ = launcher.update(Message::Query("Relance front-next".into()));
+    let _ = launcher.update(Message::Key(app::Key::Tab));
+    let now = launcher.conversation.started.unwrap();
+    let lines = [
+        String::from(
+            r#"{"time":10,"id":1,"tool":"create_sandbox","level":"action","arguments":"{}","decision":"granted"}"#,
+        ),
+        format!(
+            r#"{{"time":{now},"id":1,"tool":"list_packages","level":"lecture","arguments":"{{}}","decision":"granted"}}"#
+        ),
+        format!(
+            r#"{{"time":{now},"id":2,"tool":"restart","level":"action","arguments":"{{}}","decision":"granted"}}"#
+        ),
+        format!(r#"{{"time":{now},"id":2,"tool":"restart","outcome":"ok"}}"#),
+    ];
+    std::fs::write(&path, lines.join("\n") + "\n").unwrap();
+    let _ = launcher.update(Message::ShowJournal);
+    let _ = launcher.update(Message::Journal(launcher::journal::read(&path)));
+    settled(&mut launcher);
+    let size = (look::WIDTH, launcher.height());
+    {
+        let mut ui = Simulator::with_size(launcher::settings(), size, launcher.view_panel());
+        assert!(ui.find("restart, avec ton accord").is_ok());
+        assert!(ui.find("A lu : list_packages").is_ok());
+        assert!(
+            ui.find("create_sandbox, avec ton accord").is_err(),
+            "before the conversation"
+        );
+    }
+    assert!(capture(&launcher, "launcher-journal").expect("screenshot written") > 2_000);
+    let _ = launcher.update(Message::JournalAll(true));
+    {
+        let mut ui = Simulator::with_size(launcher::settings(), size, launcher.view_panel());
+        assert!(ui.find("create_sandbox, avec ton accord").is_ok());
+    }
+    // Back to the conversation.
+    let _ = launcher.update(Message::ShowJournal);
+    assert!(launcher.journal.is_none());
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// Lot A-19e: the plan announced first shows as on the board, each step with the state of the
+/// call that took it, « Prévue » before. `launcher-plan`.
+#[test]
+fn the_plan_announced_first_shows_with_its_states() {
+    use serde_json::json;
+    let (launcher, _) = recorded();
+    let mut launcher = launcher
+        .with_screen((1920.0, 1080.0))
+        .with_sherlockd("/nonexistent/sherlockd".into());
+    let _ = launcher.update(Message::Query("Installe Steam".into()));
+    let _ = launcher.update(Message::Key(app::Key::Tab));
+    launcher.conversation.exchanges.clear();
+    launcher
+        .conversation
+        .exchanges
+        .push(launcher::sherlock::Exchange {
+            request: "Installe Steam et prépare la machine pour jouer".into(),
+            ..Default::default()
+        });
+    for event in [
+        json!({"event": "plan", "steps": [
+            {"title": "Vérifier ce qui est déjà installé", "description": "Lecture de la liste des paquets et de la version du pilote graphique.", "tool": "packages_list"},
+            {"title": "Installer Steam et la pile graphique 32 bits", "description": "steam mesa lib32-mesa vulkan-icd-loader", "tool": "packages_install"},
+            {"title": "Te prévenir quand tout est prêt", "description": "Une notification.", "tool": "notify"},
+        ]}),
+        json!({"event": "step", "id": "a", "tool": "packages_list", "summary": "{}", "state": "waiting", "plan": 0}),
+        json!({"event": "state", "id": "a", "state": "granted", "level": "lecture"}),
+        json!({"event": "state", "id": "a", "state": "done"}),
+        json!({"event": "step", "id": "b", "tool": "packages_install", "summary": "{}", "state": "waiting", "plan": 1}),
+    ] {
+        let _ = launcher.update(Message::Sherlock(event));
+    }
+    settled(&mut launcher);
+    {
+        let mut ui = Simulator::with_size(
+            launcher::settings(),
+            (look::WIDTH, launcher.height()),
+            launcher.view_panel(),
+        );
+        assert!(ui.find("Vérifier ce qui est déjà installé").is_ok());
+        assert!(ui.find("Libre · fait").is_ok());
+        assert!(ui.find("Attend ton accord").is_ok());
+        assert!(ui.find("Prévue").is_ok());
+    }
+    assert!(capture(&launcher, "launcher-plan").expect("screenshot written") > 2_000);
 }
