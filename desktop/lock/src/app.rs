@@ -31,8 +31,9 @@ use system_services::secret::Secret;
 
 use crate::background::{Picture, Pictures};
 use crate::form::{self, Form, Input, Outcome};
-use crate::machine::{Armed, Machine, Runner};
+use crate::machine::{Armed, Departure, Machine, Runner};
 use crate::pam::{AuthError, Authenticator};
+use crate::status::Status;
 use crate::view::{self, Avatar, color_of, fade, rise, spinner};
 
 /// The elements of the screen, from the time (0) to the machine buttons.
@@ -136,6 +137,10 @@ pub enum Message {
     Rescaled(f32),
     /// The theme of the appearance file.
     Theme(color::Theme),
+    /// The network, the layout and the battery, read again (lot D-25i).
+    Status(Status),
+    /// Long after a restart or a power off ran: the screen may come back.
+    GiveUp,
 }
 
 /// The time shown, to the minute.
@@ -195,6 +200,10 @@ pub struct Lock {
     primary: Option<window::Id>,
     clock: Clock,
     armed: Armed,
+    /// The line of the bottom corner, once read (lot D-25i).
+    status: Option<Status>,
+    /// A restart or a power off on its way: Sherlock waves, the screen goes black.
+    departure: Option<Departure>,
     /// When the screen came: the clock of the animations.
     start: Instant,
     now: Instant,
@@ -252,6 +261,8 @@ impl Lock {
             primary: None,
             clock: Clock::now().unwrap_or_default(),
             armed: Armed::default(),
+            status: None,
+            departure: None,
             start: now,
             now,
             wall: Instant::now,
@@ -321,7 +332,16 @@ impl Lock {
 
     /// What Sherlock shows now.
     pub fn mood(&self) -> sherlock_3d::Mood {
+        if self.departure.is_some() {
+            // He waves goodbye before the machine stops (lot D-25i).
+            return sherlock_3d::Mood::Wave;
+        }
         form::mood(self.field(), self.elapsed())
+    }
+
+    /// The restart or power off on its way, if any.
+    pub fn departure(&self) -> Option<Departure> {
+        self.departure
     }
 
     fn field(&self) -> form::Field {
@@ -391,7 +411,7 @@ impl Lock {
         self.clock = clock;
     }
 
-    fn elapsed(&self) -> Duration {
+    pub fn elapsed(&self) -> Duration {
         self.now.saturating_duration_since(self.start)
     }
 
@@ -415,7 +435,8 @@ impl Lock {
             Phase::Refused(at, _) => t < at + ui::SHAKE + Duration::from_millis(400),
             Phase::Leaving(_) => true,
         };
-        entrance || form || phase || gaze || picture || self.theme.running()
+        let departure = self.departure.is_some_and(|d| d.animating(t));
+        entrance || form || phase || gaze || picture || departure || self.theme.running()
     }
 
     /// Reads the background once the screens are known, or again for a larger screen: at the
@@ -465,6 +486,7 @@ impl Lock {
             ticks,
             appearance,
             Subscription::run(clock).map(Message::Clock),
+            Subscription::run(status_line).map(Message::Status),
             iced::event::listen_with(on_event),
         ])
     }
@@ -536,9 +558,15 @@ impl Lock {
                 self.phase = Phase::Refused(self.elapsed(), refusal);
                 return self.focus_field();
             }
+            Message::Machine(_) if self.departure.is_some() => {}
             Message::Machine(machine) => {
                 let now = Instant::now();
-                if self.armed.click(machine, now) {
+                if self.armed.click(machine, now) && crate::machine::departs(machine) {
+                    // Sherlock waves, the screen fades to black, then the command (`depart`).
+                    tracing::info!(verb = machine.verb(), "machine command, after the wave");
+                    self.departure = Some(Departure::new(machine, self.elapsed()));
+                } else if self.armed.get().is_none() {
+                    // Confirmed (a click that only arms leaves the button armed).
                     tracing::info!(verb = machine.verb(), "machine command");
                     if machine == Machine::Sleep {
                         // Nothing typed waits for whoever opens the lid.
@@ -589,6 +617,13 @@ impl Lock {
                 self.background = Some((handle(dark), handle(light)));
                 self.background_at = self.drawn.then(|| self.elapsed());
             }
+            Message::Status(status) => self.status = Some(status),
+            Message::GiveUp => {
+                if self.departure.is_some_and(|d| d.given_up(self.elapsed())) {
+                    tracing::warn!("still here after the machine command: the screen comes back");
+                    self.departure = None;
+                }
+            }
             Message::Frame(now) => {
                 if self.first_frame(now) {
                     // The field takes the keyboard with the first frame, whatever came before.
@@ -596,6 +631,9 @@ impl Lock {
                 }
                 self.now = now;
                 self.theme.tick(now);
+                if let Some(task) = self.depart() {
+                    return task;
+                }
                 if let Phase::Leaving(at) = self.phase
                     && self.elapsed() >= at + ui::exit_length(LAST)
                 {
@@ -611,6 +649,21 @@ impl Lock {
             _ => {}
         }
         Task::none()
+    }
+
+    /// Runs the restart or power off once the screen is black, and wakes up when it should have
+    /// happened long ago.
+    fn depart(&mut self) -> Option<Task<Message>> {
+        let now = self.elapsed();
+        let departure = self.departure.as_mut()?;
+        if !departure.due(now) {
+            return None;
+        }
+        self.runner.run(departure.machine);
+        let wait = departure.give_up_in(now);
+        Some(Task::perform(crate::machine::after(wait), |()| {
+            Message::GiveUp
+        }))
     }
 
     /// The first frame, at `now`: a lock screen slower than the curtain starts its entrance
@@ -817,10 +870,15 @@ impl Lock {
         let opacity = self.background_at.map_or(1.0, |at| {
             view::picture_opacity(self.elapsed().saturating_sub(at))
         });
-        stack![view::backdrop(self.background.as_ref(), opacity), page]
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into()
+        let mut layers = stack![view::backdrop(self.background.as_ref(), opacity), page];
+        if primary && form {
+            let line = view::status_line(self.status.as_ref(), &colors, self.presence(4));
+            layers = layers.push(view::in_corner(line));
+        }
+        if let Some(departure) = self.departure {
+            layers = layers.push(view::black(departure.black(self.elapsed())));
+        }
+        layers.width(Length::Fill).height(Length::Fill).into()
     }
 
     /// The rescue screen: its line, and on the screen of the pointer the name and the field, in
@@ -1123,6 +1181,11 @@ fn ticks() -> mpsc::UnboundedReceiver<(Instant, Duration)> {
         tracing::warn!("ticks: {err}");
     }
     receiver
+}
+
+/// The network, the layout and the battery of the bottom corner (lot D-25i).
+pub fn status_line() -> mpsc::UnboundedReceiver<Status> {
+    crate::status::watch(crate::status::Sources::machine())
 }
 
 /// The time, read again every few seconds on a thread of its own: sent when the minute changes.
