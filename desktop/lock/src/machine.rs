@@ -7,6 +7,7 @@ use std::process::Command;
 use std::time::{Duration, Instant};
 
 use sherlock_ui::launcher::CONFIRM_DELAY;
+use sherlock_ui::lock::screen::{DEPART_FADE, DEPART_GIVE_UP, DEPART_WAVE};
 
 /// What a machine button does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -84,6 +85,74 @@ impl Armed {
     }
 }
 
+/// A restart or a power off on its way (lot D-25i): Sherlock waves, the screen fades to black,
+/// then the command runs; the screen comes back if the machine is still there long after.
+/// Times are since the start of the screen, as its other animations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Departure {
+    pub machine: Machine,
+    at: Duration,
+    ran: bool,
+}
+
+impl Departure {
+    pub fn new(machine: Machine, at: Duration) -> Self {
+        Self {
+            machine,
+            at,
+            ran: false,
+        }
+    }
+
+    /// How black the screen is at `now`, from 0 to 1.
+    pub fn black(&self, now: Duration) -> f32 {
+        let since = now.saturating_sub(self.at);
+        let fading = since.saturating_sub(DEPART_WAVE).as_secs_f32() / DEPART_FADE.as_secs_f32();
+        sherlock_ui::motion::Ease::InQuad.apply(fading.clamp(0.0, 1.0))
+    }
+
+    /// `true` once, when the screen is black: the command runs then.
+    pub fn due(&mut self, now: Duration) -> bool {
+        let due = !self.ran && now >= self.at + DEPART_WAVE + DEPART_FADE;
+        self.ran |= due;
+        due
+    }
+
+    /// Still something to draw at `now`: Sherlock's wave and the fade.
+    pub fn animating(&self, now: Duration) -> bool {
+        now <= self.at + DEPART_WAVE + DEPART_FADE + Duration::from_millis(50)
+    }
+
+    /// The machine is still there long after the command: the screen comes back.
+    pub fn given_up(&self, now: Duration) -> bool {
+        now >= self.at + DEPART_WAVE + DEPART_FADE + DEPART_GIVE_UP
+    }
+
+    /// When `given_up` turns true, for a wake-up timer.
+    pub fn give_up_in(&self, now: Duration) -> Duration {
+        (self.at + DEPART_WAVE + DEPART_FADE + DEPART_GIVE_UP).saturating_sub(now)
+    }
+}
+
+/// Whether a confirmed machine button leaves with Sherlock's wave and the fade to black.
+pub fn departs(machine: Machine) -> bool {
+    matches!(machine, Machine::Reboot | Machine::PowerOff)
+}
+
+/// Waits `delay` on a thread of its own (never in the tests, which only call `update`).
+pub async fn after(delay: Duration) {
+    let (sender, receiver) = iced::futures::channel::oneshot::channel();
+    let spawned = std::thread::Builder::new()
+        .name("timer".into())
+        .spawn(move || {
+            std::thread::sleep(delay);
+            let _ = sender.send(());
+        });
+    if spawned.is_ok() {
+        let _ = receiver.await;
+    }
+}
+
 /// How long an armed button waits for its second click.
 pub const ARMED_FOR: Duration = Duration::from_secs(4);
 
@@ -106,5 +175,25 @@ mod tests {
         assert!(!armed.click(Machine::Sleep, later));
         assert!(!armed.click(Machine::Reboot, later + CONFIRM_DELAY));
         assert_eq!(armed.get(), Some(Machine::Reboot));
+    }
+
+    #[test]
+    fn a_departure_waves_fades_to_black_runs_once_and_gives_up() {
+        let at = Duration::from_secs(10);
+        let mut departure = Departure::new(Machine::PowerOff, at);
+        assert_eq!(
+            departure.black(at + DEPART_WAVE / 2),
+            0.0,
+            "Sherlock waves first"
+        );
+        assert!(!departure.due(at + DEPART_WAVE));
+        let black = at + DEPART_WAVE + DEPART_FADE;
+        assert_eq!(departure.black(black), 1.0);
+        assert!(departure.due(black));
+        assert!(!departure.due(black + Duration::from_secs(1)), "once");
+        assert!(!departure.animating(black + Duration::from_secs(1)));
+        assert!(!departure.given_up(black + Duration::from_secs(1)));
+        assert!(departure.given_up(black + DEPART_GIVE_UP));
+        assert!(departs(Machine::Reboot) && !departs(Machine::Sleep));
     }
 }

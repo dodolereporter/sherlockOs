@@ -190,3 +190,78 @@ pub fn color_of(color: IcedColor) -> Color {
         a: color.a,
     }
 }
+
+/// The discreet line of the bottom corner (lot D-25i): the network, the keyboard layout and the
+/// battery, in the secondary color, `presence` opaque; nothing before the first read.
+pub fn status_line<'a, Message: 'a>(
+    status: Option<&crate::status::Status>,
+    colors: &Colors,
+    presence: f32,
+) -> Element<'a, Message> {
+    use crate::status::Network;
+    use sherlock_ui::icon::{BatteryMark, WifiMark, wifi_level, wifi_svg};
+    let Some(status) = status else {
+        return Space::new().into();
+    };
+    let tint = color_of(fade(colors.secondary, presence));
+    let network: Element<'a, Message> = match status.network {
+        Network::Wired => sherlock_ui::component::icon(Icon::Network, ui::STATUS_ICON, tint).into(),
+        Network::Wireless(signal) => sherlock_ui::component::live_icon_sized(
+            vec![wifi_svg(wifi_level(signal), WifiMark::None)],
+            ui::STATUS_ICON,
+            tint,
+        ),
+        Network::Offline => sherlock_ui::component::live_icon_sized(
+            vec![wifi_svg(0, WifiMark::Off)],
+            ui::STATUS_ICON,
+            tint,
+        ),
+    };
+    let mut line = iced::widget::row![
+        network,
+        text(status.layout.clone())
+            .size(ui::STATUS_TEXT_SIZE)
+            .font(Font {
+                weight: iced::font::Weight::Semibold,
+                ..typography::UI
+            })
+            .color(tint),
+    ]
+    .spacing(ui::STATUS_GAP)
+    .align_y(iced::Alignment::Center);
+    if let Some(battery) = status.battery {
+        let mark = match (battery.charging, battery.plugged) {
+            (true, _) => BatteryMark::Charging,
+            (false, true) => BatteryMark::Plugged,
+            _ => BatteryMark::None,
+        };
+        line = line.push(sherlock_ui::component::battery(
+            battery.percent,
+            mark,
+            Some(sherlock_ui::strings::percent(battery.percent)),
+            tint,
+        ));
+    }
+    line.into()
+}
+
+/// The line in the bottom right corner of a screen, over everything else.
+pub fn in_corner<'a, Message: 'a>(line: Element<'a, Message>) -> Element<'a, Message> {
+    container(line)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .align_x(iced::Alignment::End)
+        .align_y(iced::Alignment::End)
+        .padding(ui::STATUS_MARGIN)
+        .into()
+}
+
+/// Black over the whole screen, `opacity` opaque: towards a restart or a power off.
+pub fn black<'a, Message: 'a>(opacity: f32) -> Element<'a, Message> {
+    container(Space::new().width(Length::Fill).height(Length::Fill))
+        .style(move |_| container::Style {
+            background: Some(Background::Color(fade(ui::DEPART_BLACK, opacity))),
+            ..container::Style::default()
+        })
+        .into()
+}

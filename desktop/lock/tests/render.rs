@@ -372,12 +372,76 @@ mod tests {
     #[test]
     fn a_machine_button_asks_for_a_second_click() {
         let mut s = screen((1920.0, 1080.0));
+        // Drawn once: the clock of the animations runs from the frames.
+        let _ = s.lock.update(Message::Frame(Instant::now()));
         let _ = s.lock.update(Message::Machine(Machine::PowerOff));
         assert_eq!(s.lock.armed(), Some(Machine::PowerOff));
         assert!(s.runner.0.lock().unwrap().is_empty());
         std::thread::sleep(sherlock_ui::launcher::CONFIRM_DELAY);
         let _ = s.lock.update(Message::Machine(Machine::PowerOff));
-        assert_eq!(*s.runner.0.lock().unwrap(), [Machine::PowerOff]);
+        // Sherlock waves first, the screen fades to black, then the command runs (D-25i).
+        assert!(s.runner.0.lock().unwrap().is_empty());
+        assert_eq!(s.lock.mood(), Mood::Wave);
+        let _ = s.lock.update(Message::Machine(Machine::Reboot));
+        assert_eq!(s.lock.armed(), None, "nothing else while it leaves");
+        let black = Instant::now() + Duration::from_secs(5);
+        let _ = s.lock.update(Message::Frame(black));
+        let _ = s.lock.update(Message::Frame(black));
+        let _ = s
+            .lock
+            .update(Message::Frame(black + Duration::from_secs(1)));
+        assert_eq!(*s.runner.0.lock().unwrap(), [Machine::PowerOff], "once");
+        // Still there long after: the screen comes back.
+        s.lock.set_now(black + Duration::from_secs(30));
+        let _ = s.lock.update(Message::GiveUp);
+        assert!(s.lock.departure().is_none());
+    }
+
+    /// The discreet line of the bottom corner (D-25i): Wi-Fi, « FR » and the battery, with the
+    /// form, at two sizes; then the fade to black of a power off, halfway. `lock-status-1920`,
+    /// `lock-status-1280`, `lock-departing`.
+    #[test]
+    fn the_status_line_shows_and_the_screen_fades_out_to_power_off() {
+        use lock::status::{Battery, Network, Status};
+        for size in [(1920.0, 1080.0), (1280.0, 800.0)] {
+            let mut s = screen(size);
+            show_form(&mut s);
+            let _ = s.lock.update(Message::Status(Status {
+                network: Network::Wireless(80),
+                layout: "FR".into(),
+                battery: Some(Battery {
+                    percent: 72,
+                    charging: false,
+                    plugged: false,
+                }),
+            }));
+            let name = format!("lock-status-{}", size.0 as u32);
+            let written = snapshot(&s.lock, s.primary, size, &name);
+            // The lower half, at a quarter of its side: small enough for the review.
+            let full = image::open(&written).unwrap();
+            let (w, h) = (full.width(), full.height());
+            let half = full.crop_imm(0, h / 2, w, h / 2);
+            let small = half.resize(w / 4, h / 8, image::imageops::FilterType::Triangle);
+            small
+                .save(written.with_file_name(format!("{name}-review.png")))
+                .unwrap();
+            {
+                let mut ui = Simulator::with_size(lock::settings(), size, s.lock.view(s.primary));
+                assert!(ui.find("FR").is_ok() && ui.find("72\u{202F}%").is_ok());
+            }
+            if size.0 < 1900.0 {
+                continue;
+            }
+            let _ = s.lock.update(Message::Machine(Machine::PowerOff));
+            std::thread::sleep(sherlock_ui::launcher::CONFIRM_DELAY);
+            let _ = s.lock.update(Message::Machine(Machine::PowerOff));
+            let departure = s.lock.departure().expect("leaving");
+            let half =
+                sherlock_ui::lock::screen::DEPART_WAVE + sherlock_ui::lock::screen::DEPART_FADE / 2;
+            s.lock.set_elapsed(s.lock.elapsed() + half);
+            assert!(departure.black(s.lock.elapsed()) > 0.1);
+            snapshot(&s.lock, s.primary, size, "lock-departing");
+        }
     }
 
     /// The toolkit unlocks on every clean exit: only PAM's acceptance may lead to `UnLock` and
