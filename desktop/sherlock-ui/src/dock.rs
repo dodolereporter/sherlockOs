@@ -174,6 +174,28 @@ pub mod text {
     // The downloads stack (D-21k).
     pub const OPEN_IN_EVIDENCE: &str = "Ouvrir dans Evidence";
     pub const STACK_EMPTY: &str = "Aucun fichier";
+    // The menu of the stack, as macOS's (D-21k2): its headings, their choices.
+    pub const SORT_BY: &str = "Trier par";
+    pub const SORT_NAME: &str = "Nom";
+    pub const SORT_ADDED: &str = "Date d'ajout";
+    pub const SORT_MODIFIED: &str = "Date de modification";
+    pub const SORT_CREATED: &str = "Date de création";
+    pub const SORT_KIND: &str = "Type";
+    pub const DISPLAY_AS: &str = "Afficher comme";
+    pub const DISPLAY_FOLDER: &str = "Dossier";
+    pub const DISPLAY_STACK: &str = "Pile";
+    pub const VIEW_AS: &str = "Présenter le contenu comme";
+    pub const VIEW_FAN: &str = "Éventail";
+    pub const VIEW_GRID: &str = "Grille";
+    pub const VIEW_LIST: &str = "Liste";
+    pub const VIEW_AUTOMATIC: &str = "Automatique";
+    pub const REMOVE_FROM_DOCK: &str = "Retirer du Dock";
+    /// The dock's own menu: the stack back in the dock.
+    pub const SHOW_DOWNLOADS: &str = "Afficher les téléchargements dans le Dock";
+    /// « Ouvrir « Téléchargements » », with the folder's name.
+    pub fn open_folder(name: &str) -> String {
+        format!("Ouvrir « {name} »")
+    }
     pub const QUIT: &str = "Quitter";
     // The options of an icon and the end of its menu (D-21i).
     pub const OPTIONS: &str = "Options";

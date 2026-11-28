@@ -6,6 +6,8 @@
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
+use dock_config::stack::Sort;
+
 use iced::futures::Stream;
 use iced::futures::channel::mpsc;
 use sherlock_ui::icon::Icon;
@@ -37,7 +39,7 @@ pub struct Shown {
 
 /// The downloads stack, each time its folder changes; `None` without a downloads folder. The
 /// thread stops when the stream is dropped.
-pub fn watch(home: PathBuf, config_home: PathBuf) -> impl Stream<Item = Option<Stack>> {
+pub fn watch(home: PathBuf, config_home: PathBuf, sort: Sort) -> impl Stream<Item = Option<Stack>> {
     let (sender, receiver) = mpsc::unbounded();
     let spawned = std::thread::Builder::new()
         .name(String::from("watch-stack"))
@@ -54,7 +56,7 @@ pub fn watch(home: PathBuf, config_home: PathBuf) -> impl Stream<Item = Option<S
                 Some(Stack {
                     folder: folder.clone(),
                     name: name.clone(),
-                    items: newest(&folder),
+                    items: newest(&folder, sort),
                 })
             };
             if let Err(error) = crate::trash::follow(&folder, read, &sender) {
@@ -89,9 +91,11 @@ pub fn downloads(home: &Path, config_home: &Path) -> Option<PathBuf> {
         .filter(|path| path.is_dir())
 }
 
-/// The newest items of `folder`, hidden ones left out, `MAX_SHOWN` at most among the first
-/// `MAX_LOOKED_AT` entries.
-pub fn newest(folder: &Path) -> Vec<Shown> {
+/// The first items of `folder` in the order `sort` (lot D-21k2: the dates newest first, the
+/// name and the kind in alphabetical order), hidden ones left out, `MAX_SHOWN` at most among
+/// the first `MAX_LOOKED_AT` entries.
+pub fn newest(folder: &Path, sort: Sort) -> Vec<Shown> {
+    use std::os::unix::fs::MetadataExt;
     let Ok(dir) = std::fs::read_dir(folder) else {
         return Vec::new();
     };
@@ -104,7 +108,16 @@ pub fn newest(folder: &Path) -> Vec<Shown> {
                 return None;
             }
             let meta = entry.metadata().ok()?;
-            let when = meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
+            let modified = meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
+            let when = match sort {
+                // Its status change: when it came into the folder (moved or written there).
+                Sort::Added => {
+                    let secs = u64::try_from(meta.ctime()).unwrap_or(0);
+                    SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(secs)
+                }
+                Sort::Created => meta.created().unwrap_or(modified),
+                _ => modified,
+            };
             let icon = icon_of(&name, meta.is_dir());
             Some((
                 when,
@@ -117,7 +130,23 @@ pub fn newest(folder: &Path) -> Vec<Shown> {
             ))
         })
         .collect();
-    found.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.name.cmp(&b.1.name)));
+    let kind = |name: &str| {
+        let extension = Path::new(name)
+            .extension()
+            .map(|e| e.to_string_lossy().to_lowercase());
+        extension.unwrap_or_default()
+    };
+    match sort {
+        Sort::Name => found.sort_by_key(|a| a.1.name.to_lowercase()),
+        Sort::Kind => found.sort_by(|a, b| {
+            (!a.1.folder, kind(&a.1.name), a.1.name.to_lowercase()).cmp(&(
+                !b.1.folder,
+                kind(&b.1.name),
+                b.1.name.to_lowercase(),
+            ))
+        }),
+        _ => found.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.name.cmp(&b.1.name))),
+    }
     found
         .into_iter()
         .take(MAX_SHOWN)
@@ -230,12 +259,29 @@ mod tests {
                 .unwrap();
         }
         std::fs::create_dir(folder.join("folder")).unwrap();
-        let names: Vec<String> = newest(&folder).into_iter().map(|s| s.name).collect();
+        let names: Vec<String> = newest(&folder, Sort::Modified)
+            .into_iter()
+            .map(|s| s.name)
+            .collect();
         assert_eq!(names[..4], ["folder", "new.zip", "photo.png", "old.pdf"]);
-        let icons: Vec<Icon> = newest(&folder).into_iter().map(|s| s.icon).collect();
+        let icons: Vec<Icon> = newest(&folder, Sort::Modified)
+            .into_iter()
+            .map(|s| s.icon)
+            .collect();
         assert_eq!(
             icons,
             [Icon::Folder, Icon::Document, Icon::Image, Icon::Document]
+        );
+        // By name, by kind (the folders first, then by extension).
+        let by =
+            |sort| -> Vec<String> { newest(&folder, sort).into_iter().map(|s| s.name).collect() };
+        assert_eq!(
+            by(Sort::Name),
+            ["folder", "new.zip", "old.pdf", "photo.png"]
+        );
+        assert_eq!(
+            by(Sort::Kind),
+            ["folder", "old.pdf", "photo.png", "new.zip"]
         );
         assert_eq!(names.len(), 4, "the hidden one is left out");
         std::fs::remove_dir_all(&root).unwrap();
