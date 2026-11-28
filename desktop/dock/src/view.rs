@@ -266,7 +266,10 @@ impl Dock {
             .map(|(index, item)| {
                 let picture =
                     ui::icon(item.icon, dock::STACK_ICON, color::palette().text_secondary);
-                dock::stack_cell(picture, &item.name, Message::StackOpen(index))
+                pullable(
+                    index,
+                    dock::stack_cell(picture, &item.name, Message::StackOpen(index)),
+                )
             })
             .collect();
         let mut rows = iced::widget::Column::new().spacing(dock::STACK_GAP);
@@ -341,6 +344,7 @@ impl Dock {
                 .padding(0)
                 .style(|_, _| iced::widget::button::Style::default())
                 .on_press(Message::StackOpen(index));
+            let button = pullable(index, button);
             // Out of the icon: from the bottom, later for the higher rows; the spring overshoots
             // a little past 1, then settles on it.
             let delay = dock::FAN_STAGGER * index as f32;
@@ -383,7 +387,7 @@ impl Dock {
                 trailing,
                 Some(Message::StackOpen(index)),
             );
-            entries.push(line.into());
+            entries.push(pullable(index, line));
         }
         entries.push(ui::menu_separator());
         entries.push(
@@ -398,6 +402,15 @@ impl Dock {
             .height(Length::Fill)
             .into()
     }
+}
+
+/// Item `index` of the stack's content, which can be pulled out to an application (lot D-21k2):
+/// the dock learns which item the pointer is over.
+fn pullable<'a>(index: usize, item: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
+    iced::widget::mouse_area(item)
+        .on_enter(Message::StackHover(Some(index)))
+        .on_exit(Message::StackHover(None))
+        .into()
 }
 
 fn place<'a>(content: impl Into<Element<'a, Message>>, x: f32, y: f32) -> Element<'a, Message> {
