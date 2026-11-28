@@ -155,7 +155,11 @@ impl State {
         if self.curtain.motion == Motion::Opening(None) {
             self.curtain.motion = match (self.greeter, self.curtain.pictures.is_some()) {
                 (true, _) => Motion::Down,
-                (false, true) => Motion::Opening(Some(now)),
+                (false, true) => {
+                    // The desktop shows from under the curtain once it is back from black.
+                    self.reveal_desktop(now + CURTAIN_BLACK);
+                    Motion::Opening(Some(now))
+                }
                 (false, false) => Motion::Up,
             };
         }
@@ -211,6 +215,7 @@ impl State {
     pub(crate) fn raise_curtain(&mut self) {
         self.curtain.frozen.clear();
         self.curtain.motion = Motion::Raising(self.now());
+        self.reveal_desktop(self.now());
     }
 
     /// The login screen left: the curtain fades to black.

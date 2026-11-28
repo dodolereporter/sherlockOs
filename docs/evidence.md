@@ -168,6 +168,12 @@ are built once (`sherlock_ui::component::icon` caches the SVG handles).
     swings that die out) and says why in the status bar; the field stays open;
   - Escape, a click in the listing, or a navigation give the breadcrumb back.
 
+  « … » opens a menu of the folders it folds, as Finder's path bar does. The sheet lists the
+  last 10 folders reached by the field while nothing completes (for the session). The arrows
+  scroll the completion list to keep the picked folder in sight. Below 1000 px, the search
+  folds to its icon until it is used (a click, or Ctrl+F); Escape or a new folder folds it
+  back, and the path bar takes its room (lot E-04c).
+
   The breadcrumb and the field cross-fade (160 ms each way); the list fades and slides in and
   out; the sheet comes down and fades, over a dimmed window.
 

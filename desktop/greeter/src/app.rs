@@ -19,7 +19,8 @@ use iced::{
 use iced_exwlshell::to_exwlshell_message;
 use lock::app::{Clock, Mascot, Phase, Refusal};
 use lock::background::{Picture, Pictures};
-use lock::machine::{Armed, Machine, Runner};
+use lock::machine::{Armed, Departure, Machine, Runner};
+use lock::status::Status;
 use lock::view::{self, Avatar, color_of, fade, rise, spinner};
 use sherlock_ui::color;
 use sherlock_ui::component;
@@ -90,6 +91,10 @@ pub enum Message {
     Theme(color::Theme),
     /// What AccountsService says, once it answered.
     Accounts(Vec<Account>),
+    /// The network, the layout and the battery, read again (lot D-25i).
+    Status(Status),
+    /// Long after a restart or a power off ran: the screen may come back.
+    GiveUp,
 }
 
 /// A key the screen treats apart: the arrows choose the user, Tab moves the focus between the
@@ -126,6 +131,10 @@ pub struct Greeter {
     primary: Option<window::Id>,
     clock: Clock,
     armed: Armed,
+    /// The line of the bottom corner, once read (lot D-25i).
+    status: Option<Status>,
+    /// A restart or a power off on its way: Sherlock waves, the screen goes black.
+    departure: Option<Departure>,
     start: Instant,
     now: Instant,
     /// A key ended the entrance.
@@ -185,6 +194,8 @@ impl Greeter {
             primary: None,
             clock: Clock::now().unwrap_or_default(),
             armed: Armed::default(),
+            status: None,
+            departure: None,
             start: now,
             now,
             entered: false,
@@ -273,7 +284,16 @@ impl Greeter {
 
     /// What Sherlock shows now: the moods of the lock screen.
     pub fn mood(&self) -> sherlock_3d::Mood {
+        if self.departure.is_some() {
+            // He waves goodbye before the machine stops (lot D-25i).
+            return sherlock_3d::Mood::Wave;
+        }
         lock::form::mood(self.field(), self.elapsed())
+    }
+
+    /// The restart or power off on its way, if any.
+    pub fn departure(&self) -> Option<Departure> {
+        self.departure
     }
 
     fn field(&self) -> lock::form::Field {
@@ -317,6 +337,7 @@ impl Greeter {
             || recent(self.last_key, screen::TYPING_GAZE)
             || recent(picture, screen::PICTURE_FADE)
             || phase
+            || self.departure.is_some_and(|d| d.animating(t))
             || self.theme.running()
     }
 
@@ -351,6 +372,7 @@ impl Greeter {
         Subscription::batch([
             frames,
             Subscription::run(lock::app::clock).map(Message::Clock),
+            Subscription::run(lock::app::status_line).map(Message::Status),
             iced::event::listen_with(on_event),
         ])
     }
@@ -513,12 +535,26 @@ impl Greeter {
                 self.show_others = !self.show_others;
                 return self.focus();
             }
+            Message::Machine(_) if self.departure.is_some() => {}
             Message::Machine(machine) => {
                 if self.armed.click(machine, Instant::now()) {
-                    tracing::info!(verb = machine.verb(), "machine command");
-                    self.runner.run(machine);
+                    if lock::machine::departs(machine) {
+                        // Sherlock waves, the screen fades to black, then the command.
+                        tracing::info!(verb = machine.verb(), "machine command, after the wave");
+                        self.departure = Some(Departure::new(machine, self.elapsed()));
+                    } else {
+                        tracing::info!(verb = machine.verb(), "machine command");
+                        self.runner.run(machine);
+                    }
                 }
                 return self.focus();
+            }
+            Message::Status(status) => self.status = Some(status),
+            Message::GiveUp => {
+                if self.departure.is_some_and(|d| d.given_up(self.elapsed())) {
+                    tracing::warn!("still here after the machine command: the screen comes back");
+                    self.departure = None;
+                }
             }
             Message::Clock(clock) => {
                 self.clock = clock;
@@ -549,6 +585,14 @@ impl Greeter {
                 }
                 self.now = now;
                 self.theme.tick(now);
+                let elapsed = self.elapsed();
+                if let Some(departure) = self.departure.as_mut()
+                    && departure.due(elapsed)
+                {
+                    self.runner.run(departure.machine);
+                    let wait = departure.give_up_in(elapsed);
+                    return Task::perform(lock::machine::after(wait), |()| Message::GiveUp);
+                }
                 if let Phase::Leaving(at) = self.phase
                     && self.elapsed() >= at + ui::SUCCESS_HOLD + screen::exit_length(LAST)
                 {
@@ -732,10 +776,16 @@ impl Greeter {
         let opacity = self.background_at.map_or(1.0, |at| {
             view::picture_opacity(self.elapsed().saturating_sub(at))
         });
-        stack![view::backdrop(self.background.as_ref(), opacity), page]
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .into()
+        let line = view::status_line(self.status.as_ref(), &colors, self.presence(5));
+        let mut layers = stack![
+            view::backdrop(self.background.as_ref(), opacity),
+            page,
+            view::in_corner(line)
+        ];
+        if let Some(departure) = self.departure {
+            layers = layers.push(view::black(departure.black(self.elapsed())));
+        }
+        layers.width(Length::Fill).height(Length::Fill).into()
     }
 
     /// Sherlock in his bubble, the same avatar as on the lock screen (`lock::view::bubble`). He

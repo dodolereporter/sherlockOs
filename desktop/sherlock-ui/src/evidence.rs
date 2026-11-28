@@ -82,6 +82,11 @@ pub const COMPLETION_MAX_ENTRIES: usize = 20_000;
 pub const COMPLETION_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(500);
 /// Folders offered at most in the list.
 pub const COMPLETION_MAX_SHOWN: usize = 200;
+/// Folders the « Aller au dossier » sheet remembers.
+pub const RECENT_FOLDERS: usize = 10;
+/// Below this window width, the search folds to its icon until it is used, and the path bar
+/// takes its room.
+pub const SEARCH_COMPACT_WIDTH: f32 = 1000.0;
 /// Width of the « Aller au dossier » sheet.
 pub const GO_TO_WIDTH: f32 = 460.0;
 
