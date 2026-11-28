@@ -17,12 +17,12 @@ use sherlockd::scripted::ScriptedProvider;
 use sherlockd::test_server::{self, Mode};
 use sherlockd::window::CompositorWindow;
 use sherlockd::windows_server::{self, Compositor};
-use sherlockd::{containers_server, files_server, services_server};
+use sherlockd::{containers_server, files_server, services_server, settings_server};
 use tracing_subscriber::EnvFilter;
 
 const USAGE: &str = "usage: sherlockd --demo | --claude-code < request | --ask < request | --proxy \
      | --test-server [case] | --windows-server <socket> | --files-server [--settings <file>] \
-     | --containers-server [--socket <path>] | --services-server";
+     | --containers-server [--socket <path>] | --services-server | --settings-server";
 
 /// The longest request read on standard input.
 const MAX_REQUEST_BYTES: u64 = 64 * 1024;
@@ -109,6 +109,27 @@ fn main() -> anyhow::Result<()> {
             };
             services_server::run(&places).context("services server")
         }
+        // Started by sherlockd itself, on the session's settings (A-17).
+        ["--settings-server"] => {
+            settings_server::run(&settings_server::Places::default()).context("settings server")
+        }
+        // For the tests: a configuration folder, a fake pactl and a private system bus.
+        [
+            "--settings-server",
+            "--config-home",
+            home,
+            "--pactl",
+            pactl,
+            "--system-bus",
+            bus,
+        ] => {
+            let places = settings_server::Places {
+                config_home: Some(std::path::PathBuf::from(home)),
+                pactl: Some(std::ffi::OsString::from(pactl)),
+                system_bus: Some((*bus).to_owned()),
+            };
+            settings_server::run(&places).context("settings server")
+        }
         _ => bail!("{USAGE}"),
     }
 }
@@ -128,8 +149,8 @@ fn exe() -> anyhow::Result<String> {
     Ok(exe.to_owned())
 }
 
-/// Sherlock's MCP servers: the test server, the files (A-13), containers (A-14) and services
-/// (A-16) servers and, in a Wayland session, the windows server (A-12), all ours: their
+/// Sherlock's MCP servers: the test server, the files (A-13), containers (A-14), services (A-16)
+/// and settings (A-17) servers and, in a Wayland session, the windows server (A-12), all ours: their
 /// annotations are trusted (ADR 0015).
 async fn servers(window: Option<CompositorWindow>) -> anyhow::Result<McpServers> {
     let exe = exe()?;
@@ -179,6 +200,14 @@ async fn servers(window: Option<CompositorWindow>) -> anyhow::Result<McpServers>
     match McpClient::spawn(&config).await {
         Ok(client) => servers.add(client).await.context("services tools")?,
         Err(error) => tracing::warn!(%error, "no services server"),
+    }
+    // Every setting of Control Room, by its functions (A-17).
+    let config = ServerConfig::new("settings", &exe, &["--settings-server"])
+        .timeout(Duration::from_secs(90))
+        .ours();
+    match McpClient::spawn(&config).await {
+        Ok(client) => servers.add(client).await.context("settings tools")?,
+        Err(error) => tracing::warn!(%error, "no settings server"),
     }
     if let Some(socket) = windows.as_deref().and_then(std::path::Path::to_str) {
         let config = ServerConfig::new("windows", &exe, &["--windows-server", socket])
