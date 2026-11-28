@@ -661,10 +661,32 @@ impl App {
                 .width(Length::Fill)
                 .into(),
         };
-        let name = row![ui::icon(entry.icon(), metrics::LIST_ICON, tint), name]
-            .spacing(metrics::GAP_ICON)
-            .align_y(Alignment::Center)
-            .width(Length::Fill);
+        // The triangle of a folder, turned down once unfolded, a step to the right for each
+        // level (lot E-13d).
+        let triangle: Element<'a, Message> = if entry.kind == Kind::Folder {
+            let turn = if self.is_unfolded(&entry.path) {
+                Icon::ChevronDown
+            } else {
+                Icon::Chevron
+            };
+            let glyph = ui::icon(turn, more::DISCLOSURE, color::palette().text_tertiary);
+            mouse_area(container(glyph).center(more::DISCLOSURE))
+                .on_press(Message::Disclose(entry.path.clone()))
+                .interaction(iced::mouse::Interaction::Pointer)
+                .into()
+        } else {
+            space().width(more::DISCLOSURE).into()
+        };
+        let indent = space().width(f32::from(entry.depth) * more::DISCLOSURE_INDENT);
+        let name = row![
+            indent,
+            triangle,
+            ui::icon(entry.icon(), metrics::LIST_ICON, tint),
+            name
+        ]
+        .spacing(metrics::GAP_ICON)
+        .align_y(Alignment::Center)
+        .width(Length::Fill);
         let [w_date, w_size, w_kind, w_last] = metrics::LIST_COLUMNS;
         let last: Element<'a, Message> = match (&entry.origin, entry.git) {
             (Some(origin), _) => ellipsis(self.origin_label(origin))

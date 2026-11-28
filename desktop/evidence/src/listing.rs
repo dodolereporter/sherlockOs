@@ -42,6 +42,8 @@ pub struct Entry {
     pub origin: Option<PathBuf>,
     /// Texts of the row, prepared on read: the view does no `stat` and no computation.
     pub labels: Labels,
+    /// How deep under the folder shown, in the list with folders unfolded (lot E-13d).
+    pub depth: u8,
 }
 
 /// Texts of a row of the listing.
@@ -86,6 +88,7 @@ impl Entry {
             git: None,
             origin: None,
             labels: Labels::default(),
+            depth: 0,
         };
         entry.relabel(clock::now());
         Ok(entry)
@@ -292,6 +295,7 @@ mod tests {
             git,
             origin: None,
             labels: Labels::default(),
+            depth: 0,
         };
         entry.relabel(None);
         entry

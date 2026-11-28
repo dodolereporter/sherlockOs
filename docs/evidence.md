@@ -325,9 +325,17 @@ are built once (`sherlock_ui::component::icon` caches the SVG handles).
   sideways (the wheel, the arrows; no bar, as the Finder's), of which only the tiles in sight
   are built. It always shows an item: the first when none is selected. Left and Right go from
   item to item; a click on a tile shows it; the lasso does nothing there. The preview's pane
-  slides away, as in the columns. Captures:
-  `the_grid_renders_headless`, `the_columns_render_headless` and
-  `the_gallery_renders_headless`, at 1366 × 768 and 720 × 460.
+  slides away, as in the columns.
+  In the list (lot E-13d), a folder has a triangle before its icon: pressed, the folder
+  unfolds, its items show under it a step to the right, read off the interface thread (its
+  first 2000, 16 levels at most), and pressed again it folds, its unfolded subfolders with it.
+  Right unfolds the folder selected alone, Left folds it, or goes up to the folder an item is
+  in. The items unfolded are items like the others: selected, opened, copied, dragged. They
+  show in the list only, not while searching, and fold when another folder opens; a refresh
+  reads them again. Captures:
+  `the_grid_renders_headless`, `the_columns_render_headless`,
+  `the_gallery_renders_headless` and `the_unfolded_list_renders_headless`, at 1366 × 768 and
+  720 × 460.
 - Network (lot E-07): a « Réseau » section of the sidebar lists the file servers of the local
   network, found without any tool installed (`network`): a multicast DNS question for
   `_smb._tcp.local` (Samba, macOS and NAS boxes, announced by Avahi or mDNSResponder) and a

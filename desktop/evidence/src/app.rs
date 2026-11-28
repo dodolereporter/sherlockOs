@@ -40,6 +40,7 @@ mod path;
 mod popup;
 pub use hint::HintTarget;
 mod columns;
+mod disclose;
 mod tabs;
 mod view_mode;
 pub use crate::views::ViewMode;
@@ -332,6 +333,10 @@ pub enum Message {
     Peeked(DirColumn),
     ColumnClick(usize, usize),
     PeekClick(usize),
+    /// The triangle of a folder in the list, pressed: unfold or fold it (lot E-13d); its items,
+    /// read.
+    Disclose(PathBuf),
+    Unfolded(PathBuf, Vec<Entry>),
     /// The gallery's strip scrolled sideways (lot E-13c).
     StripScrolled(f32),
     Key(keyboard::Event),
@@ -507,6 +512,8 @@ pub struct App {
     pub(crate) peek: Option<DirColumn>,
     /// How far the gallery's strip is scrolled (lot E-13c).
     strip_offset: f32,
+    /// The folders unfolded in the list (lot E-13d).
+    unfolded: disclose::Unfolded,
     /// The large preview is open, and its zoom in or out (lot E-12).
     pub(crate) looking: bool,
     pub(crate) look_fade: Option<Fade>,
@@ -642,6 +649,7 @@ impl App {
             column_dirs: Vec::new(),
             peek: None,
             strip_offset: 0.0,
+            unfolded: disclose::Unfolded::new(),
             looking: false,
             look_fade: None,
             preview_pinned: false,
@@ -1125,6 +1133,11 @@ impl App {
             Message::ColumnClick(depth, index) => return self.column_click(depth, index),
             Message::PeekClick(index) => return self.peek_click(index),
             Message::StripScrolled(x) => self.strip_offset = x,
+            Message::Disclose(path) => {
+                let open = !self.is_unfolded(&path);
+                return self.disclose(path, open);
+            }
+            Message::Unfolded(dir, children) => self.unfolded_read(dir, children),
             Message::Back => {
                 if let Some(previous) = self.history.pop() {
                     let current = std::mem::replace(&mut self.location, previous);
@@ -1655,6 +1668,7 @@ impl App {
         self.notice = None;
         self.fresh = true;
         self.scroll.0 = 0.0;
+        self.unfolded.clear();
         self.recall_view();
         let load = self.load(select);
         Task::batch([
@@ -1703,7 +1717,8 @@ impl App {
         );
         // The folders above it, in the columns view (lot E-13b).
         let columns = self.load_columns();
-        Task::batch([listing, git, check, columns])
+        let unfolded = self.reread_unfolded();
+        Task::batch([listing, git, check, columns, unfolded])
     }
 
     /// The content of the location has arrived.
@@ -1756,6 +1771,11 @@ impl App {
             .cloned()
             .collect();
         listing::sort(&mut self.entries, self.sort);
+        // The unfolded folders' items under each (lot E-13d); not while searching.
+        if needle.is_empty() && self.view_mode == ViewMode::List && !self.unfolded.is_empty() {
+            let top = std::mem::take(&mut self.entries);
+            self.entries = disclose::flatten(top, &self.unfolded);
+        }
         self.select_paths(&keep);
     }
 
@@ -1868,7 +1888,11 @@ impl App {
             return false;
         };
         let name = entry.name.chars().count() as f32 * typography::UI_CHAR_WIDTH;
-        let end = metrics::LIST_ROW_PADDING + metrics::LIST_ICON + metrics::GAP_ICON + name;
+        // After the step of its level and the triangle's room (lot E-13d).
+        let lead = f32::from(entry.depth) * more::DISCLOSURE_INDENT
+            + more::DISCLOSURE
+            + 2.0 * metrics::GAP_ICON;
+        let end = metrics::LIST_ROW_PADDING + lead + metrics::LIST_ICON + metrics::GAP_ICON + name;
         self.in_list(self.pointer).0 > end
     }
 
@@ -2433,6 +2457,13 @@ impl App {
             // As Cmd+1 to Cmd+4 in the Finder (lot E-13).
             Key::Character(c) if ctrl && let Some(mode) = ViewMode::from_digit(c) => {
                 self.set_view(mode)
+            }
+            // In the list, right unfolds the folder selected, left folds it (lot E-13d).
+            Key::Named(Named::ArrowRight) if self.view_mode == ViewMode::List => {
+                self.disclose_key(true)
+            }
+            Key::Named(Named::ArrowLeft) if self.view_mode == ViewMode::List => {
+                self.disclose_key(false)
             }
             // In the columns, right opens the folder selected and left goes up (lot E-13b).
             Key::Named(Named::ArrowRight)

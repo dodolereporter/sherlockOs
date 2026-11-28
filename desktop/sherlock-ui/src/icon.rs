@@ -82,6 +82,8 @@ pub enum Icon {
     Rows,
     Columns,
     Gallery,
+    /// The chevron turned down: a folder unfolded in Evidence's list (lot E-13d).
+    ChevronDown,
     Sidebar,
     /// A person: « Autre… » on the login screen (lot D-24).
     Person,
@@ -92,7 +94,7 @@ pub enum Icon {
 
 impl Icon {
     /// All the icons, for the tests and the gallery.
-    pub const ALL: [Self; 52] = [
+    pub const ALL: [Self; 53] = [
         Self::Chevron,
         Self::Check,
         Self::Search,
@@ -141,6 +143,7 @@ impl Icon {
         Self::Rows,
         Self::Columns,
         Self::Gallery,
+        Self::ChevronDown,
         Self::Sidebar,
         Self::Person,
         Self::Keyboard,
@@ -245,6 +248,7 @@ impl Icon {
             Self::Rows => "M4 6h2M9 6h11M4 12h2M9 12h11M4 18h2M9 18h11",
             Self::Columns => "M4 5h16v14H4zM9.5 5v14M14.5 5v14",
             Self::Gallery => "M4 4h16v11H4zM4 18h3M10.5 18h3M17 18h3",
+            Self::ChevronDown => "M6 9l6 6 6-6",
             // A window with its sidebar: shows or hides a folded sidebar.
             Self::Sidebar => "M4 5h16v14H4zM10 5v14",
             Self::Person => "M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM5 20a7 7 0 0 1 14 0",

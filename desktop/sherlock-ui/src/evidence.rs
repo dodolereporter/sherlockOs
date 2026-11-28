@@ -132,6 +132,9 @@ pub const GALLERY_TILE: f32 = 84.0;
 pub const GALLERY_STRIP_ICON: f32 = 48.0;
 pub const GALLERY_ICON: f32 = 160.0;
 pub const GALLERY_TEXT_WIDTH: f32 = 720.0;
+/// The list's triangles (lot E-13d): their side, and the step to the right of each level.
+pub const DISCLOSURE: f32 = 14.0;
+pub const DISCLOSURE_INDENT: f32 = 18.0;
 /// A column of the columns view (lot E-13b), its rule included.
 pub const COLUMN_WIDTH: f32 = 240.0;
 /// The view's slider, as wide as a short field.

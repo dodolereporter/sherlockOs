@@ -2619,3 +2619,107 @@ fn the_gallery_renders_headless() {
         assert!(snapshot.matches_image(&path).expect("writing the capture"));
     }
 }
+
+/// Lot E-13d: a folder of the list unfolds under its triangle, its items a step to the right;
+/// Right and Left unfold and fold from the keyboard, a subfolder folds with its parent; the
+/// other views and a search show the folder alone.
+#[test]
+fn the_list_unfolds_its_folders() {
+    let mut bench = views_bench("unfold", 2);
+    fs::create_dir_all(bench.path("projet/dossier/sous")).expect("folders");
+    fs::write(bench.path("projet/dossier/dedans.txt"), "x").expect("write");
+    let dossier = bench.path("projet/dossier");
+    bench.send(Message::Disclose(dossier.clone()));
+    assert!(bench.app.is_unfolded(&dossier));
+    let depths: Vec<(&str, u8)> = bench
+        .app
+        .entries
+        .iter()
+        .map(|e| (e.name.as_str(), e.depth))
+        .collect();
+    assert_eq!(
+        depths,
+        [
+            ("dossier", 0),
+            ("sous", 1),
+            ("dedans.txt", 1),
+            ("fichier-00.txt", 0),
+            ("fichier-01.txt", 0)
+        ]
+    );
+    let _ = bench.app.view();
+    // The keyboard: down to « sous », Right unfolds it, Left folds it, Left again goes up to
+    // its folder, Left once more folds that one, and « sous » with it.
+    bench.select("sous");
+    bench.press(Named::ArrowRight);
+    assert!(bench.app.is_unfolded(&bench.path("projet/dossier/sous")));
+    bench.press(Named::ArrowLeft);
+    assert!(!bench.app.is_unfolded(&bench.path("projet/dossier/sous")));
+    bench.press(Named::ArrowRight);
+    bench.press(Named::ArrowLeft);
+    bench.press(Named::ArrowLeft);
+    assert_eq!(bench.selected(), ["dossier"]);
+    bench.press(Named::ArrowRight);
+    bench.select("sous");
+    bench.press(Named::ArrowRight);
+    bench.select("dossier");
+    bench.press(Named::ArrowLeft);
+    assert!(!bench.app.is_unfolded(&dossier));
+    assert!(!bench.app.is_unfolded(&bench.path("projet/dossier/sous")));
+    assert_eq!(bench.app.entries.len(), 3);
+    // Unfolded again: the grid shows the folder alone, the list its items again.
+    bench.send(Message::Disclose(dossier.clone()));
+    bench.ctrl("1");
+    assert_eq!(bench.app.entries.len(), 3);
+    bench.ctrl("2");
+    assert_eq!(bench.app.entries.len(), 5);
+    // Elsewhere and back: folded.
+    bench.send(Message::Go(Location::Folder(dossier.clone())));
+    bench.send(Message::Back);
+    assert!(!bench.app.is_unfolded(&dossier));
+}
+
+/// Lot E-13d: captures of the list with a folder unfolded, at two sizes of window
+/// (`evidence-captures/unfolded-*`).
+#[test]
+fn the_unfolded_list_renders_headless() {
+    let _theme = crate::testing::in_theme(Theme::Dark);
+    let (tmp, dir) = mockup_folder();
+    let (app, task) = App::new(Config {
+        home: tmp.path().to_path_buf(),
+        start: dir.clone(),
+        start_trash: false,
+        favorites: places::favorites(tmp.path(), None),
+        trash: None,
+        measure: None,
+        maximized: false,
+        devices: None,
+        watch_devices: false,
+        xdg: None,
+        desktops: Vec::new(),
+        locales: Vec::new(),
+    });
+    let mut bench = Bench { tmp, app };
+    drain(&mut bench.app, task);
+    bench.send(Message::Disclose(dir.join("src")));
+    bench.select("main.rs");
+    let settings = Settings {
+        fonts: typography::FONTS.map(Cow::Borrowed).to_vec(),
+        default_font: typography::UI,
+        default_text_size: Pixels(typography::UI_SIZE),
+        ..Settings::default()
+    };
+    let out = std::env::temp_dir().join("evidence-captures");
+    fs::create_dir_all(&out).expect("captures folder");
+    let renderer = std::env::var("ICED_TEST_BACKEND").unwrap_or_else(|_| "tiny-skia".into());
+    for (width, height) in [(1366.0, 768.0), (720.0, 460.0)] {
+        bench.send(Message::Resized(iced::Size::new(width, height)));
+        bench.app.settle();
+        let mut ui =
+            simulator::Simulator::with_size(settings.clone(), (width, height), bench.app.view());
+        let snapshot = ui.snapshot(&theme::window_theme()).expect("capture");
+        let path = out.join(format!("unfolded-{width}.png"));
+        let _ = fs::remove_file(out.join(format!("unfolded-{width}-{renderer}.png")));
+        assert!(snapshot.matches_image(&path).expect("writing the capture"));
+    }
+}

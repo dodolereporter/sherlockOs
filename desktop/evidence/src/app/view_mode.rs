@@ -26,6 +26,8 @@ impl App {
         let from = self.preview_level();
         self.view_mode = mode;
         self.highlight = None;
+        // The unfolded folders show in the list only (lot E-13d).
+        self.refilter();
         // The preview's pane slides away into the columns, and back (lot E-13b).
         let to = if self.panes().preview { 1.0 } else { 0.0 };
         if (to - from).abs() > f32::EPSILON {
