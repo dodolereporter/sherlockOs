@@ -30,7 +30,9 @@ beside its entry, which the compositor flips to the left the same way. The popup
 pointer and the keyboard: the arrows, Enter and Escape drive the menu as before, and a click
 outside closes it (`popup_done`). The menu unfolds and folds back inside its popup, which goes
 once it has faded out. Under winit, both are still drawn inside the window. The completion list,
-the drop-down lists and the tooltips follow in E-02c. Under X11, it keeps iced's own runtime on winit. The title
+the drop-down lists and the tooltips follow in E-02c. The menu of the folders folded behind
+« … » in the path bar is a popup the same way, under « … » (lot E-04d): a click outside closes
+it at once, Escape or a choice let it fade out first. Under X11, it keeps iced's own runtime on winit. The title
 bar's buttons work on both: moving, maximizing and minimizing become `xdg_toplevel` requests, and
 closing the window, from its button or from the compositor, ends the program.
 
