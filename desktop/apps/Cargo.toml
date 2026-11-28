@@ -12,6 +12,9 @@ name = "sherlockos-apps"
 path = "src/main.rs"
 
 [dependencies]
+# Its connection to the shell socket, the only one that offers anchored surfaces (workspace
+# crate, lot D-46).
+shell-protocol = { path = "../shell-protocol", features = ["client"] }
 # The same as the launcher (docs/launcher.md).
 iced = { version = "=0.14.0", default-features = false, features = [
     "advanced",

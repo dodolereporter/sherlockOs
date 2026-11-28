@@ -1820,6 +1820,48 @@ fn the_preview_hides_and_comes_back_sliding() {
     assert_eq!(bench.app.preview_level(), 1.0);
 }
 
+/// The window at the widths of a small laptop, half a 1080p screen, a 1366 laptop and a 1080p
+/// screen (lot E-05, audit B-1): the names stay readable, the columns, the preview and the
+/// sidebar fold around them. Captures in `target/tmp/evidence-width-*.png`.
+#[test]
+fn the_names_stay_at_every_width() {
+    let _theme = crate::testing::in_theme(Theme::Dark);
+    let mut bench = bench_with_files("widths", 3);
+    fs::write(
+        bench.path("projet/compte-rendu-de-la-reunion-du-conseil-d-administration.txt"),
+        "x",
+    )
+    .expect("write");
+    bench.press(Named::F5);
+    bench.select("a.txt");
+    for (width, height) in [
+        (720.0, 460.0),
+        (944.0, 1048.0),
+        (1366.0, 768.0),
+        (1920.0, 1080.0),
+    ] {
+        bench.send(Message::Resized(iced::Size::new(width, height)));
+        bench.app.settle();
+        let panes = bench.app.panes();
+        assert!(
+            panes.name_width(width) >= sherlock_ui::evidence::NAME_MIN_WIDTH,
+            "{width}: {panes:?}"
+        );
+        assert_eq!(panes.preview, width >= 1366.0, "{width}");
+        capture_at(
+            &bench.app,
+            &format!("evidence-width-{width}"),
+            (width, height),
+        );
+    }
+    // Space brings back a preview the width had folded; again, it goes.
+    bench.send(Message::Resized(iced::Size::new(944.0, 1048.0)));
+    bench.press(Named::Space);
+    assert!(bench.app.panes().preview);
+    bench.press(Named::Space);
+    assert!(!bench.app.panes().preview);
+}
+
 /// On Wayland the menu and its submenu are popups of their own (lot E-02b): they open with
 /// the menu, follow its submenu, and go once it has folded back; a click outside, which the
 /// compositor reports by closing the popup, closes the menu.
