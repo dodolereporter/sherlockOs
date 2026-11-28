@@ -740,7 +740,7 @@ pub fn icon_view<'a>(icon: Option<&Icon>, side: f32, name: &str) -> Element<'a, 
 
 /// Asks the compositor for an activation token on behalf of the surface `id`, where the click
 /// was (lot Q-52): the receiver gets it, or closes without one.
-fn activation_token(id: Id) -> (Task<Message>, oneshot::Receiver<String>) {
+pub(super) fn activation_token(id: Id) -> (Task<Message>, oneshot::Receiver<String>) {
     let (sender, token) = oneshot::channel();
     let sender = std::sync::Mutex::new(Some(sender));
     let sink = ActivationTokenSink::callback(move |state| {

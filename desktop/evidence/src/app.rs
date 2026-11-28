@@ -7,6 +7,7 @@ use std::process::Command as Process;
 mod drag;
 
 use iced::futures::channel::mpsc::UnboundedReceiver;
+use iced::futures::channel::oneshot;
 use iced::keyboard::{self, Key, Modifiers, key::Named};
 use iced::widget::{operation, scrollable};
 use iced::{Event, Point, Size, Subscription, Task, event, mouse, window};
@@ -2721,15 +2722,17 @@ impl App {
             command.current_dir(parent);
         }
         sherlock_ui::gpu::for_child(&mut command);
-        Task::perform(
+        let (ask, token) = self.activation_token();
+        ask.chain(Task::perform(
             async move {
                 if preview::is_program(&path) {
                     return None;
                 }
+                give_token(&mut command, received(token).await.as_deref());
                 Some(spawn_reaped(&mut command))
             },
             |started| started.map_or(Message::ProgramRefused, Message::Launched),
-        )
+        ))
     }
 
     /// Opens with an application without touching the defaults.
@@ -2745,7 +2748,40 @@ impl App {
     fn launch(&mut self, mut command: Process) -> Task<Message> {
         // The program gets the environment Evidence started with, not its renderer choice.
         sherlock_ui::gpu::for_child(&mut command);
-        Task::perform(async move { spawn_reaped(&mut command) }, Message::Launched)
+        let (ask, token) = self.activation_token();
+        ask.chain(Task::perform(
+            async move {
+                give_token(&mut command, received(token).await.as_deref());
+                spawn_reaped(&mut command)
+            },
+            Message::Launched,
+        ))
+    }
+
+    /// Asks the compositor for an activation token on behalf of the window, where the click that
+    /// opens something was (lot Q-52d): the application started, or one already open that gets
+    /// the file, brings its window forward with it. On Wayland only, where Evidence runs on
+    /// `iced_exwlshell` and its window has an id (`main`); under X11 there is none to ask, and
+    /// the program starts at once.
+    fn activation_token(&self) -> (Task<Message>, Option<oneshot::Receiver<String>>) {
+        let Some(id) = self.main else {
+            return (Task::none(), None);
+        };
+        let (sender, token) = oneshot::channel();
+        let sender = std::sync::Mutex::new(Some(sender));
+        let sink = iced_exwlshell::reexport::ActivationTokenSink::callback(move |state| {
+            use iced_exwlshell::reexport::XdgActivationTokenV1State;
+            // Taken once: without a token (no surface, no protocol), the sender goes and the
+            // launch goes on without one.
+            let taken = sender.lock().ok().and_then(|mut s| s.take());
+            if let (Some(sender), XdgActivationTokenV1State::Ready(token)) = (taken, state) {
+                let _ = sender.send(token.token().to_owned());
+            }
+        });
+        (
+            Task::done(Message::RequestActivationToken { id, sink }),
+            Some(token),
+        )
     }
 
     fn paste(&mut self) -> Task<Message> {
@@ -2977,6 +3013,25 @@ fn made(report: ops::Report) -> ops::Result<(String, Vec<PathBuf>, Option<Undoab
 }
 
 /// Starts a program without waiting for it; a thread reaps it when it ends.
+/// The token `token` brings, if one was asked for and came; at most `MAX_TOKEN_BYTES`.
+async fn received(token: Option<oneshot::Receiver<String>>) -> Option<String> {
+    let token = token?.await.ok()?;
+    (token.len() <= MAX_TOKEN_BYTES).then_some(token)
+}
+
+/// Longest activation token handed on: the compositor's are far shorter.
+const MAX_TOKEN_BYTES: usize = 256;
+
+/// Gives a started program the activation `token`, under Wayland's and X11's names, as the
+/// launcher does (lot Q-52).
+fn give_token(process: &mut Process, token: Option<&str>) {
+    if let Some(token) = token {
+        process
+            .env("XDG_ACTIVATION_TOKEN", token)
+            .env("DESKTOP_STARTUP_ID", token);
+    }
+}
+
 fn spawn_reaped(command: &mut Process) -> bool {
     match command.spawn() {
         Ok(mut child) => {

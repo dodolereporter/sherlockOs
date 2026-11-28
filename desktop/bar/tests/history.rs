@@ -168,13 +168,19 @@ mod tests {
 
         // « Relancer » from the centre: the action goes to the application, the notification
         // closes and stays in the history without its buttons.
-        zbus::block_on(history::invoke(&client, stopped, "restart")).unwrap();
+        zbus::block_on(history::invoke(&client, stopped, "restart", None)).unwrap();
         changed(&changes);
         assert!(core.open(stopped).is_none());
         let entries = zbus::block_on(history::list(&client)).unwrap();
         assert!(!entries.iter().any(|e| e.id == stopped && e.open));
+        // With the click's activation token (lot Q-52d): the action runs the same.
+        let open = notify(&client, "Sherlock", "Rapport prêt", &["open", "Ouvrir"]);
+        changed(&changes);
+        zbus::block_on(history::invoke(&client, open, "open", Some("centre-token"))).unwrap();
+        changed(&changes);
+        assert!(core.open(open).is_none());
         // Again: it is no longer open.
-        assert!(zbus::block_on(history::invoke(&client, stopped, "restart")).is_err());
+        assert!(zbus::block_on(history::invoke(&client, stopped, "restart", None)).is_err());
 
         zbus::block_on(history::clear(&client)).unwrap();
         changed(&changes);
@@ -187,6 +193,6 @@ mod tests {
         let client = bus.connect();
         assert!(zbus::block_on(history::list(&client)).is_err());
         assert!(zbus::block_on(history::clear(&client)).is_err());
-        assert!(zbus::block_on(history::invoke(&client, 1, "default")).is_err());
+        assert!(zbus::block_on(history::invoke(&client, 1, "default", None)).is_err());
     }
 }

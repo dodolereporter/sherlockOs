@@ -529,25 +529,14 @@ impl Bar {
                             .any(|(key, _)| key == history::DEFAULT_ACTION)
                 });
                 if default {
-                    return Task::perform(
-                        async move {
-                            let bus = bus::session().await?;
-                            history::invoke(&bus, id, history::DEFAULT_ACTION).await?;
-                            history::remove(&bus, &[id]).await
-                        },
-                        |done| Message::HistoryDone(done.map_err(|e| e.to_string())),
-                    );
+                    let key = history::DEFAULT_ACTION.to_owned();
+                    return self.invoke_activated(id, key, true);
                 }
             }
             Message::NotificationOptions(id) => {
                 self.options = (self.options != Some(id)).then_some(id);
             }
-            Message::InvokeAction(id, key) => {
-                return Task::perform(
-                    async move { history::invoke(&bus::session().await?, id, &key).await },
-                    |done| Message::HistoryDone(done.map_err(|e| e.to_string())),
-                );
-            }
+            Message::InvokeAction(id, key) => return self.invoke_activated(id, key, false),
             Message::Quick(quick::Message::OpenSettings(page)) => {
                 // Control Room on that page, in its window if it is open (D-20f).
                 let program = crate::programs::CONTROL_ROOM;
@@ -954,6 +943,34 @@ impl Bar {
 
     /// Closes the panel: it folds back first where it unfolds, and its popup closes once it
     /// has faded out (`Message::Frame`).
+    /// Runs the action `key` of notification `id` from the centre, then takes it out of the
+    /// history when `remove`. A token of the click in the centre goes first, for the application
+    /// to bring its window forward with (lot Q-52d), as a bubble's button gives one.
+    fn invoke_activated(&mut self, id: u32, key: String, remove: bool) -> Task<Message> {
+        let (ask, token) = match self.panel.map(|(_, surface)| surface) {
+            Some(surface) => {
+                let (ask, token) = tray::activation_token(surface);
+                (ask, Some(token))
+            }
+            None => (Task::none(), None),
+        };
+        ask.chain(Task::perform(
+            async move {
+                let token = match token {
+                    Some(token) => token.await.ok(),
+                    None => None,
+                };
+                let bus = bus::session().await?;
+                history::invoke(&bus, id, &key, token.as_deref()).await?;
+                if remove {
+                    history::remove(&bus, &[id]).await?;
+                }
+                Ok(())
+            },
+            |done: zbus::Result<()>| Message::HistoryDone(done.map_err(|e| e.to_string())),
+        ))
+    }
+
     fn close_panel(&mut self) -> Task<Message> {
         let stopped = self.quick.close().map(Message::Quick);
         if self.panel.is_some() && self.animates() {

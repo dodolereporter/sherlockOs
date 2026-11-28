@@ -136,17 +136,27 @@ pub async fn clear(bus: &Connection) -> zbus::Result<()> {
         .map(|_| ())
 }
 
-/// Runs the action `key` of the open notification `id`.
-pub async fn invoke(bus: &Connection, id: u32, key: &str) -> zbus::Result<()> {
-    bus.call_method(
-        Some(NAME),
-        PATH,
-        Some(INTERFACE),
-        "InvokeAction",
-        &(id, key),
-    )
-    .await
-    .map(|_| ())
+/// Runs the action `key` of the open notification `id`, after handing the application the
+/// activation `token` of the click when one came (lot Q-52d).
+pub async fn invoke(bus: &Connection, id: u32, key: &str, token: Option<&str>) -> zbus::Result<()> {
+    let reply = match token {
+        Some(token) => {
+            let body = (id, key, token);
+            bus.call_method(Some(NAME), PATH, Some(INTERFACE), "InvokeActivated", &body)
+                .await
+        }
+        None => {
+            bus.call_method(
+                Some(NAME),
+                PATH,
+                Some(INTERFACE),
+                "InvokeAction",
+                &(id, key),
+            )
+            .await
+        }
+    };
+    reply.map(|_| ())
 }
 
 /// One item per `Changed` of the daemon, on `bus`. Ends when the bus closes.

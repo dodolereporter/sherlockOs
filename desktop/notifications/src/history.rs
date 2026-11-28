@@ -50,6 +50,8 @@ pub fn entry(note: &Notification, open: bool) -> Entry {
 
 /// Ids `Remove` reads at most: the whole history.
 pub const MAX_REMOVED: usize = sherlock_ui::notifications::HISTORY;
+/// Longest activation token passed on to an application: the compositor's are far shorter.
+pub const MAX_TOKEN_BYTES: usize = 256;
 
 pub(crate) struct History {
     pub(crate) core: Arc<Core>,
@@ -78,6 +80,20 @@ impl History {
     /// a key it does not have, is an error.
     async fn invoke_action(&self, id: u32, key: String) -> zbus::fdo::Result<()> {
         if self.core.invoke(id, &key) {
+            Ok(())
+        } else {
+            Err(zbus::fdo::Error::Failed(format!(
+                "notification {id} is not open or has no action {key}"
+            )))
+        }
+    }
+
+    /// `InvokeAction`, preceded by `ActivationToken` with the activation `token` of the click in
+    /// the centre (lot Q-52d): the application brings its window forward with it. A token
+    /// longer than `MAX_TOKEN_BYTES` is not passed on.
+    async fn invoke_activated(&self, id: u32, key: String, token: String) -> zbus::fdo::Result<()> {
+        let token = (token.len() <= MAX_TOKEN_BYTES && !token.is_empty()).then_some(token.as_str());
+        if self.core.invoke_activated(id, &key, token) {
             Ok(())
         } else {
             Err(zbus::fdo::Error::Failed(format!(
