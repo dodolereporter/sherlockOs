@@ -24,7 +24,7 @@ Without it, the compositor still starts, and only Wayland applications show up.
 | File | Role |
 | --- | --- |
 | `src/main.rs` | Picks the backend, creates the event loop, starts XWayland, launches the given command |
-| `src/options.rs` | Command line: `--nested`, `--measure`, `--outputs`, `--scale`, `--workspaces`, `--snap-gap`, `--minimize-effect`, `--window-animations`, the command |
+| `src/options.rs` | Command line: `--nested`, `--measure`, `--outputs`, `--scale`, `--workspaces`, `--snap-gap`, `--minimize-effect`, `--window-animations`, `--greeter`, `--`, the command |
 | `src/udev.rs` | Real session: libseat session, the card, one `DrmCompositor` per screen, libinput, console switches, the frame cycle of each screen |
 | `src/pacing.rs` | When a screen of the real session draws: only after a change or during an animation, at the pace of its vertical blank (lot P-01) |
 | `src/damage.rs` | Stable identity of the elements the compositor draws itself, so that only what changed is redrawn (lot P-01) |
@@ -39,6 +39,7 @@ Without it, the compositor still starts, and only Wayland applications show up.
 | `src/layer.rs` | Anchored surfaces (`zwlr_layer_shell_v1`): placement by each screen's layer map, exclusive zone and work area, keyboard, menus, hit testing |
 | `src/output.rs` | Screens: place in the space and in the host frame, scale, `wp_fractional_scale_v1`, `wp_viewporter`. `View` turns space coordinates into frame pixels |
 | `src/displays.rs`, `src/output_management.rs`, `src/edid.rs` | Changing the screens (ADR 0025): checked then applied configurations, `wlr-output-management`, the EDID names, `displays.conf` |
+| `src/inhibit.rs`, `src/screensaver.rs` | What keeps the session awake: idle inhibitors, `org.freedesktop.ScreenSaver`, logind (lot D-43) |
 | `src/xwayland.rs` | XWayland: startup and shutdown, X11 window manager (`X11Wm`), surface association, clipboard as seen from X11 |
 | `src/clipboard_history/` | Clipboard history of Super + V: what is read of each copy, off the loop, and the history (lot D-42) |
 | `src/x11_paste.rs` | Non-text X11 selections pasted in Wayland, read by the compositor as an X11 client (lot D-29) |
@@ -52,6 +53,8 @@ Without it, the compositor still starts, and only Wayland applications show up.
 | `src/osd.rs` | On-screen display of the media keys: the pill, its springs, its texture (lot D-35) |
 | `src/mission_control/` | Mission Control (lot D-33): its state, keys, pointer and gesture (`mod.rs`), the grid (`layout.rs`, pure computation), the titles drawn into textures (`label.rs`) |
 | `src/lock.rs` | Session lock (lot D-25a, ADR 0023): `ext-session-lock-v1` with its checks, what a locked screen shows, the lock program started again |
+| `src/arrival.rs` | The bar and the dock arriving once the session opens (lot D-24) |
+| `src/greeter.rs` | The compositor of the login screen (`--greeter`, lot D-24, ADR 0026): one program fullscreen, no shortcut of the desktop |
 | `src/layout.rs` | Layout: place, move, resize, grab band, snap zones, return to the previous size. Pure computation, without Wayland or rendering |
 | `src/winit.rs` | Windowed backend: the host window, its virtual screens side by side, its cursor. Starts the rendering of each frame and its measurement. Offers linux-dmabuf for the chip it renders on |
 | `src/render.rs` | Rendering: what each screen shows (`items`, plain data), then its elements: wallpaper or background and discs, shadows, content clipped to a rounded rectangle, borders, snap preview |
@@ -294,8 +297,14 @@ size and margins, and computes the work area.
 Not settled by lot D-12, which runs nested only. What its review established, to carry into
 the briefs of D-14, D-25 and the lot of the consent window (ADR 0011):
 
-- **The `zwlr_layer_shell_v1` global is open to every Wayland client**, Flatpak ones included:
-  nothing filters it.
+- **The `zwlr_layer_shell_v1` global is only offered on the shell socket** (lot D-46, ADR 0021).
+  Until then it was open to every Wayland client, Flatpak ones included, which could cover
+  every screen with an overlay surface and take the keyboard: an imitation of the lock screen
+  or of the polkit dialog would receive the password. The test
+  `an_ordinary_client_neither_sees_nor_binds_the_layer_shell` (`tests/shell.rs`) checks it. A
+  third-party program that needs layer-shell (a panel, a launcher) goes through an ADR first.
+  The points below still apply to the shell's own programs, and to a native process of the
+  user that connects to the shell socket on purpose (out of reach of the filter, ADR 0021).
 - **Keyboard theft.** An overlay surface with an `exclusive` keyboard keeps it as long as it
   exists, even a 1 × 1 surface, and even after a click on a window (the test
   `a_surface_with_an_exclusive_keyboard_keeps_it` checks the protocol's behavior). Any client
@@ -308,7 +317,8 @@ the briefs of D-14, D-25 and the lot of the consent window (ADR 0011):
   - a layer above the overlay one, for the consent window (ADR 0011) and the lock screen,
     drawn by the compositor itself and hit before `layer_hit`;
   - a forced keyboard focus that comes before `exclusive_layer()`;
-  - a filter on the layer-shell global, kept for the shell programs that the session starts;
+  - a filter on the layer-shell global, kept for the shell programs that the session starts:
+    done by lot D-46;
   - `ext-session-lock` for D-25, rather than an overlay surface: done by lot D-25a (see
     "Session lock").
 
@@ -358,8 +368,9 @@ Next to its Wayland socket, the compositor opens a second one, the same name fol
 `-shell` (`$XDG_RUNTIME_DIR/wayland-1-shell` for `wayland-1`; next to the given path with
 `listen_at`, the suffix before an extension: `wayland-shell.sock` for `wayland.sock`, so that
 the two locks, named by replacing the extension, never collide). Clients accepted there are marked as shell clients (`ClientState::shell`). Both
-sockets offer every global; the globals of `sherlock_shell_v1` and `ext-workspace-v1` are only
-visible to shell clients (`GlobalDispatch::can_view`), and a client of the ordinary socket that
+sockets offer every global; the globals of `sherlock_shell_v1`, `ext-workspace-v1` and, since lot
+D-46, `zwlr_layer_shell_v1` are only visible to shell clients (`GlobalDispatch::can_view`, and
+`WlrLayerShellState::new_with_filter` for layer-shell), and a client of the ordinary socket that
 binds them by name gets `wl_display.error` `invalid_object` from wayland-server, which
 libwayland-client reports as `EINVAL`. XWayland, whose connection smithay creates, is never a
 shell client. `State::shutdown` removes the shell socket and its lock with the other one. If
@@ -367,7 +378,15 @@ the shell socket cannot be opened, the log says so and the session goes on witho
 
 A shell program finds the socket with `shell_protocol::socket_from_env()`, from
 `WAYLAND_DISPLAY` and `XDG_RUNTIME_DIR`, and talks to these protocols on that second
-connection; its surfaces stay on the ordinary socket, and so do the applications it launches.
+connection. Its anchored surfaces go there too, on the connection that
+`shell_protocol::connect()` opens and hands to `iced_exwlshell` (`ExWlSettings::with_connection`):
+the bar, the dock, the notifications, the launcher and the applications view. `WAYLAND_DISPLAY`
+is left as the session gives it, so the applications these programs launch are on the
+ordinary socket and see no layer-shell. Without a shell socket next to `WAYLAND_DISPLAY`
+(another compositor, during development), `connect()` falls back to the ordinary socket.
+
+The login screen's compositor (`--greeter`) has no shell socket: there,
+`State::share_layer_shell` shows layer-shell to every client, the greeter being the only one.
 
 Checked on the reference laptop with Flatpak 1.16.6: Zen's sandbox, which has `filesystems=host`,
 sees `wayland-2` and not `wayland-2-shell` (see ADR 0021).
@@ -389,7 +408,9 @@ sees `wayland-2` and not `wayland-2-shell` (see ADR 0021).
   window's center), the target of an animation rather than its steps. A minimized window
   keeps the screen and the geometry it had. Without any screen, a window stays listed with an
   empty screen name and its place in the space.
-- **States.** `maximized`, `fullscreen`, `snapped` (half or quarter), `minimized`, `activated`.
+- **States.** `maximized`, `fullscreen`, `snapped` (half or quarter), `minimized`, `activated`,
+  and from version 5 `attention` (lot Q-52, see "Activation" below); a client bound at an
+  older version never receives it.
   The active window is the last one given the keyboard: it stays active while the bar or the
   dock has the keyboard after a click on them, which is what the dock needs to choose between
   bringing an application forward and minimizing it (`docs/dock.md`, Launching).
@@ -760,7 +781,11 @@ X11 client. Reasons:
   of resident memory (shared libraries included), without an X11 client.
 
 The display number is the first free one (`:1` under an X11 session that holds `:0`). It is in
-the log: `XWayland ready display=1`. Xwayland's messages go to the compositor's standard error,
+the log: `XWayland ready display=1`. The tests start their search at `:90`
+(`State::set_first_x_display`, `TEST_X_DISPLAY`, lot D-43): on its way from 0, smithay takes a
+display whose lock file is missing and removes its socket before binding it again, which must
+never touch a socket of the user's sessions. smithay takes only the number it is given, so the
+compositor tries the next 32 numbers itself. Xwayland's messages go to the compositor's standard error,
 mixed with its logs. At startup, warnings from xkbcomp are expected. With linux-dmabuf (lot
 D-06, see "GPU buffers"), Xwayland's glamor finds the render node in the default feedback and
 draws on the GPU: `(II) GLX: Initialized glamor GL provider`. Without it (software rendering,
@@ -852,6 +877,33 @@ reads and sets both. Exchanges with X11 go through `X11Wm`:
   Wayland client, X11, or the compositor). `is_secret` recognizes a secret copied by a password
   manager (`x-kde-passwordManagerHint`). From X11, smithay passes on only the types with a `/`:
   that hint does not cross from an X11 application.
+## Activation (lot Q-52)
+
+An application brings its window forward: a click on its icon in the bar's notification area,
+a notification, a second launch. `State::request_activation` (`activation.rs`) decides.
+
+- **Granted:** out of its minimized state, its workspace shown, raised with the animation of
+  D-19d and given the keyboard (`State::activate`, as the dock does).
+- **Refused:** no keyboard stolen. The window asks for attention: the `attention` state of
+  `sherlock_shell_v1` (version 5; version 4 is App Expose), for the dock to show, until it gets the keyboard.
+- **Wayland, `xdg-activation-v1`.** A token is granted when it carries the serial of a press
+  (button or key, the last 32 remembered, within 10 s) that the compositor gave to the very
+  client that asks for it: the bar, after a click on an icon, asks for one and hands it to the
+  application, which activates its window with it. A token is used once and lives 10 s; one
+  without a serial, or with a serial its client never got, is refused.
+- **X11, `_NET_ACTIVE_WINDOW`.** smithay 0.7's window manager does not read it: the compositor
+  hears it as an X11 client of XWayland watching the root window's substructure
+  (`x11_activation.rs`, read in the loop, 64 requests a turn at most). `WM_CHANGE_STATE` to
+  `NormalState` (smithay's `unminimize_request`) is handled the same. A pager (source 2) is
+  obeyed; an application (source 1) when a token was granted within the last 10 s and not used
+  by another X11 request (an X11 application cannot hand the token back: the click on its tray
+  icon granted one), or when its process already has the keyboard.
+- **Tests.** `tests/shell.rs`: a token from a click on the dock brings a minimized window of
+  another workspace back; used again it does nothing; without a serial, or with another
+  client's, the window asks for attention, until it gets the keyboard. `tests/xwayland.rs`:
+  `WM_CHANGE_STATE` and `_NET_ACTIVE_WINDOW` from the application ask for attention, a pager's
+  activates.
+
 ## Drag and drop (lot D-29c)
 
 Between Wayland clients, smithay's grab (`DnDGrab`) does the protocol. The compositor adds
@@ -2028,8 +2080,15 @@ How it works (`src/udev.rs`):
 - **Console switch.** Ctrl + Alt + F1 to F12 switch console. When the session is left, input
   and drawing stop, and the keys still held are released for the clients; when it comes back,
   the screens are reset, read again (a screen may have been plugged in meanwhile) and redrawn.
+- **Memory closed** (lot D-25k, ADR 0023). In the real session the compositor makes itself
+  non-dumpable at start (`PR_SET_DUMPABLE` at 0): every key typed passes through it, so no
+  other process of the user may trace it or read its memory, and no core dump of it is written.
+  The programs it starts are dumpable again (`execve`). Nested and headless, it stays open to a
+  debugger.
 - **Way out.** **Ctrl + Alt + Backspace stops the compositor**, whatever has the keyboard: the
-  emergency exit when nothing answers any more. These keys never reach a client. In nested mode
+  emergency exit when nothing answers any more. Not while locked (lot D-25j): it then goes to
+  the lock as a Backspace, and if the compositor stops or crashes while locked, the session
+  ends (see "Session lock"). These keys never reach a client. In nested mode
   they do nothing (the host session keeps its consoles, and closing the window stops it).
 - **Leaving.** The screens and the card are released first, which gives the console back its
   display state, then the seat (`RealSession::close`).
@@ -2056,7 +2115,8 @@ it.
    With `--xwayland` after `compositor`, X11 applications too (the script gives it unless
    `SHERLOCKOS_XWAYLAND=0`), at the risk of waking the NVIDIA card (see above).
 
-4. To come back: Ctrl + Alt + Backspace stops the compositor and gives the console back.
+4. To come back: Ctrl + Alt + Backspace stops the compositor and gives the console back
+   (unlocked only: stopped while locked, the session ends, lot D-25j).
    Ctrl + Alt + F1 or F2 goes back to the login screen or to Plasma, which keeps running; the
    compositor waits on its console, Ctrl + Alt + F3 comes back to it.
 
@@ -2064,7 +2124,9 @@ it.
 
 `just install-session` builds the compositor, the bar, the dock, the launcher, the notification
 daemon and Evidence in release, then **prints** the commands that install the session, without
-running them:
+running them. It installs the release build of `CARGO_TARGET_DIR` (relative to the repository),
+or of `target/`, and refuses a program older than one of its sources or built from another
+checkout (`desktop/compositor/session/built.sh`, lot D-24f, as `just install-greeter`):
 
 - the six programs and the start script `sherlockos-session` go to `/usr/local/libexec/sherlockos/`;
 - the entry `sherlockos.desktop` (`Name=SherlockOS`) goes to `/usr/share/wayland-sessions/`, where
@@ -2505,6 +2567,10 @@ lot (`sherlock_ui::mission_control`), to review with the design.
 | --- | --- |
 | Super alone, pressed then released with nothing in between | Opens, or closes |
 | Super + Tab | Opens, or closes |
+| Ctrl + Up, F3 alone, or the Mission Control key (`XF86LaunchA`) | Opens, or closes, as on macOS (lot D-33c) |
+| Ctrl + Down | App Expose of the application in front (its windows of the active workspace), or closes (lot D-33c) |
+| An arrow, in the view | Moves the selection, drawn as under the pointer: the first one selects the window in front, the next ones the nearest window or thumbnail that way (lot D-33c) |
+| Enter or Return, in the view | Chooses the selection, as a click would |
 | Escape | Closes |
 | Three fingers up | Opens; the view follows the fingers |
 | Three fingers down | Closes; the view follows the fingers |
@@ -2519,14 +2585,23 @@ shortcuts, do not reach the client.
 
 **Following the fingers.** Once a three finger swipe picks the vertical direction (see
 "Touchpad"), the view is held where the fingers put it: 300 units up open it fully
-(`gestures::OVERVIEW_DISTANCE`), from closed, or from open going down. When the fingers lift
-past the trigger of the vertical swipe (100 units, `VERTICAL_DISTANCE`), up opens and down
-closes; short of it, or cancelled by libinput, the view goes back to where it was. Either way it
-leaves from where the fingers left it, on `mission_control::SPRING` (the snap spring). Three
+(`gestures::OVERVIEW_DISTANCE`), from closed, or from open going down. When the fingers lift,
+their velocity over the last 100 ms decides (lot D-33c): past 2 openings a second
+(`mission_control::FLICK`), the way they flicked wins, so a quick short swipe opens or closes;
+slower, the view goes where that velocity carries it in 0.2 s (`gestures::PROJECTION`, as for
+the workspaces), open past half way, closed short of it. Fingers that came back past where they
+started close it, whatever way they first went. Cancelled by libinput, the view goes back to
+where it was. It leaves from where the fingers left it, at their speed, on
+`mission_control::SPRING` (the snap spring): no stop at the release. Three
 fingers down on the desktop open nothing: they do what `swipe-down` says, nothing by default.
 
 **What it may not do.** It does not open during a move or resize gesture, nor while an anchored
 surface keeps the keyboard (a lock screen).
+
+**Since the D-33 review (lot D-33c).** Escape, or a click, while three fingers hold the view
+closes it for the rest of that swipe. A scroll or a three finger swipe while Super is held makes
+Super no longer alone. A decoration button held down when the view opens no longer acts when
+released after it. A window without content gets no miniature in a thumbnail.
 
 ### The view
 
@@ -2542,8 +2617,12 @@ surface keeps the keyboard (a lock screen).
   Nothing overlaps, and each window travels little: what is above stays above, what is on the
   left stays on the left.
 - **Each window** is drawn with its title bar (lot D-08), its border, its corners and a shadow
-  at its scale; its title is written below it, in a pill of menu glass. Under the pointer, it
-  has a border of the accent color, 3 px outside its frame (`HIGHLIGHT_WIDTH`). A maximized
+  at its scale. Under the pointer (or selected with the arrows), it has a border of the accent
+  color, 3 px outside its frame (`HIGHLIGHT_WIDTH`), its title below it in a pill of menu glass,
+  and a « × » of 24 (`CLOSE_SIZE`) on its top left corner, as in Sequoia (lot D-33c): both fade
+  in and out in 150 ms (`HOVER_FADE`); the other windows show no title. The « × » turns the red
+  of the close buttons under the pointer; a click on it asks the window to close (as its title
+  bar's button), and the view stays open: the window leaves the grid once gone. A maximized
   window gets its corners back as it shrinks.
 - **The wallpaper** is dimmed by the scrim of the theme (`palette().scrim`), more as the view
   opens. No blur: the compositor has none yet (see "What rendering does not do yet").
@@ -2552,6 +2631,14 @@ surface keeps the keyboard (a lock screen).
   workspace in small, and its name below (« Bureau 2 », `strings::mission_control`). The active
   workspace has a border of the accent color, 2 px; so has the thumbnail a dragged window is
   over. The strip comes down from above the screen as the view opens.
+- **Adding and removing workspaces** (lot D-33c). A « + » of 32 (`ADD_SIZE`) follows the
+  thumbnails, 16 after the last one, while there are fewer than 9: a click adds a workspace at
+  the end, whose thumbnail fades in over 250 ms (`ARRIVAL`). The thumbnail under the pointer
+  shows a « × » on its top left corner while another workspace remains: a click removes that
+  workspace (`State::remove_workspace`). Its windows go to the workspace before it (after it
+  for the first one), the next ones take its place and its number, and the active one stays
+  (or becomes the one the windows went to). The bar follows through `ext-workspace-v1`. The
+  number is the session's until it ends: the session's `--workspaces` is not rewritten.
 - **Animation.** Each window goes from where it is drawn on the desktop to its slot in the grid
   as the view opens, and back as it closes; the titles, the strip and the dim fade with it. A
   window chosen by a click is raised first, then every window goes back to its place.
@@ -2592,6 +2679,16 @@ everything, without its title. Dropped on a thumbnail, it moves to that workspac
 goes back to its slot. A click on a thumbnail goes to that workspace without the slide of the
 row (`State::stop_workspace_slide`): the view closes on the windows of the arriving workspace.
 The bar follows through `ext-workspace-v1`, as for any switch.
+
+**Textures (lot D-33c).** A window's title is drawn at the size it has in the grid, so its
+texture is made once, not at every frame of the opening; the textures are kept per scale (a
+thumbnail's name on two screens of different scales no longer makes its texture again at each
+frame), and Mission Control's are freed as soon as the view is no longer shown. A window shrunk
+past 1.5 texels per pixel (the grid, the thumbnails) is sampled 4 × 4 times over each pixel's
+footprint by the clip shader (`shaders/clip.frag`, with `GL_OES_standard_derivatives`; one
+sample without it): the thumbnails of the strip, shrunk some 10 times, no longer shimmer.
+
+![Mission Control at 1920 × 1080, the pointer on « Firefox »](../desktop/compositor/screenshots/mission-control-1920-dark.png)
 
 ### Input while it is open
 
@@ -2688,6 +2785,18 @@ The compositor implements `ext-session-lock-v1` (smithay's `session_lock`, with 
 own), applied strictly: the security model is ADR 0023. Code: `src/lock.rs`; colors and texts:
 `sherlock_ui::lock`.
 
+- **The curtain (lot D-24e, ADR 0023 amended, `src/curtain.rs`).** When the session locks, the
+  compositor first draws each screen as it is into a texture (the `Freezer` of the backend,
+  `capture::screen_texture`), then locks: for `CURTAIN` (400 ms) each screen shows that frozen
+  frame with the curtain, the picture of the lock screen (`desktop_config::lock_background`, the
+  one `sherlockos-lock` draws), coming down over it. Once it is down, the frozen frames are
+  dropped and the lock surface shows in front of the curtain; until the lock program has drawn,
+  the curtain alone. Only a frame built with the curtain down counts for `locked`
+  (`lock_frame_complete`). Once unlocked, the curtain goes up off the live desktop in 400 ms.
+  The pictures are read once, at start, for the largest screen; without them, the plain
+  background of the system screens. In a window (`--nested`), nothing is frozen: the curtain
+  comes down over the plain background.
+
 - **Locking.** Super + L locks the session at once, then starts the lock program,
   `sherlockos-lock` (beside the session's programs, `$SHERLOCKOS_BIN`, or in the `PATH`). The
   compositor opens the program's connection itself (a socket pair, one end handed over through
@@ -2698,7 +2807,7 @@ own), applied strictly: the security model is ADR 0023. Code: `src/lock.rs`; col
     `~/.config/sherlockos/lock.conf` (`idle-minutes = 5` by default, `0` for never, read again
     within a second when it changes; `desktop_config::lock`, which Control Room writes); a wrong
     line is logged and left out, the others still count, so « Jamais » stays never (Q-40);
-    no application can hold it off yet (no `idle-inhibit` protocol);
+    unless something keeps the session awake (lot D-43, see "Keeping awake" below);
   - on logind's `Lock` signal for this session (`loginctl lock-session`: « Verrouiller » in
     the launcher and the bar);
   - before the sleep: the compositor holds a `delay` inhibitor of logind; on
@@ -2709,6 +2818,28 @@ own), applied strictly: the security model is ADR 0023. Code: `src/lock.rs`; col
   logind's `Unlock` signal is ignored: only the lock screen ends the lock. logind is read on
   a thread of its own, in the real session only; without it, the log says so and the other
   triggers remain.
+- **Keeping awake (lot D-43, `src/inhibit.rs`, `src/screensaver.rs`).** The inactivity does
+  not lock while one of these holds, and its delay starts again when the last one goes:
+  - a **visible** surface with an idle inhibitor (`zwp_idle_inhibit_manager_v1`, version 1:
+    Firefox, mpv, Chrome in Wayland). Visible means in a window shown, on the active workspace,
+    not minimized, or in an anchored surface. A video minimized or on another workspace does not
+    count, as the protocol says. A window covered by another still counts;
+  - a cookie of `org.freedesktop.ScreenSaver` (at `/org/freedesktop/ScreenSaver` and
+    `/ScreenSaver`) or of `org.freedesktop.PowerManagement.Inhibit` (at
+    `/org/freedesktop/PowerManagement/Inhibit`, names `org.freedesktop.PowerManagement` and
+    `org.freedesktop.PowerManagement.Inhibit`) on the session bus: Chrome and Electron in X11,
+    VLC, older players. `Inhibit(application, reason)` gives a cookie, `UnInhibit(cookie)` gives
+    it back, only from the program that took it. A program that leaves the bus
+    (`NameOwnerChanged`) gives back all of its own: a player that crashes keeps nothing awake.
+    The log says who took one, at the `info` level;
+  - logind blocking `idle` (`systemd-inhibit --what=idle`, a presentation tool): its
+    `BlockInhibited` property, read every 5 s, uncached since logind announces no change of it.
+  None of them stops Super + L, the lid, logind's `Lock` (the Lock button) nor the sleep: those
+  lock without looking at inactivity. The bus services run on threads of their own; if the
+  names are taken (another desktop's service on a shared bus), the log says so and the Wayland
+  inhibitors remain. The veil, the screens off and the lock on inactivity (lot D-38) all wait
+  on `State::idle_inhibited`. Tests: `tests/idle_inhibit.rs` (a visible video, a
+  minimized one, Super + L, a cookie whose holder leaves, a fake logind, on a private bus).
 - **What is drawn.** Each screen shows its lock surface, in front of the background of the
   system screens (`#0A1424` in the dark theme), or that background alone. Nothing else, except
   the on-screen display of the volume and brightness keys: no window, bar, dock, menu, Mission
@@ -2723,15 +2854,22 @@ own), applied strictly: the security model is ADR 0023. Code: `src/lock.rs`; col
   which a press on another screen changes), the pointer only to the lock surface under it.
   Grabs, menus, gestures and Mission Control are cancelled at the lock; touchpad gestures do
   nothing. The only keys the compositor still takes: Ctrl + Alt + F1 to F12 (console switch),
-  Ctrl + Alt + Backspace (stops the compositor, which ends the session, it does not open it),
   the volume, microphone and brightness keys, and Enter on the rescue screen.
+- **Stopped while locked** (lot D-25j, ADR 0023 amendment). Ctrl + Alt + Backspace does nothing
+  while locked: it goes to the lock as a Backspace. At the lock the compositor creates the file
+  `SHERLOCKOS_LOCK_MARK` names (`$XDG_RUNTIME_DIR/sherlockos-locked` in `sherlockos-session`),
+  and removes it at the unlock; if the compositor ends while it is there, stopped or crashed,
+  `sherlockos-session` ends the logind session (`loginctl terminate-session $XDG_SESSION_ID`;
+  without one, it kills the process that started it) instead of giving back the console it
+  came from, already logged in.
 - **Unlocking.** Only `unlock_and_destroy` from the lock that holds the session, once `locked`
   was sent; any other is the `invalid_unlock` protocol error. A second lock is refused
   (`finished`).
 - **When the lock program dies.** The session stays locked on the background. The program is
-  started again after 500 ms, on a new connection; the dead program's is forgotten. A lock
+  started again after 500 ms, then 1, 2, 4 and 8 s at most for each program replaced since the
+  lock (lot D-25h), on a new connection; the dead program's is forgotten. A lock
   given up before `locked` takes its surfaces with it. A program that ends without locking, or
-  does not lock within 10 seconds, is a failure. After 3 failures, the same program in its
+  does not lock within 10 seconds (times its patience, below), is a failure. After 3 failures, the same program in its
   rescue mode, `sherlockos-lock --rescue` (lot D-25c: a plain password field checked by PAM, in
   software, without Sherlock nor background), started the same way, on a connection the
   compositor opens, 3 times; then `swaylock --color 0a1424` if it is in the `PATH`; and only
@@ -2739,7 +2877,7 @@ own), applied strictly: the security model is ADR 0023. Code: `src/lock.rs`; col
   pour réessayer », Enter starting the programs again. `State::lock_stage` says which one runs.
 - **When the lock program hangs** (lot D-25f). A key or a click while locked pings the program
   that holds the lock (`xdg_wm_base.ping`, at most once a second): its event loop answers. Without
-  an answer within 5 s (`PING_TIMEOUT`), it is killed: its lock goes without an unlock, so the
+  an answer within 5 s (`PING_TIMEOUT`, times its patience, below), it is killed: its lock goes without an unlock, so the
   session stays locked and the next program starts, as when it dies; after 3 such failures, the
   rescue mode. The compositor knows the program's shell client from the binding of
   `xdg_wm_base` on the connection it opened. A program that never binds it (`swaylock`) is not
@@ -2750,6 +2888,37 @@ own), applied strictly: the security model is ADR 0023. Code: `src/lock.rs`; col
   unlock, every 5 s while locked (`LOG_SYNC`) and when a hung program is killed, a thread of the
   compositor has it written to disk (`fsync`, `log_sync.rs`), 300 ms later so that the pipe's
   reader has appended the last lines: a forced restart no longer loses the end of a lock.
+- **The input while locked** (lot D-25g). Each key or click while locked gives the keyboard back
+  to the lock surface of the screen if anything took it (logged), and the first one is logged
+  with the surface that has the keyboard. After a key that types (a key of the main block or of
+  the keypad, without Ctrl, Alt nor the logo key), the lock program must present an image within
+  6 s (`IMAGE_TIMEOUT`, lot D-25h), or it is replaced like a program that does not answer its
+  pings.
+- **Slow is not dead** (lot D-25h). On 27/11 at 14:17, under load, a key came before the lock
+  program had shown anything, the program took 3 s to start and its scene stalled for 1.9 s:
+  the check above replaced it again and again, down to the plain background. Now:
+  - the times are counted on the clock of the watch (every 100 ms), which counts a turn for
+    300 ms at most (`MAX_STEP`: a longer one is a stall of the compositor itself, logged beyond
+    1 s) and stops while the console is away;
+  - before its first image on a lock surface, a program holding the lock is judged on that
+    image only: 20 s (`FIRST_IMAGE_TIMEOUT`); a key typed before it is not awaited, and an
+    unanswered ping does not count;
+  - after it, an unanswered ping (`PING_TIMEOUT`), and in the normal mode only, a key that
+    types with no image after it for 6 s or four times its slowest image so far, 30 s at most
+    (`MAX_IMAGE_TIMEOUT`). The rescue mode and `swaylock` are never judged on what they show;
+  - every time is multiplied by the program's patience: 1 for the first program since the lock,
+    then 2, 4 and 8 for each one replaced (`lock::patience`); the pause before the next program
+    doubles the same way (`lock::relaunch_delay`). The number of programs stays bounded (3, 3
+    rescue modes, `swaylock`, then the compositor's screen), and the session stays locked
+    throughout: no time limit ever unlocks or shows the desktop.
+  The log names the fault (`NoLock`, `NoFirstImage`, `Silent`, `Blind`), the program's tries and
+  its stage, and when its first image came.
+- **The input watched** (lot D-25g, `udev.rs`). Twice the screen kept drawing while no key, no
+  click, not even the console switch, did anything. Every 2 s the compositor checks libinput: if
+  its descriptor has events that nothing read for 5 s (`INPUT_STALL`; the loop reads a readable
+  source at its next turn), it logs it, with the lock and the session's state, then suspends and
+  resumes libinput, which opens the devices again. Each pause and resume of the seat logs that
+  libinput is suspended or resumed.
 
 Tests (`tests/session_lock.rs`, headless, a lock client in the test process): only the lock
 surface is drawn once locked, and only it gets the keys and clicks; Mission Control does not
@@ -2768,7 +2937,12 @@ frame is shown, then a new one is taken at wake-up; on four screens side by side
 size, drawn on it alone over the whole screen, and the rescue screen is centered on each, at its
 scale; a lock program that answers its pings stays, one that hangs (a client that reads
 nothing any more) is killed after the time limit and another starts, the session staying locked
-and the log written to disk; Ctrl + Alt + F2 switches console while locked and reaches no client.
+and the log written to disk; Ctrl + Alt + F2 switches console while locked and reaches no client. Lot D-25h: a
+lock program that gets a key before its first image, takes 3 s to start and whose scene then
+stalls for 2 s (answering nothing, pings included) stays, with the default times; a stall of 2 s
+of the compositor itself does not count; a program frozen before its first image is replaced once
+that image is late, one frozen after it once a ping goes unanswered; the rescue mode, slow to
+start and blind to the keys, stays.
 
 Manual test, on the reference laptop (rule 9, after lot D-25a2 brings the lock screen):
 
@@ -2777,7 +2951,136 @@ Manual test, on the reference laptop (rule 9, after lot D-25a2 brings the lock s
    still locked (background, then the lock screen again).
 3. Ctrl + Alt + F3 then back: still locked. Plug a screen in while locked: it shows the
    background or the lock, never the desktop.
-4. Ctrl + Alt + Backspace while locked: the session ends, SDDM or the console comes back.
+4. Ctrl + Alt + Backspace while locked: nothing (a Backspace in the field). From another
+   console, `pkill -KILL compositor` while locked: the session ends (`loginctl list-sessions`
+   no longer lists it), the console it was started from asks for a login again.
+
+## Screen off (lot D-38)
+
+The screens go off like an old television (`src/power.rs`, tokens in `sherlock_ui::screen_off`):
+the picture is squashed from the top and the bottom into a bright line in the middle (55 % of
+the time, with a light growing over it), the line shrinks to a dot (to 85 %), and the dot fades
+out, in 350 ms, on black. The line and the dot are the cream of Sherlock, with a soft halo.
+Backwards when the screens come back, over what they show (the lock screen when locked). The
+picture is the screen's own items drawn into a texture, then stretched into the squashed
+rectangle (`Item::Squashed`); the line and the dot are shapes.
+
+- **When.**
+  - Before the sleep: on `PrepareForSleep(true)`, the session locks, the screens go off, and the
+    `delay` inhibitor of logind is released once they are dark, or after 1.5 s in all.
+  - When the lid closes: the session locks and the screens go off; the lid opened brings them
+    back.
+  - After `screen-off-minutes` without input (`~/.config/sherlockos/power.conf`, 10 by default,
+    0 for never; `desktop_config::power`, read again when it changes): without sleeping.
+  - **Super + Shift + Escape**: the session locks and the screens go off at once (the gesture
+    key is Alt in nested mode). Chosen over Shift + the lock key, which a laptop may not have; it
+    works while locked too.
+- **Dark.** Nothing is drawn (`render::items` gives black, and nothing animates, so no frame is
+  asked for); the real session turns each screen off once (`DrmCompositor::clear`, DPMS off), and
+  the next frame queued turns it on again. Only the card already driven is touched: the NVIDIA
+  card is never opened. A locked frame is not needed while dark: the lock is confirmed at once.
+- **Frames while dark.** Nothing is drawn, but every client still gets its frame callbacks,
+  once a second (`power::DARK_FRAMES`): a client that waits for its callback before it presents
+  again (Mesa's Vulkan and EGL do) would otherwise stay blocked, the lock program first. While
+  the screens are off or coming back, the lock program is not pinged, and the time of a ping
+  pending starts again (lot D-25f).
+- **Back.** A key, the pointer, a click, a gesture, the lid opened or the wake-up
+  (`PrepareForSleep(false)`) bring the screens back; the key or the click that wakes them goes
+  nowhere else (the pointer still moves). Locked, the key goes on to the lock screen: the first
+  key brings its form, as on macOS.
+- **Held on.** While something keeps the session awake (a visible video, a cookie of
+  `org.freedesktop.ScreenSaver`, logind blocking `idle`: see "Keeping awake" in "Session lock",
+  lot D-43), neither the veil, the inactivity lock nor the screens off for inactivity happen;
+  the inactivity counts again from the end of the inhibition.
+- **The veil before.** As on macOS, 5 s before the inactivity locks the session or turns the
+  screens off (`DIM_LEAD`), a black veil of the compositor darkens the screens to 35 % (`DIM`)
+  over 1.5 s; the backlight is not touched. The slightest input (a key, the pointer, a click, a
+  gesture) lifts it at once, and the inactivity counts again. Tokens in
+  `sherlock_ui::screen_off`; test `a_veil_darkens_the_screens_before_the_idle_lock_and_any_input_lifts_it`.
+
+Tests: `tests/session_lock.rs` (the frames of the animation, from the whole picture to the
+line, its halo and black; nothing animates once dark; the waking key is not typed; Super + Shift
++ Escape; an idle inhibitor holds off the lock and the screens off, then its end lets them come;
+before the sleep, the lock, then the animation, then the inhibitor released once dark) and
+`tests/screen_off.rs` (the board of eight frames, drawn by Mesa's software renderer, in
+`target/tmp/screen-off-board.png`; the last frame is black).
+
+## Login screen (`--greeter`, lot D-24)
+
+greetd starts `compositor --greeter -- sherlockos-greeter` as its `_greetd` user (ADR 0026,
+`docs/greeter.md`). In that mode (`src/greeter.rs`):
+
+- **One program, fullscreen.** Each window gets the fullscreen state and the size of its screen
+  in its first configure, and keeps it (`unset_fullscreen` is ignored). Anchored surfaces show
+  as usual: `sherlockos-greeter` uses overlay surfaces, one per screen.
+- **No shortcut of the desktop.** Every key goes to the greeter: Super alone, Super + Tab,
+  Space, L, the arrows, the digits, F4 and Print Screen do nothing in the compositor; touchpad
+  gestures do nothing either. The compositor still takes Ctrl + Alt + F1 to F12, Ctrl + Alt +
+  Backspace (greetd then starts the greeter again) and the volume, microphone and brightness
+  keys, with their on-screen display.
+- **Nothing of the desktop.** No shell socket (no bar nor dock can connect), no screenshot, and
+  nothing locks: neither Super + L, the delay without input, logind nor the lid start
+  `sherlockos-lock`.
+- **The screens still go off** (lot D-38) after `screen-off-minutes` without input, read from the
+  `_greetd` user's own `power.conf` (10 minutes by default), after the veil; a key, the pointer
+  or a click brings them back and goes nowhere else. Super + Shift + Escape is not taken: it
+  locks first, and there is nothing to lock.
+- **The curtain is its background** (lot D-24e, `src/curtain.rs`): the picture of the lock
+  screen, from the first frame, never the wallpaper of the desktop; the greeter's own picture
+  fades in over the same one. Read for `_greetd` from the data folders
+  (`/usr/local/share/sherlockos/lock/`, installed by `just install-greeter`).
+- **It stops with the greeter**, as with `--measure`, once the curtain has faded to black
+  (`CURTAIN_BLACK`, 250 ms, `greeter_left`): greetd starts the chosen session once its greeter,
+  this compositor, has left. The screen goes black between the two compositors anyway (each
+  one holds the screens for itself, and the kernel turns them off when the first lets go), so
+  the black is reached by a fade, and left by one.
+- `--` ends the options, so that greetd's command line reads the same whatever the greeter's
+  own options.
+
+Tests (`tests/greeter.rs`, headless, a test client as the greeter, on a screen of
+1366 × 768): its window is configured fullscreen at the screen's size, at the origin, and stays
+so when it asks to leave fullscreen; Super + Tab, Space, L and Right, F4 and Super alone all
+reach it, Mission Control does not open, nothing locks and the window is not snapped;
+`lock_session` does nothing; no shell socket is opened beside the Wayland socket; without input,
+the veil comes, then the screens go dark, nothing locks, and the key that wakes them does not
+reach the greeter; the first frame is the curtain, without the wallpaper, and stays behind the
+greeter; once the greeter has left, it fades to black.
+
+## Arrival of the desktop (lot D-24)
+
+Once the session opens, its first frame is black, as the login screen left it: the curtain, the
+picture of the lock screen, comes back from black in 250 ms, then fades out over the desktop in
+600 ms (`src/curtain.rs`, lot D-24e). Once it is half gone, the bar slides down from above the
+screen and the dock rises from below it, on the spring of a window that opens, each from its
+first content, the dock 60 ms after the bar (`src/arrival.rs`, tokens in `sherlock_ui::greeter`). The movement is drawn by the
+compositor (`push_layers`), which knows the surfaces of the shell by their layer-shell namespace
+(`bar`, `dock`); their opacity follows. Only within 15 s after the compositor started, so that a
+bar started again later shows at once, and never with `--greeter`. A key or a click puts
+everything in place at once. The windows that open then fade in with their own opening (lot
+D-34).
+
+**The desktop revealed** (lot D-24g, `reveal_desktop`), as the curtain comes back from black at
+the opening, and as it goes up at each unlock:
+- the wallpaper comes back from a zoom of 1.05 to its size over 700 ms (`wallpaper::zoomed`,
+  grown around the center of the screen, cut by its edges), while the curtain, the blurred
+  picture of the lock, leaves it: from blurred and larger to sharp;
+- the windows shown reappear one after another, the front one first, 40 ms apart, each fading
+  in and growing as a window opens, over 250 ms; the last ones start together 500 ms after the
+  reveal at the latest, so that all is done within 800 ms (`arrival::reappear_delay`,
+  `WindowMotion::reappear`). Windows not drawn yet keep their own opening; minimized ones stay
+  in the dock; with window animations off, nothing moves.
+- A key or a click puts the windows in place at once (`end_arrival`).
+
+The blur itself is the curtain's picture fading out, not a blur radius that shrinks: the blur
+behind glass (lot D-37) applies to the surfaces that ask for it, not to the wallpaper. Not done
+yet: the windows of the last session reopened.
+
+Tests (`src/arrival.rs`): the bar starts out of the screen and is in place after the spring, the
+dock waits for its turn, and the travel of each. The windows' turns and the zoom (lot D-24g); in `src/anim.rs`, a
+window hidden until its turn, then fading in, and a key ending it; `tests/session_lock.rs`, once
+unlocked, the window reappearing and the wallpaper zoomed, both done 800 ms later. `tests/greeter.rs`: the session opens from
+black, through the curtain, to the desktop. `tests/curtain.rs` draws the boards of the opening
+(6 frames) and of the lock (8 frames) with Mesa's software renderer, in `target/tmp/curtain/`.
 
 ## Measuring
 
@@ -2933,7 +3236,7 @@ just verify
 | `sherlock-ui/src/wallpapers.rs` | Every wallpaper of the index has its original, unique ids, pairs that point back to each other across themes, `for_theme` |
 | `src/card.rs` | Card choice on a fake `/sys/class/drm`: AMD alone, AMD and NVIDIA (the NVIDIA card never chosen, even alone or `boot_vga`), Intel and a dedicated AMD card, no screen plugged in, no `boot_vga` |
 | `src/keyboard.rs` | AZERTY without a setting, Debian's `/etc/default/keyboard` and `vconsole.conf` read, `XKB_DEFAULT_LAYOUT` left to xkbcommon, an unknown layout refused by xkb where AZERTY is accepted (the fallback) |
-| `src/options.rs` | Real session without `--nested`, scales repeated, the command and its own options, wrong options refused; the real session refused under `DISPLAY` or `WAYLAND_DISPLAY` with a message naming `--nested`; XWayland only with `--xwayland` in the real session |
+| `src/options.rs` | Real session without `--nested`, scales repeated, the command and its own options, wrong options refused; the real session refused under `DISPLAY` or `WAYLAND_DISPLAY` with a message naming `--nested`; XWayland only with `--xwayland` in the real session; `--greeter` stops with its command, given after `--` |
 | `src/input.rs` | Ctrl + Alt + Fn and Ctrl + Alt + Backspace in a real session, nothing in nested mode |
 | `src/mesa.rs` | Mesa's EGL vendor file found and NVIDIA's left out; Xwayland's environment: the EGL restriction and a GBM folder without NVIDIA's backend (an older link to it removed), nothing more without a runtime folder |
 | `src/udev.rs` | The pointer kept on screens of different heights |
@@ -2945,6 +3248,7 @@ just verify
 | `tests/headless.rs` | Without a screen or backend, see below |
 | `tests/dmabuf.rs` | linux-dmabuf without a GPU, see below |
 | `tests/xwayland.rs` | XWayland and an X11 client, without a screen or backend, see below |
+| `tests/idle_inhibit.rs` | What keeps the session awake, see "Session lock" (lot D-43) |
 | `tests/clipboard.rs` | Clipboard and primary selection between a Wayland client and X11 clients (x11rb): text, pictures of several MB (INCR), screenshot, nothing while locked (lot D-29) |
 | `tests/gestures.rs`, `src/gestures.rs`, `src/touchpad.rs` | Touchpad gestures and setting, see "Touchpad" |
 | `tests/mission_control.rs`, `src/mission_control/` | Mission Control, see "Mission Control" |

@@ -11,10 +11,10 @@ use std::{
     path::PathBuf,
     sync::{
         Arc,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU32, Ordering},
         mpsc,
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use sherlock_ui::osd::Kind;
@@ -41,6 +41,11 @@ use crate::{
 /// keyboard setting says (`State::key_repeat`).
 pub const REPEAT_DELAY: Duration = Duration::from_millis(crate::KEY_REPEAT_DELAY as u64);
 pub const REPEAT_INTERVAL: Duration = Duration::from_millis(1000 / crate::KEY_REPEAT_RATE as u64);
+/// Repeats of a held key kept while the worker is at work, or while the event loop came late,
+/// at most (lot Q-46): they go together once it is free, merged into one step (`merge`). So the
+/// steps of a hold follow how long the key is held, not how often the loop could run, and a
+/// sound server that hangs gives no great jump when it comes back.
+pub const REPEATS_OWED: u32 = 8;
 /// Longest wait for logind, UPower or a media player.
 const BUS_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -127,13 +132,29 @@ impl Controls {
     }
 }
 
+/// A repeat timer fired at `now`, the next repeat due at `next`: the repeats due since then, one
+/// per `interval` passed, added to `owed` (`REPEATS_OWED` at most), and when the next one is due.
+pub fn due(next: Instant, now: Instant, interval: Duration, owed: u32) -> (Instant, u32) {
+    let late = now.saturating_duration_since(next).as_nanos();
+    let passed = late / interval.as_nanos().max(1);
+    let count = u32::try_from(passed).unwrap_or(u32::MAX).saturating_add(1);
+    // Very late (the machine slept, the loop stalled): the pace starts again from now.
+    let next = match count {
+        c if c > REPEATS_OWED => now + interval,
+        c => next + interval.saturating_mul(c),
+    };
+    (next, owed.saturating_add(count).min(REPEATS_OWED))
+}
+
 /// The keys at work: the worker thread, whether it is at work, and the key held.
 pub struct MediaKeys {
     worker: mpsc::Sender<MediaKey>,
     /// Set from a key sent until the worker has done everything it was given: a held key only
     /// repeats when it is not set, so that a slow `pactl` never piles keys up.
     busy: Arc<AtomicBool>,
-    held: Option<(Keycode, RegistrationToken)>,
+    /// The key held, its repeat timer, and the repeats it owes (`REPEATS_OWED`): sent when the
+    /// key is released, so that a hold gives its steps even if the worker was at work all along.
+    held: Option<(Keycode, RegistrationToken, MediaKey, Arc<AtomicU32>)>,
 }
 
 /// The keys waiting for the worker, in order, with the steps of the volume or of the
@@ -347,6 +368,13 @@ impl State {
         self.media_keys.is_some()
     }
 
+    /// The worker of the media keys has done everything it was given (the tests).
+    pub fn media_keys_idle(&self) -> bool {
+        self.media_keys
+            .as_ref()
+            .is_none_or(|keys| !keys.busy.load(Ordering::SeqCst))
+    }
+
     /// `key` (`code`) is pressed: its action goes to the worker, and again while it is held.
     pub(crate) fn press_media_key(&mut self, code: Keycode, key: MediaKey) {
         self.stop_media_repeat(None);
@@ -363,20 +391,33 @@ impl State {
         // The repeat of the keyboard setting, as the other keys.
         let (delay, interval) = self.key_repeat();
         let timer = Timer::from_duration(delay);
+        // When the next repeat is due, and the repeats due not sent yet.
+        let mut next = Instant::now() + delay;
+        let owing = Arc::new(AtomicU32::new(0));
+        let owed_here = owing.clone();
         let token = self.loop_handle.insert_source(timer, move |_, _, _| {
-            // A repeat only goes when the worker has done the keys before it.
+            let now = Instant::now();
+            // Every interval that passed counts, however late the loop runs this.
+            let owed;
+            (next, owed) = due(next, now, interval, owed_here.load(Ordering::SeqCst));
+            owed_here.store(owed, Ordering::SeqCst);
+            let wait = TimeoutAction::ToDuration(next.saturating_duration_since(now));
+            // A repeat only goes when the worker has done the keys before it; meanwhile the
+            // repeats are kept, and they go together.
             if busy.swap(true, Ordering::SeqCst) {
-                return TimeoutAction::ToDuration(interval);
+                return wait;
             }
-            match worker.send(key) {
-                Ok(()) => TimeoutAction::ToDuration(interval),
-                Err(_) => TimeoutAction::Drop,
+            for _ in 0..owed_here.swap(0, Ordering::SeqCst) {
+                if worker.send(key).is_err() {
+                    return TimeoutAction::Drop;
+                }
             }
+            wait
         });
         match token {
             Ok(token) => {
                 if let Some(keys) = &mut self.media_keys {
-                    keys.held = Some((code, token));
+                    keys.held = Some((code, token, key, owing));
                 }
             }
             Err(err) => tracing::warn!("media key repeat: {err}"),
@@ -389,11 +430,20 @@ impl State {
         let Some(keys) = &mut self.media_keys else {
             return;
         };
-        if let Some((held, token)) = keys.held
-            && code.is_none_or(|code| code == held)
-        {
-            keys.held = None;
+        if let Some((held, token, key, owing)) = keys.held.take() {
+            if code.is_some_and(|code| code != held) {
+                keys.held = Some((held, token, key, owing));
+                return;
+            }
             self.loop_handle.remove(token);
+            // The repeats due while the worker was at work: they go now, merged into one step.
+            let owed = owing.swap(0, Ordering::SeqCst);
+            if owed > 0 {
+                keys.busy.store(true, Ordering::SeqCst);
+                for _ in 0..owed {
+                    let _ = keys.worker.send(key);
+                }
+            }
         }
     }
 }
@@ -422,6 +472,13 @@ mod tests {
         assert!(MediaKey::KeyboardUp.repeats());
         assert!(!MediaKey::KeyboardToggle.repeats());
         assert!(REPEAT_INTERVAL < REPEAT_DELAY);
+        // Q-46: a timer that fires late owes every interval that passed, a few at most.
+        let start = Instant::now();
+        let ms = Duration::from_millis;
+        assert_eq!(due(start, start, ms(40), 0), (start + ms(40), 1));
+        let (next, owed) = due(start, start + ms(130), ms(40), 0);
+        assert_eq!((next, owed), (start + ms(160), 4));
+        assert_eq!(due(start, start + ms(10_000), ms(40), 0).1, REPEATS_OWED);
     }
 
     #[test]
