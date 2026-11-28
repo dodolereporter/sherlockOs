@@ -239,6 +239,17 @@ are built once (`sherlock_ui::component::icon` caches the SVG handles).
   | ![Menu on the background, Trier par open](evidence/menu-background-dark.png) | ![Menu on the background, light](evidence/menu-background-light.png) |
 
   Halfway through unfolding, software renderer: ![Menu unfolding](evidence/menu-opening.png)
+- Network (lot E-07): a « Réseau » section of the sidebar lists the file servers of the local
+  network, found without any tool installed (`network`): a multicast DNS question for
+  `_smb._tcp.local` (Samba, macOS and NAS boxes, announced by Avahi or mDNSResponder) and a
+  WS-Discovery probe (Windows computers, Samba with wsdd). Each listening lasts 2.5 s, on a
+  thread of its own, again every 2 minutes; at most 256 answers of 9000 bytes are read and 64
+  servers kept; a compression loop or a cut packet names nothing; names are shown safely. A
+  click mounts the server as a guest through gvfs (`gio mount --anonymous smb://host/`, `smb`),
+  without root, off the interface thread with a 30 s limit, then opens the folder gvfs shows it
+  in (`gio info`, « local path »); an eject button beside it unmounts it. Without gvfs, the
+  status bar says so. Servers that want a name and a password say so for now: the sheet that
+  asks for them, and the Secret Service keyring, come in E-07b.
 - Trash: deleting moves to the freedesktop trash (shared with Plasma, GNOME, `gio trash`).
   The trash view lists the original name, the deletion date read from the record, and the
   origin. Emptying asks first and deletes only what was listed when the question was asked.

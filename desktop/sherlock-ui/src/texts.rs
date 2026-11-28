@@ -107,6 +107,20 @@ pub mod evidence {
     pub const TRASH: &str = "Corbeille";
     /// Devices: disks, keys, cards.
     pub const DEVICES: &str = "Appareils";
+    /// The file servers of the local network (lot E-07).
+    pub const NETWORK: &str = "Réseau";
+    pub const NETWORK_NO_GIO: &str =
+        "Pour te connecter à un serveur, il faut gvfs (la commande gio), qui n'est pas installé.";
+    pub const NETWORK_CREDENTIALS: &str = "Ce serveur demande un nom et un mot de passe.";
+    pub const NETWORK_TIMEOUT: &str = "Le serveur ne répond pas.";
+    pub const NETWORK_NO_FOLDER: &str = "Le serveur est monté, mais sans dossier à ouvrir.";
+    pub fn network_failed(why: &str) -> String {
+        format!("La connexion n'a pas marché : {why}")
+    }
+    pub fn connecting(server: &str) -> String {
+        format!("Connexion à {server}…")
+    }
+    pub const DISCONNECTED: &str = "Le serveur est déconnecté.";
     pub const SYSTEM_DISK: &str = "Disque système";
     pub const MOUNT: &str = "Monter";
     pub const UNMOUNT: &str = "Démonter";
