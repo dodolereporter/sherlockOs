@@ -39,8 +39,9 @@ pub(crate) struct OpenMenu {
     pub(crate) target: Option<Target>,
     pub(crate) entries: Vec<Line>,
     pub(crate) cursor: Option<usize>,
-    /// The grid of a stack instead of entries (lot D-21k): how many items it was opened for.
-    pub(crate) grid: Option<usize>,
+    /// The content of a stack instead of entries (lots D-21k, D-21k2): how it is presented, and
+    /// how many items it was opened for.
+    pub(crate) stack: Option<(crate::stack::Presentation, usize)>,
     /// Opening, open, or closing before its popup goes.
     pub(crate) unfold: Unfold,
 }
@@ -1787,11 +1788,17 @@ impl Dock {
     /// Opens the grid of the stack of icon `index` over it, as a menu (lot D-21k).
     fn open_grid(&mut self, index: usize) -> Task<Message> {
         let count = self.stack.as_ref().map_or(0, |s| s.items.len());
+        let bottom = self.geometry.position == Edge::Bottom;
+        let shown = crate::stack::presentation(self.sources.config.stack.view, count, bottom);
+        let count = match shown {
+            crate::stack::Presentation::Fan => count.min(dock::FAN_MAX),
+            _ => count,
+        };
         let Some(icon) = self.layout(self.now).icons.get(index).copied() else {
             return Task::none();
         };
         let target = self.items.get(index).map(Item::target);
-        self.show_menu(target, Vec::new(), icon, Some(count))
+        self.show_menu(target, Vec::new(), icon, Some((shown, count)))
     }
 
     /// Opens the downloads folder in Evidence.
@@ -1824,16 +1831,20 @@ impl Dock {
         target: Option<Target>,
         entries: Vec<Line>,
         icon: iced::Rectangle,
-        grid: Option<usize>,
+        stack: Option<(crate::stack::Presentation, usize)>,
     ) -> Task<Message> {
         let close = self.drop_menu();
         let Some(surface) = self.surface else {
             tracing::warn!("dock surface unknown: the menu cannot open");
             return close;
         };
-        let (width, height) = match grid {
-            Some(count) => {
-                let (width, height) = dock::stack_size(count);
+        let (width, height) = match stack {
+            Some((shown, count)) => {
+                let (width, height) = match shown {
+                    crate::stack::Presentation::Fan => dock::fan_size(count),
+                    crate::stack::Presentation::Grid => dock::stack_size(count),
+                    crate::stack::Presentation::List => dock::list_size(count),
+                };
                 (width.ceil() as u32, height.ceil() as u32)
             }
             None => menu::surface_size(&entries),
@@ -1889,7 +1900,7 @@ impl Dock {
             target,
             entries,
             cursor: None,
-            grid,
+            stack,
             unfold: Unfold::opening(self.now),
         });
         Task::batch([close, Task::done(Message::NewPopUp { settings, id })])

@@ -357,11 +357,58 @@ pub const STACK_ICON: f32 = 44.0;
 pub const STACK_GAP: f32 = 4.0;
 pub const STACK_PADDING: f32 = 12.0;
 pub const STACK_FOOTER: f32 = 40.0;
+/// Rows of the grid shown at once; past them it scrolls (lot D-21k2).
+pub const STACK_ROWS: usize = 4;
+
+// The fan of a stack, as macOS's (lot D-21k2): `FAN_MAX` items at most, rising in an arc over
+// the icon, the first at the bottom: a row each, its icon, its name in a pill on its left. The
+// arc leans `FAN_ARC` to the right at its top. The rows come out of the icon one after the
+// other, `FAN_STAGGER` of the opening apart, on the spring of the menus.
+pub const FAN_MAX: usize = 10;
+pub const FAN_ROW: f32 = 56.0;
+pub const FAN_ICON: f32 = 48.0;
+/// Half the width of the fan: its surface is centred on the icon, the items' icons over it, their
+/// names on the left, the arc on the right.
+pub const FAN_HALF: f32 = 260.0;
+/// Width of a name, at most: longer, it ends with « … ».
+pub const FAN_LABEL_MAX: f32 = 200.0;
+pub const FAN_ARC: f32 = 44.0;
+pub const FAN_LABEL_GAP: f32 = 10.0;
+pub const FAN_STAGGER: f32 = 0.07;
+
+/// Size of the fan of `count` items: width, then height.
+pub fn fan_size(count: usize) -> (f32, f32) {
+    let rows = count.clamp(1, FAN_MAX) as f32;
+    (
+        2.0 * FAN_HALF,
+        STACK_FOOTER + rows * FAN_ROW + STACK_PADDING,
+    )
+}
+
+/// How far right the row `from_bottom` of `rows` sits, on the arc: nothing at the bottom,
+/// `FAN_ARC` at the top, bending more as it rises.
+pub fn fan_offset(from_bottom: usize, rows: usize) -> f32 {
+    let top = rows.saturating_sub(1).max(1) as f32;
+    let t = from_bottom as f32 / top;
+    FAN_ARC * t * t
+}
+
+/// Size of the list of a stack of `count` items, as a menu: width, then height.
+pub fn list_size(count: usize) -> (f32, f32) {
+    let rows = (count + 1) as f32;
+    let separator = crate::metrics::BORDER_WIDTH + 2.0 * crate::metrics::MENU_SEPARATOR_MARGIN.0;
+    let height = 2.0 * crate::metrics::MENU_PADDING
+        + MENU_HEADER_HEIGHT
+        + rows * crate::metrics::MENU_ITEM_HEIGHT
+        + separator;
+    (OWN_MENU_WIDTH, height)
+}
 
 /// Size of the grid of a stack of `count` items: width, then height.
 pub fn stack_size(count: usize) -> (f32, f32) {
     let columns = count.clamp(1, STACK_COLUMNS);
-    let rows = count.div_ceil(STACK_COLUMNS).max(1);
+    // Past `STACK_ROWS` rows, the grid scrolls (lot D-21k2).
+    let rows = count.div_ceil(STACK_COLUMNS).clamp(1, STACK_ROWS);
     let width =
         2.0 * STACK_PADDING + columns as f32 * STACK_CELL.0 + (columns - 1) as f32 * STACK_GAP;
     let height = 2.0 * STACK_PADDING
@@ -450,6 +497,19 @@ mod styles {
     }
 
     /// Label above the hovered icon, cream like Sherlock's bubbles, faded by `opacity`.
+    /// The tile of an item of the fan (lot D-21k2): a card of glass under its glyph.
+    pub fn fan_tile(theme: &Theme) -> container::Style {
+        let p = crate::theme::palette(theme);
+        container::Style {
+            background: Some(Background::Color(p.card.into())),
+            border: Border::default()
+                .rounded(crate::metrics::CARD_RADIUS)
+                .width(crate::metrics::BORDER_WIDTH)
+                .color(p.card_border),
+            ..container::Style::default()
+        }
+    }
+
     pub fn label(opacity: f32) -> impl Fn(&Theme) -> container::Style {
         move |theme| {
             let p = palette(theme);
@@ -516,6 +576,19 @@ mod styles {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_fan_leans_right_as_it_rises_and_the_grid_scrolls_past_four_rows() {
+        assert_eq!(super::fan_offset(0, 5), 0.0);
+        assert_eq!(super::fan_offset(4, 5), super::FAN_ARC);
+        assert!(
+            super::fan_offset(2, 5) < super::FAN_ARC / 2.0,
+            "bending as it rises"
+        );
+        assert_eq!(super::stack_size(48), super::stack_size(16));
+        assert!(super::fan_size(3).1 < super::fan_size(10).1);
+        assert_eq!(super::fan_size(30), super::fan_size(10));
+    }
+
     #[test]
     fn a_picture_goes_in_base64_and_the_pile_has_three_cards_at_most() {
         assert_eq!(super::base64(b"Man"), "TWFu");
