@@ -297,11 +297,11 @@ mod tests {
 
     #[test]
     fn the_input_is_json_or_plain_text_and_bounded() {
-        let input = Input::parse(br#"{"request":" Bonjour ","history":[["a","b"],["c"]]}"#);
+        let input = Input::parse(br#"{"request":" Hello ","history":[["a","b"],["c"]]}"#);
         assert_eq!(
             input,
             Some(Input {
-                request: "Bonjour".into(),
+                request: "Hello".into(),
                 history: vec![("a".into(), "b".into())],
             })
         );
