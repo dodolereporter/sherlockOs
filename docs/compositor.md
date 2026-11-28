@@ -909,6 +909,9 @@ the window itself and answers (`consent.rs`):
   refuse; a destructive tool refuses Enter and a click, and is granted by a hold; an asker gone
   withdraws its request; a malformed request closes the connection; a process that is not
   `sherlockd` cannot ask.
+  `tests/sherlock_end_to_end.rs`: the real `sherlockd` asks this window, which refuses with
+  Escape then grants with a hold; only the granted call runs, and the journal has both
+  decisions and the outcome (see `docs/sherlockd.md`, "From end to end").
 
 ## Activation (lot Q-52)
 
