@@ -891,22 +891,28 @@ the window itself and answers (`consent.rs`):
   sixteen in all: more are refused at once.
 - **Drawn in front of everything**, the overlay layer, the screenshot tool and the clicks
   included: a scrim over each screen and a panel in its middle, its title, the tool, its
-  arguments (control characters dropped, 4 lines of 56 characters at most, « … » after), what
+  arguments (4 lines of 56 characters at most, « … » after; a control character, a line
+  separator, a zero-width or bidirectional mark shown as « ? », never dropped nor applied, so
+  that the name shown is the one used), what
   the action does, « Refuser » and « Autoriser ». Its texts are ours; nothing a client draws is
-  shown in it. Hidden while the session is locked.
+  shown in it. Hidden while the session is locked; shown again on unlocking, armed again only
+  after 0.6 s, so that a key or a click meant for the lock screen grants nothing.
 - **Its input is reserved**: while it is shown, no client has the keyboard (not even an
   exclusive layer), nor the pointer; popups are dismissed; every key goes to it, but the console
   switch. A click on a window or a key reaches no client.
 - **Refused by default**: Escape and « Refuser » refuse. Its buttons do nothing for 0.6 s
   after it appears (`consent::ARMING`): a click or a key already on its way grants nothing.
-  An action is granted by a click on « Autoriser » or by Enter; a destructive tool only by
+  A click counts only when its press began on the button, once armed: a press under way
+  when the window appeared (a drag), or begun on « Refuser », released on « Autoriser », grants
+  nothing. An action is granted by a click on « Autoriser » or by Enter; a destructive tool only by
   « Autoriser » held 1.5 s (`consent::HOLD`), a bar filling along its edge, Enter doing nothing.
   When the asking process goes away (its socket closes), its requests are withdrawn and the
   window goes; `sherlockd` refuses on its side when nobody answers within 60 s.
 - **Tests** (`tests/mission_control.rs`, which shares its harness): the window is the first item
   drawn; with it, a click on a window and a key reach no client; Enter before 0.6 s grants
   nothing, after it grants an action, and the keyboard goes back; Escape and « Refuser »
-  refuse; a destructive tool refuses Enter and a click, and is granted by a hold; an asker gone
+  refuse; a destructive tool refuses Enter and a click, and is granted by a hold; a press begun before
+  arming or on « Refuser » grants nothing; an asker gone
   withdraws its request; a malformed request closes the connection; a process that is not
   `sherlockd` cannot ask.
   `tests/sherlock_end_to_end.rs`: the real `sherlockd` asks this window, which refuses with
