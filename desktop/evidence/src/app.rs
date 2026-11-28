@@ -396,6 +396,8 @@ pub struct App {
     pub(crate) sort: Sort,
     pub(crate) show_hidden: bool,
     pub(crate) show_preview: bool,
+    /// The preview was asked for while the width had folded it: it stays, the columns fold.
+    pub(crate) preview_pinned: bool,
     pub(crate) search: String,
     pub(crate) repo: Option<Repo>,
     pub(crate) preview: Preview,
@@ -488,6 +490,7 @@ impl App {
             sort: Sort::default(),
             show_hidden: false,
             show_preview: true,
+            preview_pinned: false,
             search: String::new(),
             repo: None,
             preview: Preview::Info,
@@ -635,6 +638,11 @@ impl App {
                 .file_name()
                 .map_or_else(|| texts::ROOT.into(), |n| n.to_string_lossy().into_owned()),
         }
+    }
+
+    /// The panes and columns the window's width leaves room for (lot E-05).
+    pub fn panes(&self) -> crate::layout::Panes {
+        crate::layout::Panes::at(self.size.width, self.show_preview, self.preview_pinned)
     }
 
     pub fn can_go_back(&self) -> bool {
@@ -1398,9 +1406,9 @@ impl App {
     // Lasso.
 
     /// Top left corner of the listing's rows in the window, below its column headers.
-    fn list_origin() -> Point {
+    fn list_origin(&self) -> Point {
         Point::new(
-            metrics::SIDEBAR_WIDTH + metrics::BORDER_WIDTH + metrics::LIST_PADDING,
+            self.panes().sidebar_width() + metrics::LIST_PADDING,
             metrics::TITLE_BAR_HEIGHT
                 + metrics::TOOLBAR_HEIGHT
                 + metrics::LIST_HEADER_HEIGHT
@@ -1411,12 +1419,12 @@ impl App {
     /// Height of the visible part of the listing.
     fn list_height(&self) -> f32 {
         let below = metrics::BORDER_WIDTH + metrics::STATUS_BAR_HEIGHT;
-        self.size.height - Self::list_origin().y - below
+        self.size.height - self.list_origin().y - below
     }
 
     /// A point of the window in the content of the listing, scroll included.
     fn in_list(&self, at: Point) -> (f32, f32) {
-        let origin = Self::list_origin();
+        let origin = self.list_origin();
         (at.x - origin.x, at.y - origin.y + self.scroll.0)
     }
 
@@ -1461,7 +1469,7 @@ impl App {
         if !self.lasso.as_ref().is_some_and(|l| l.dragging) {
             return 0.0;
         }
-        let y = self.pointer.y - Self::list_origin().y;
+        let y = self.pointer.y - self.list_origin().y;
         let (offset, height) = (self.scroll.0, self.list_height());
         let content = metrics::LIST_TOP_GAP + self.entries.len() as f32 * metrics::LIST_ROW_HEIGHT;
         let speed = edge_scroll(
@@ -1780,7 +1788,7 @@ impl App {
             + metrics::LIST_HEADER_HEIGHT
             + 3.0 * metrics::BORDER_WIDTH
             + metrics::LIST_TOP_GAP;
-        let left = metrics::SIDEBAR_WIDTH + metrics::LIST_PADDING + metrics::LIST_ROW_HEIGHT;
+        let left = self.panes().sidebar_width() + metrics::LIST_PADDING + metrics::LIST_ROW_HEIGHT;
         self.open_menu(Point::new(left, top + row - self.scroll.0));
     }
 
@@ -1788,13 +1796,8 @@ impl App {
     /// menu opens again there, as in any file manager; elsewhere it only closes.
     fn reopen(&mut self) -> Task<Message> {
         self.menu = None;
-        let origin = Self::list_origin();
-        let preview = if self.show_preview {
-            metrics::PREVIEW_WIDTH + metrics::BORDER_WIDTH
-        } else {
-            0.0
-        };
-        let right = self.size.width - preview - metrics::LIST_PADDING;
+        let origin = self.list_origin();
+        let right = self.size.width - self.panes().preview_width() - metrics::LIST_PADDING;
         let (x, y) = (self.pointer.x, self.pointer.y);
         let inside = x >= origin.x && x < right && y >= origin.y;
         if !inside || y >= origin.y + self.list_height() {
@@ -2064,7 +2067,14 @@ impl App {
             Command::ViewList => {}
             Command::EditPath => return self.start_path_edit(false, None),
             Command::GoToFolder => return self.start_path_edit(true, None),
-            Command::TogglePreview => self.show_preview = !self.show_preview,
+            // Space shows a preview the width had folded, rather than hiding a hidden one.
+            Command::TogglePreview if self.show_preview && !self.panes().preview => {
+                self.preview_pinned = true;
+            }
+            Command::TogglePreview => {
+                self.show_preview = !self.show_preview;
+                self.preview_pinned = false;
+            }
             Command::DeviceOpen | Command::DeviceUnmount | Command::DeviceEject => {
                 let Some(id) = self.device_menu.clone() else {
                     return Task::none();

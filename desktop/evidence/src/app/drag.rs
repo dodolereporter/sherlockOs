@@ -153,7 +153,7 @@ impl App {
     fn folder_at(&self, at: Point) -> Option<usize> {
         let (x, y) = self.in_list(at);
         let top = sherlock_ui::metrics::LIST_TOP_GAP;
-        if x < 0.0 || y < top || at.y < Self::list_origin().y {
+        if x < 0.0 || y < top || at.y < self.list_origin().y {
             return None;
         }
         let index = ((y - top) / sherlock_ui::metrics::LIST_ROW_HEIGHT) as usize;
