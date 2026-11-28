@@ -197,6 +197,12 @@ pub enum Message {
     SoundSet(Result<Audio, Problem>),
     Catalog(Arc<Catalog>),
     SetApp(Kind, Choice),
+    /// A settings file changed elsewhere.
+    FilesChanged,
+    /// The files as they are now, read off the interface thread.
+    Reloaded(Arc<(Settings, Vec<File>)>),
+    /// The sound devices changed elsewhere.
+    SoundChanged,
     /// The « Réseau » page.
     Network(NetworkChange),
     /// Another `control-room` asked for a page: this window shows it.
@@ -452,6 +458,14 @@ impl App {
                 .map(|e| Message::Displays(DisplayChange::Event(e))),
             false => Subscription::none(),
         };
+        // Changes made elsewhere: the files, and the sound while its page is open.
+        let files = Subscription::run_with(self.followed_files(), crate::follow::files)
+            .map(|()| Message::FilesChanged);
+        let sound = match self.page == Page::Sound {
+            true => Subscription::run_with(self.paths.pactl.clone(), crate::follow::sound)
+                .map(|()| Message::SoundChanged),
+            false => Subscription::none(),
+        };
         let bluetooth = if self.page == Page::Bluetooth {
             Subscription::run(crate::bluetooth::changes).map(Message::Bluetooth)
         } else {
@@ -466,8 +480,18 @@ impl App {
         };
         let asked = Subscription::run(crate::instance::asked).map(Message::Show);
         Subscription::batch([
-            frames, tab, keys, appearance, screens, bluetooth, network, asked,
+            frames, tab, keys, appearance, screens, files, sound, bluetooth, network, asked,
         ])
+    }
+
+    /// The files Control Room shows, followed while it is open.
+    fn followed_files(&self) -> crate::follow::Files {
+        let mut files: Vec<_> = File::ALL
+            .iter()
+            .map(|f| self.paths.of(*f).to_owned())
+            .collect();
+        files.push(self.paths.apps.config_home.join("mimeapps.list"));
+        crate::follow::Files(files)
     }
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
@@ -524,6 +548,31 @@ impl App {
             Message::ScrollTo(found) => {
                 if let Some((from, to)) = found {
                     self.scroll = Some(Animation::new(cr::PAGE_SPRING, from, to, now));
+                }
+            }
+            Message::FilesChanged => {
+                // Our own changes, waiting or being written, are read back when written.
+                if self.writing.is_some() || !self.pending.is_empty() {
+                    return Task::none();
+                }
+                let paths = self.paths.clone();
+                let read = Task::perform(async move { Settings::load(&paths) }, |read| {
+                    Message::Reloaded(Arc::new(read))
+                });
+                return Task::batch([read, self.load_catalog()]);
+            }
+            Message::Reloaded(read) => {
+                if self.writing.is_none() && self.pending.is_empty() {
+                    let (settings, locked) = (*read).clone();
+                    self.settings = settings;
+                    self.locked = locked;
+                }
+            }
+            Message::SoundChanged => {
+                // A change of ours on its way shows itself when `pactl` answers.
+                if !self.sound_busy && self.sound_queue.is_empty() && self.volumes.is_empty() {
+                    let pactl = self.pactl();
+                    return Task::perform(async move { sound::read(&pactl) }, Message::Audio);
                 }
             }
             Message::AppWritten(kind, ok) => {

@@ -47,7 +47,7 @@ fn launcher(screen: (f32, f32)) -> Launcher {
         .into_iter()
         .map(|section| Box::new(Long { section, count: 5 }) as Box<dyn Source>)
         .collect();
-    let mut launcher = Launcher::new(sources, Arc::new(|_| Ok(1))).with_screen(screen);
+    let mut launcher = Launcher::new(sources, Arc::new(|_, _| Ok(1))).with_screen(screen);
     let _ = launcher.update(Message::Query(String::from("rapport")));
     let _ = launcher.update(Message::Frame(Instant::now() + Duration::from_secs(5)));
     launcher

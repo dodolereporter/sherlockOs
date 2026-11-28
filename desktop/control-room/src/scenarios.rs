@@ -1015,3 +1015,20 @@ fn captures_of_the_screens() {
         capture(&app, &format!("displays-confirm-{theme_name}"), SIZES[0].0);
     }
 }
+
+#[test]
+fn a_file_changed_elsewhere_shows_unless_a_change_of_ours_waits() {
+    let (_tmp, mut app) = bench_with("follow", &[("sherlockos/touchpad.conf", "speed = 0.4\n")]);
+    // Changed by hand while Control Room is open.
+    fs::write(&app.paths.touchpad, "speed = 0.4\ntap-to-click = false\n").expect("file");
+    let _ = app.update(Message::FilesChanged);
+    let _ = app.update(Message::Reloaded(Arc::new(Settings::load(&app.paths))));
+    assert!(!app.settings.touchpad.tap_to_click);
+    // A change of ours waits: what was read before it does not replace it.
+    let stale = Arc::new(Settings::load(&app.paths));
+    let _ = app.update(Message::Set(Change::NaturalScroll(false)));
+    let _ = app.update(Message::Reloaded(stale));
+    assert!(!app.settings.touchpad.natural_scroll);
+    app.finish_writes();
+    assert!(!Settings::load(&app.paths).0.touchpad.natural_scroll);
+}
