@@ -53,7 +53,8 @@ pub fn surface(height: u32) -> NewLayerShellSettings {
         anchor: Anchor::Top | Anchor::Right,
         exclusive_zone: Some(0),
         margin: Some(Margin {
-            top: ui::BELOW_BAR as i32,
+            // The room of « × » above the first bubble comes out of the gap under the bar.
+            top: (ui::BELOW_BAR - ui::CLOSE_OUTSET) as i32,
             ..Margin::default()
         }),
         keyboard_interactivity: KeyboardInteractivity::None,
@@ -134,19 +135,23 @@ mod tests {
         // 0, not -1: the compositor places it below the zone the bar reserves.
         assert_eq!(settings.exclusive_zone, Some(0));
         let margin = settings.margin.unwrap_or_default();
-        assert_eq!((margin.top, margin.right), (ui::BELOW_BAR as i32, 0));
+        assert_eq!(
+            (margin.top, margin.right),
+            ((ui::BELOW_BAR - ui::CLOSE_OUTSET) as i32, 0)
+        );
         assert_eq!(settings.keyboard_interactivity, KeyboardInteractivity::None);
-        assert_eq!(settings.size, LayerSize::px(332, 200));
+        assert_eq!(settings.size, LayerSize::px(340, 200));
         // On the reference screen: the bar reserves its margin and height, the first bubble
         // starts where the board puts the notification centre, 12 from the right edge.
         let reserved = metrics::TOP_BAR_MARGIN_TOP + metrics::TOP_BAR_HEIGHT;
-        let first = reserved + margin.top as f32 + layout::stack(&[90.0])[0];
+        let first = reserved + margin.top as f32 + ui::CLOSE_OUTSET + layout::stack(&[90.0])[0];
         assert_eq!(first, 54.0);
-        let right = metrics::REFERENCE_SCREEN.0 - margin.right as f32 - layout::SURFACE_WIDTH;
+        let right = metrics::REFERENCE_SCREEN.0 - margin.right as f32 - layout::SURFACE_WIDTH
+            + ui::CLOSE_OUTSET;
         assert_eq!(
             right + ui::WIDTH,
             metrics::REFERENCE_SCREEN.0 - ui::SCREEN_EDGE
         );
-        assert_eq!(surface(0).size, LayerSize::px(332, 1));
+        assert_eq!(surface(0).size, LayerSize::px(340, 1));
     }
 }

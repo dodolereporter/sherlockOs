@@ -2120,9 +2120,9 @@ How it works (`src/udev.rs`):
 - **Card.** `card::choose` reads `/sys/class/drm` like `sherlock_ui::gpu` (vendor, driver,
   `boot_vga`, connector `status`), which never wakes a card. It takes the `boot_vga` card with a
   screen plugged in, or else the `boot_vga` card, or else any card with a screen. **An NVIDIA
-  card is never chosen nor opened**: on the reference laptop, the AMD chip drives the internal
-  screen and the RTX stays asleep. Only the chosen card is opened: screens wired to another card
-  (some laptops wire their HDMI port to the NVIDIA card) stay dark.
+  card is never chosen**: on the reference laptop, the AMD chip renders and drives the internal
+  screen. Another card is opened only while a screen is plugged into it, and closed when the last
+  one goes, to sleep again (lot D-16, ADR 0037, "Another card's screens" below).
 - **EGL.** Before anything else, the compositor sets `__EGL_VENDOR_LIBRARY_FILENAMES` to Mesa's
   vendor file (`50_mesa.json`, looked for in `/etc/glvnd/egl_vendor.d` and
   `/usr/share/glvnd/egl_vendor.d`), unless the user set it: libglvnd never loads NVIDIA's EGL
@@ -2371,6 +2371,67 @@ prints the line for those missing): `xdg-desktop-portal`, `xdg-desktop-portal-gt
 The script is tested with fake programs under `env -i` (`tests/session.rs`): XWayland given by
 default and left out with `SHERLOCKOS_XWAYLAND=0`, the keyring started and its variables exported,
 the first agent found started, the warning without any, the activation environment.
+
+### Another card's screens (lot D-16, ADR 0037, proposed)
+
+The reference laptop wires its HDMI port to the NVIDIA card; the AMD chip renders and drives the
+internal screen. The compositor still renders everything on the AMD chip, and shows the HDMI
+screen through the NVIDIA card:
+
+- **Opened for a screen only.** Each other card of the seat is known from udev, never opened at
+  start. Whether a screen is plugged into it is read from `/sys/class/drm/cardN-*/status`: the
+  kernel gives the status it keeps, updated by the card's hotplug interrupt, without probing the
+  connector nor waking the card (`card::has_screen`). With a screen, the card is opened through
+  the seat (`card` opened, its power state logged), its connectors read, its screens added; at
+  each udev change of that card they are read again, and when the last one goes the card is
+  closed: its screens leave the space, its DRM and GBM devices are dropped, and its descriptor
+  goes back to the seat (libseat's `close_device`, so that logind lets go of its own too). The
+  power state is logged again 15 s later (`the other card, after closing power=suspended`). A
+  descriptor still held elsewhere would keep the card awake: the log says so in an error.
+- **Drawn on the AMD chip, shown by the other card (PRIME).** Each screen of the other card has
+  a `DrmCompositor` on that card whose buffers are allocated on the AMD chip (GBM), linear (only
+  the linear formats of the renderer are offered), drawn by the same renderer as every screen,
+  then imported into the other card for scanout (`GbmFramebufferExporter` on the other card's
+  GBM device imports a foreign buffer with `gbm_bo_import`). No client buffer goes straight to
+  that screen, and the cursor is drawn into the frame (no cursor plane there).
+- **Given up rather than kept awake.** A card that cannot be opened, whose screens cannot be
+  driven (no CRTC, no format in common), or whose screen fails its first three frames, is closed
+  and not opened again until its screen is unplugged.
+- **The way back.** The file `~/.config/sherlockos/no-secondary-cards` (empty, read when the
+  session starts), or `SHERLOCKOS_SECONDARY_CARDS=0` in the compositor's environment: no other
+  card is ever opened, as before this lot.
+- **Console switch.** Every open card is paused and activated with the session; on the way back,
+  each other card is considered again (a screen plugged in or out meanwhile).
+
+Tested: the choice and the reading of `/sys` (`card::tests`), the decision to open, read again
+or leave a card (`udev::tests`). The rest needs the hardware: the author's trial below.
+
+**Trial on the reference laptop** (careful: the first freezes of the machine came with wakes of
+the NVIDIA card). Before: close every game and `prime-run` program; keep a second machine or a
+phone to reach the laptop over SSH (`ssh` enabled), and save open work.
+
+1. Without the HDMI cable, start the session as usual. In a terminal:
+   `cat /sys/bus/pci/devices/0000:01:00.0/power/runtime_status` (the NVIDIA card's address, from
+   `ls -l /sys/class/drm/card*/device`) must say `suspended`, and stay so for a minute
+   (`watch -n1 cat …`). The compositor's log (`tail -f ~/.local/state/sherlockos/session.log`)
+   has no `opening it` line.
+2. Plug in the HDMI screen. Within a second or two, the log says `a screen is plugged into another
+   card: opening it`, then `screen plugged in` for `HDMI-A-1`; the screen lights with the desktop
+   extended to the right. `runtime_status` says `active`. Move a window onto it, watch a video
+   there for a minute: no `frames drawn again` / `failures` warnings should repeat.
+3. Unplug it. The log says `screen of the other card gone`, `the other card is closed`, then 15 s
+   later `the other card, after closing power=suspended`; `runtime_status` says `suspended` within
+   about 10 s (the driver's autosuspend delay). An error `the other card is still held` means it
+   will stay awake: note it and end the session.
+4. Plug and unplug three times, then switch to a text console and back (Ctrl + Alt + F2, F1) with
+   the screen plugged in.
+
+If the machine freezes or the HDMI screen stays black: from the other machine,
+`ssh` in and `loginctl terminate-user $USER` (or hold the power button). Then, to go back to the
+behaviour before this lot without reinstalling anything: `touch
+~/.config/sherlockos/no-secondary-cards` (from the other machine, or from Plasma), and start the
+session again; delete the file to try again. Send the log lines around `opening it` and the
+kernel's (`journalctl -k -b -1 | grep -i nvidia`).
 
 ### When something goes wrong
 
@@ -3089,8 +3150,8 @@ rectangle (`Item::Squashed`); the line and the dot are shapes.
     works while locked too.
 - **Dark.** Nothing is drawn (`render::items` gives black, and nothing animates, so no frame is
   asked for); the real session turns each screen off once (`DrmCompositor::clear`, DPMS off), and
-  the next frame queued turns it on again. Only the card already driven is touched: the NVIDIA
-  card is never opened. A locked frame is not needed while dark: the lock is confirmed at once.
+  the next frame queued turns it on again. Only the cards already open are touched: a sleeping
+  card is never opened for it. A locked frame is not needed while dark: the lock is confirmed at once.
 - **Frames while dark.** Nothing is drawn, but every client still gets its frame callbacks,
   once a second (`power::DARK_FRAMES`): a client that waits for its callback before it presents
   again (Mesa's Vulkan and EGL do) would otherwise stay blocked, the lock program first. While

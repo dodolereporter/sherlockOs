@@ -265,7 +265,8 @@ mod tests {
     }
 
     /// D-23d: under the pointer a bubble shows « × », which dismisses it; swiped to the right
-    /// past a third of its width it goes, a shorter swipe springs back. `notifications-hover`.
+    /// past a third of its width it goes, a shorter swipe springs back. D-23f: the « × » is the
+    /// macOS badge, half outside the top left corner, faded in. `notifications-hover`.
     #[test]
     fn a_bubble_goes_with_its_close_button_or_a_swipe() {
         let (sink, inbox) = Inbox::new();
@@ -283,13 +284,16 @@ mod tests {
         settle(&mut app);
         // Serial 2, the newest, is on top.
         let _ = app.update(Message::Hover(2, true));
+        settle(&mut app);
         capture(&app, "notifications-hover");
-        // « × » at the right end of the header of the bubble on top.
+        // A taller bubble, with its actions: the badge on its corner too.
+        let mut tall = bubbles();
+        let _ = tall.update(Message::Hover(2, true));
+        settle(&mut tall);
+        capture(&tall, "notifications-hover-actions");
+        // « × » on the top left corner of the bubble on top, its outer half included.
         let messages = messages_of(&app, |ui| {
-            ui.point_at(Point::new(
-                ui::WIDTH - ui::PADDING - 8.0,
-                ui::PADDING + 10.0,
-            ));
+            ui.point_at(Point::new(6.0, 6.0));
             let _ = ui.simulate(simulator::click());
         });
         assert!(
