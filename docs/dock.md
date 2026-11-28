@@ -693,6 +693,52 @@ compositor receives and the watching connection sees go.
 
 Still missing: **game mode**, a way for the dock to know it, so that it hides (see below).
 
+## Trash (D-21j)
+
+As on macOS, the trash ends the dock, after the separator (`items.rs`, `trash.rs`). It is the
+user's freedesktop trash, `$XDG_DATA_HOME/Trash` (`~/.local/share/Trash`), the one Evidence
+fills. Its tile (`dock::trash_icon`) is a bin, with sheets of paper in it while `Trash/files`
+holds something: a thread follows the folder with inotify (`trash::watch`, as the dock follows
+its file) and tells the dock each time it fills or empties; nothing polls.
+
+- A click opens it in Evidence (`evidence trash:///`, Evidence's argument for its trash).
+- An icon of the pinned list dragged onto it and let go is thrown away: unpinned, in a puff of
+  smoke, as when it is let go out of the dock.
+- Its menu: « Ouvrir », then « Vider la corbeille » while it holds something. A first click
+  arms it (« Reclique pour vider », the menu stays open); a second one, past the launcher's
+  `CONFIRM_DELAY` (a double click only arms), deletes what it holds on a thread of its own:
+  each entry of `Trash/files` and its record in `Trash/info`, a link removed itself, never what
+  it points to, 100,000 entries at most at a time.
+
+Files cannot be dropped on it from Evidence yet: the dock accepts only the applications of the
+Applications view (D-41d, below).
+
+![The trash, full, at the end of the dock](../desktop/dock/screenshots/trash.png)
+![Its menu, armed](../desktop/dock/screenshots/trash-menu.png)
+
+## Downloads stack (D-21k)
+
+Before the trash stands the downloads folder, as a stack (`stack.rs`): `XDG_DOWNLOAD_DIR` of
+`user-dirs.dirs` (`$HOME` itself refused), else `~/Downloads`, when it exists. Its tile is the
+theme's `folder-download`, else `dock::stack_icon`. A thread finds the folder and follows it
+with inotify (`trash::follow`, shared with the trash), reading its 16 newest items among its
+first 4,096 entries, hidden ones left out; the dock is rebuilt only when the folder itself
+changes, not its content.
+
+- A click opens its grid over it, as a menu unfolds: four to a row, the newest first, each with
+  Evidence's picture for its kind and its name, which ends with « … » when too long; a hover
+  veil and a press on each. A click opens the item with its default application (`mime-apps`,
+  on a thread), a folder in Evidence; « Ouvrir dans Evidence » opens the downloads folder.
+- A right click gives its menu: « Ouvrir dans Evidence ».
+
+The fan of macOS is not drawn: the grid is shown on every edge.
+
+![The stack before the trash](../desktop/dock/screenshots/stack.png)
+![Its grid](../desktop/dock/screenshots/stack-grid.png)
+![Its grid, full](../desktop/dock/screenshots/stack-grid-full.png)
+
+While an icon is dragged, the pointer is the closed hand, over the dock or past it
+(`pointer::held`).
 ## Applications dragged from the Applications view (D-41d)
 
 An application dragged from the Applications view is pinned where it is dropped, as from
