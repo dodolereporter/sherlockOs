@@ -172,6 +172,20 @@ then. Bubbles already on screen when it is switched on stay until they close.
 `NotificationsConfig::save` writes the file atomically and keeps its other lines, for the quick
 settings panel and Control Room.
 
+**For a time** (D-23e). `DoNotDisturbUntil`, in seconds since 1970, ends it by itself
+(`NotificationsConfig::active_at`): the daemon reads the end with the rest, and lets the
+notifications show once it passed. Empty or absent, Do not disturb lasts until switched off; a
+value that cannot be read is ignored with a warning, as if absent. The tile of the control
+centre (`bar/src/quick/focus.rs`) switches it on until switched off, or off; its chevron
+(« Durées ») offers « Pendant 1 heure », « Jusqu’à ce soir » (19:00, offered before then) and
+« Jusqu’à demain matin » (8:00), the duration in force checked, and the tile then says
+« Jusqu’à 19:00 ». The bar reads and writes the file on a thread of its own, never on the
+interface's, and reads it again each minute: while it holds, a moon shows among the indicators
+of the bar, set from Control Room too, gone at its end.
+
+![The moon among the indicators](../desktop/bar/screenshots/bar-do-not-disturb.png)
+![The durations](../desktop/bar/screenshots/do-not-disturb-durations.png)
+
 ## History
 
 The 100 newest notifications (`notifications::HISTORY`), in memory, newest first, whatever
