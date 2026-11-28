@@ -19,8 +19,10 @@ iced = { version = "=0.14.0", default-features = false, features = [
 # Evidence pins.
 image = { version = "=0.25.10", default-features = false, features = ["jpeg", "png"] }
 sherlock-ui = { path = "../sherlock-ui" }
-# The settings files Control Room writes, each read live by its program (workspace crates).
+# The settings files Control Room writes, each read live by its program, and the functions that
+# read and write them, shared with Sherlock (workspace crates).
 appearance-config = { path = "../appearance-config" }
+settings-files = { path = "../settings-files" }
 desktop-config = { path = "../desktop-config" }
 dock-config = { path = "../dock-config" }
 # Installed applications and default applications (`mimeapps.list`), and the one safe writer

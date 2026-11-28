@@ -9,6 +9,7 @@
 //! - [`claude_code`]: the provider that hands the conversation to Claude Code.
 //! - [`process`]: started processes never outlive sherlockd.
 //! - [`services_server`]: the MCP server of the systemd units and their journal (A-16).
+//! - [`settings_server`]: the MCP server of the settings, by Control Room's functions (A-17).
 //! - [`test_server`]: a test MCP server, with no effect on the system.
 //! - [`window`]: the compositor's consent window, which the broker asks (A-11c).
 //! - [`containers_server`], [`docker`]: the MCP server of the containers, on the Docker API (A-14).
@@ -32,6 +33,7 @@ pub mod process;
 pub mod proxy;
 pub mod scripted;
 pub mod services_server;
+pub mod settings_server;
 pub mod shell;
 pub mod test_server;
 pub mod window;

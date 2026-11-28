@@ -207,7 +207,7 @@ fades out over `SPOTLIGHT`. Escape empties the field. Ctrl+F puts the keyboard i
 
 | Module | Role | iced |
 | --- | --- | --- |
-| `settings` | Where the files are, reading them all, writing one | no |
+| `settings` | Where the files are, reading them all, writing one: the `settings-files` crate (lot A-17), shared with Sherlock's settings server, which sets a key the same way (`Settings::set_key`) | no |
 | `search` | The pages, the settings of each, the search | no |
 | `thumbnails` | The installed wallpapers and their thumbnails | no |
 | `sound` | Outputs, microphones and volumes through `pactl` | no |
