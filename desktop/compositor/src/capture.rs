@@ -27,8 +27,10 @@ use smithay::{
     backend::{
         allocator::Fourcc,
         renderer::{
-            Bind as _, ExportMem as _, Texture as _, TextureMapping as _,
-            gles::{GlesRenderer, GlesTexture},
+            Bind as _, ExportMem as _, Frame as _, Renderer as _, Texture as _,
+            TextureMapping as _,
+            element::{Element as _, RenderElement as _},
+            gles::{GlesError, GlesRenderer, GlesTexture},
         },
     },
     desktop::Window,
@@ -42,15 +44,17 @@ use smithay::{
         },
         rustix,
     },
-    utils::{Physical, Rectangle, Size},
+    utils::{Physical, Rectangle, Scale, Size, Transform},
     wayland::selection::{SelectionTarget, data_device::set_data_device_selection},
 };
 
 use crate::{
     State,
+    cursor::Cursors,
     damage::Ids,
     output::View,
     render::Scene,
+    screenshot_thumbnail::Taken,
     screenshot_tool::{Pending, Tool},
     wallpaper, window_anim,
 };
@@ -111,8 +115,10 @@ impl Image {
     }
 }
 
-/// Draws a target into an image: given by the backend, which has the renderer.
-pub type Capturer = Box<dyn FnMut(&mut State, &Target) -> Option<Image>>;
+/// Draws a target into an image, with the cursor or without: given by the backend, which has
+/// the renderer and the cursor images. Screenshots never show the cursor; a screen share asks
+/// for it (lot D-28c).
+pub type Capturer = Box<dyn FnMut(&mut State, &Target, bool) -> Option<Image>>;
 
 /// Where the screenshots go and how they are confirmed. The tests give folders and a bus of
 /// their own.
@@ -129,6 +135,12 @@ struct Job {
     image: Image,
     destination: Destination,
     folder: Folder,
+    /// A window taken alone gets its shadow, at the scale of its screen (lot D-35e).
+    shadow: Option<f64>,
+    /// The scale of the screen its thumbnail shows on, and the thumbnail's border.
+    scale: f64,
+    border: sherlock_ui::color::Color,
+    serial: u64,
 }
 
 #[derive(Default)]
@@ -140,6 +152,12 @@ pub struct Capture {
     pub(crate) tool: Option<Tool>,
     pub(crate) options: Options,
     pub(crate) pending: Option<Pending>,
+    /// The thumbnail of the last image taken, the screen of each image on its way, and the
+    /// image carried into an application (lot D-35e).
+    pub(crate) thumbnail: Option<crate::screenshot_thumbnail::Thumbnail>,
+    pub(crate) thumbnail_outputs: std::collections::VecDeque<Option<Output>>,
+    pub(crate) dragged: Option<(Arc<[u8]>, Option<PathBuf>)>,
+    serial: u64,
     /// Pastes of a screenshot being written.
     pastes: Rc<Cell<usize>>,
 }
@@ -234,9 +252,19 @@ fn encode(image: &Image) -> Result<Vec<u8>, image::ImageError> {
 }
 
 /// The worker: each image written, put in the clipboard by the loop, then confirmed.
-fn work(settings: Settings, jobs: mpsc::Receiver<Job>, saved: channel::Sender<Arc<[u8]>>) {
+fn work(settings: Settings, jobs: mpsc::Receiver<Job>, saved: channel::Sender<Taken>) {
     let notifier = notifier(settings.session_bus.clone());
-    while let Ok(job) = jobs.recv() {
+    while let Ok(mut job) = jobs.recv() {
+        if let Some(scale) = job.shadow {
+            let shadow = sherlock_ui::color::palette().shadow;
+            let size = (job.image.width, job.image.height);
+            let (rgba, width, height) = tool_ui::with_shadow(&job.image.rgba, size, scale, shadow);
+            job.image = Image {
+                width,
+                height,
+                rgba,
+            };
+        }
         let png = match encode(&job.image) {
             Ok(png) => png,
             Err(err) => {
@@ -244,8 +272,8 @@ fn work(settings: Settings, jobs: mpsc::Receiver<Job>, saved: channel::Sender<Ar
                 continue;
             }
         };
-        let (title, body) = match job.destination {
-            Destination::CopyOnly => (tool_ui::COPIED, String::from(tool_ui::COPIED_BODY)),
+        let (title, body, path) = match job.destination {
+            Destination::CopyOnly => (tool_ui::COPIED, String::from(tool_ui::COPIED_BODY), None),
             Destination::SaveAndCopy => {
                 let base = settings.pictures.as_deref();
                 let Some(folder) = folder_of(job.folder, base, |k| std::env::var_os(k)) else {
@@ -261,10 +289,20 @@ fn work(settings: Settings, jobs: mpsc::Receiver<Job>, saved: channel::Sender<Ar
                 };
                 tracing::info!(path = %path.display(), "screenshot written");
                 let name = path.file_name().map(|n| n.to_string_lossy().into_owned());
-                (ui::SAVED, ui::saved_body(&name.unwrap_or_default()))
+                (
+                    ui::SAVED,
+                    ui::saved_body(&name.unwrap_or_default()),
+                    Some(path),
+                )
             }
         };
-        if saved.send(Arc::from(png)).is_err() {
+        let taken = Taken {
+            png: Arc::from(png),
+            path,
+            size: (job.image.width, job.image.height),
+            picture: thumbnail_of(&job),
+        };
+        if saved.send(taken).is_err() {
             return;
         }
         // Handed to the notifier: a notifications daemon that no longer answers never holds
@@ -326,16 +364,37 @@ fn notifier(address: Option<String>) -> Option<mpsc::SyncSender<Confirmation>> {
     }
 }
 
+/// The thumbnail of the image of `job`, at the scale of its screen.
+fn thumbnail_of(job: &Job) -> Option<crate::picture::Picture> {
+    let screen = tool_ui::Rect::new(0.0, 0.0, 1.0e5, 1.0e5);
+    let size = (job.image.width, job.image.height);
+    let r = tool_ui::thumbnail(&screen, size, 0.0);
+    let px = |v: f64| (v * job.scale).round().max(1.0) as u32;
+    let radius = tool_ui::THUMBNAIL_RADIUS * job.scale as f32;
+    let border = (
+        job.border,
+        sherlock_ui::metrics::BORDER_WIDTH * job.scale as f32,
+    );
+    crate::picture::thumbnail(&job.image, (px(r.w), px(r.h)), radius, border, job.serial)
+}
+
 impl State {
     /// Takes the Print Screen key from now on. The real session calls it.
     pub fn enable_screenshots(&mut self, settings: Settings) {
         let (jobs, worker_jobs) = mpsc::channel();
         let (saved, pngs) = channel::channel();
-        let inserted = self.loop_handle.insert_source(pngs, |event, _, state| {
-            if let Event::Msg(png) = event {
-                state.copy_png(png);
-            }
-        });
+        let inserted = self
+            .loop_handle
+            .insert_source(pngs, |event: Event<Taken>, _, state| {
+                if let Event::Msg(taken) = event {
+                    state.copy_png(taken.png.clone());
+                    // The thumbnail, on the screen of the image (lot D-35e).
+                    let output = state.capture.thumbnail_outputs.pop_front().flatten();
+                    if let Some(output) = output.or_else(|| state.pointer_output()) {
+                        state.show_thumbnail(output, taken);
+                    }
+                }
+            });
         if let Err(err) = inserted {
             tracing::warn!("no screenshots: {err}");
             return;
@@ -354,11 +413,11 @@ impl State {
         self.capture.capturer = Some(capturer);
     }
 
-    /// Draws `target` with the backend's capturer, for screen sharing (lot D-28b). `None`
-    /// without a renderer.
-    pub(crate) fn draw_capture(&mut self, target: &Target) -> Option<Image> {
+    /// Draws `target` with the backend's capturer, for screen sharing (lot D-28b), the cursor
+    /// over it if `cursor` (lot D-28c). `None` without a renderer.
+    pub(crate) fn draw_capture(&mut self, target: &Target, cursor: bool) -> Option<Image> {
         let mut capturer = self.capture.capturer.take()?;
-        let image = capturer(self, target);
+        let image = capturer(self, target, cursor);
         self.capture.capturer = Some(capturer);
         image
     }
@@ -388,37 +447,69 @@ impl State {
         match target {
             Some(target) => {
                 let options = Options::default();
-                self.take_with(&target, None, &options);
+                self.take_with(&target, None, &options, false);
             }
             None => tracing::info!(?kind, "screenshot: nothing to take"),
         }
     }
 
+    /// `target` drawn by the backend, without the cursor.
+    pub fn draw_target(&mut self, target: &Target) -> Option<Image> {
+        let Some(mut capturer) = self.capture.capturer.take() else {
+            tracing::warn!("screenshot: no renderer");
+            return None;
+        };
+        // The cursor is stamped by the screenshot itself when it is asked for (`take_with`).
+        let image = capturer(self, target, false);
+        self.capture.capturer = Some(capturer);
+        image
+    }
+
     /// Draws `target`, cut to `crop`, and hands it to the worker with the choices of
-    /// `options`.
+    /// `options`; a window with its `shadow`.
     pub(crate) fn take_with(
         &mut self,
         target: &Target,
         crop: Option<Rectangle<i32, Physical>>,
         options: &Options,
+        shadow: bool,
     ) {
-        let Some(mut capturer) = self.capture.capturer.take() else {
-            tracing::warn!("screenshot: no renderer");
-            return;
+        let mut image = self.draw_target(target);
+        let output = match target {
+            Target::Screen(output) => Some(output.clone()),
+            Target::Window(window) => self.window_output(window),
         };
-        let image = capturer(self, target);
-        self.capture.capturer = Some(capturer);
+        let scale = output
+            .as_ref()
+            .map_or(1.0, |o| o.current_scale().fractional_scale());
+        // The cursor, where it is on that screen, when it is asked for (lot D-35e).
+        if let (Target::Screen(output), Some(image), true) = (target, &mut image, options.cursor)
+            && let (Some(screen), Some(pointer)) =
+                (self.space.output_geometry(output), self.seat.get_pointer())
+        {
+            let at = (pointer.current_location() - screen.loc.to_f64()).to_physical(scale);
+            let light = self.theme() == sherlock_ui::color::Theme::Light;
+            crate::picture::stamp_cursor(image, (at.x, at.y), scale, light);
+        }
         let image = match (image, crop) {
             (Some(image), Some(rect)) => image.crop(rect),
             (image, _) => image,
         };
         match (image, &self.capture.jobs) {
             (Some(image), Some(jobs)) => {
-                let _ = jobs.send(Job {
+                self.capture.serial += 1;
+                let job = Job {
                     image,
                     destination: options.destination,
                     folder: options.folder,
-                });
+                    shadow: (shadow && matches!(target, Target::Window(_))).then_some(scale),
+                    scale,
+                    border: sherlock_ui::color::palette().border,
+                    serial: self.capture.serial,
+                };
+                if jobs.send(job).is_ok() {
+                    self.capture.thumbnail_outputs.push_back(output);
+                }
             }
             (None, _) => tracing::warn!("screenshot: nothing drawn"),
             _ => {}
@@ -427,7 +518,7 @@ impl State {
 
     /// The console is left: the tool and its timer go, at once.
     pub(crate) fn cancel_area(&mut self) {
-        let open = self.capture.tool.take().is_some() || self.capture.pending.take().is_some();
+        let open = self.capture.tool.take().is_some() | self.capture.pending.take().is_some();
         if open {
             self.queue_redraw();
         }
@@ -528,38 +619,135 @@ fn read(renderer: &mut GlesRenderer, mut texture: GlesTexture) -> Option<Image> 
     })
 }
 
-/// Draws `target`: a screen as it shows now, without the cursor; a window as at rest, its title
-/// bar, border and corners included. The backends call it from their `Capturer`.
+/// The size in pixels of the picture of `target`: a screen's frame, or a window as at rest with
+/// its title bar (`window_anim::snapshot`). `None` for a screen or a window gone.
+pub fn target_size(state: &State, target: &Target) -> Option<Size<i32, Physical>> {
+    match target {
+        Target::Screen(output) => {
+            let views = state.views();
+            let (_, view) = views.iter().find(|(o, _)| o == output)?;
+            Some(view.frame.size)
+        }
+        Target::Window(window) => {
+            let (_, _, size) = window_anim::snapshot_place(state, window)?;
+            (!size.is_empty()).then_some(size)
+        }
+    }
+}
+
+/// Draws `target`: a screen as it shows now; a window as at rest, its title bar, border and
+/// corners included. With `cursors`, the cursor goes over it where the pointer is, if it is on
+/// the target (a screen share, lot D-28c). The backends call it from their `Capturer`.
 pub fn image(
     scene: &Scene,
     renderer: &mut GlesRenderer,
     textures: &mut wallpaper::Textures,
     state: &mut State,
     target: &Target,
+    cursors: Option<&mut Cursors>,
 ) -> Option<Image> {
-    let texture = match target {
+    let mut texture = match target {
         Target::Window(window) => window_anim::snapshot(scene, renderer, state, window)?,
         Target::Screen(output) => {
-            let (_, view) = state.views().into_iter().find(|(o, _)| o == output)?;
-            let size: Size<i32, Physical> = view.frame.size;
-            let view = View {
-                frame: Rectangle::from_size(size),
-                frame_size: size,
-                ..view
-            };
             let now = state.now();
-            let views = [(output.clone(), view)];
-            let mut ids = Ids::default();
-            let (screens, _) =
-                scene.screens(renderer, &mut ids, state, textures, &views, None, now);
-            let elements = screens.into_iter().next()?;
-            let desktop = color::palette().desktop.premultiplied();
-            window_anim::draw(renderer, size, &elements, desktop)
-                .inspect_err(|err| tracing::warn!("screenshot: drawing the screen: {err}"))
-                .ok()?
+            screen_texture(scene, renderer, textures, state, output, now)?
         }
     };
+    if let Some(cursors) = cursors
+        && let Err(err) = draw_cursor(renderer, &mut texture, cursors, state, target)
+    {
+        tracing::warn!("screen share: drawing the cursor: {err}");
+    }
     read(renderer, texture)
+}
+
+/// The screen `output` as it is drawn at `now`, counted from the start of the compositor: a
+/// screenshot, or a frame of an animation (the board of the screens off, lot D-38).
+pub fn screen_at(
+    scene: &Scene,
+    renderer: &mut GlesRenderer,
+    textures: &mut wallpaper::Textures,
+    state: &mut State,
+    output: &Output,
+    now: Duration,
+) -> Option<Image> {
+    let texture = screen_texture(scene, renderer, textures, state, output, now)?;
+    read(renderer, texture)
+}
+
+/// The screen `output` as it is drawn at `now`, into a texture: a screenshot, or the frame
+/// frozen under the curtain when the session locks (lot D-24e).
+pub fn screen_texture(
+    scene: &Scene,
+    renderer: &mut GlesRenderer,
+    textures: &mut wallpaper::Textures,
+    state: &mut State,
+    output: &Output,
+    now: Duration,
+) -> Option<GlesTexture> {
+    let (_, view) = state.views().into_iter().find(|(o, _)| o == output)?;
+    let size: Size<i32, Physical> = view.frame.size;
+    let view = View {
+        frame: Rectangle::from_size(size),
+        frame_size: size,
+        ..view
+    };
+    let views = [(output.clone(), view)];
+    let mut ids = Ids::default();
+    let (screens, _) = scene.screens(renderer, &mut ids, state, textures, &views, None, now);
+    let elements = screens.into_iter().next()?;
+    let desktop = color::palette().desktop.premultiplied();
+    window_anim::draw(renderer, size, &elements, desktop)
+        .inspect_err(|err| tracing::warn!("drawing the screen: {err}"))
+        .ok()
+}
+
+/// Draws the cursor over `texture`, the picture of `target`, if the pointer is on it.
+fn draw_cursor(
+    renderer: &mut GlesRenderer,
+    texture: &mut GlesTexture,
+    cursors: &mut Cursors,
+    state: &State,
+    target: &Target,
+) -> Result<(), GlesError> {
+    let (Some(icon), Some(pointer)) = (
+        state.cursor_shape(),
+        state.seat.get_pointer().map(|p| p.current_location()),
+    ) else {
+        return Ok(());
+    };
+    // The tip in the texture's pixels, and the scale of the picture.
+    let place = match target {
+        Target::Screen(output) => state
+            .space
+            .output_under(pointer)
+            .any(|o| o == output)
+            .then(|| state.views().into_iter().find(|(o, _)| o == output))
+            .flatten()
+            .map(|(_, view)| {
+                let frame = view.frame.loc.to_f64();
+                (view.point(pointer) - frame, view.scale)
+            }),
+        Target::Window(window) => window_anim::snapshot_place(state, window)
+            .filter(|(whole, _, _)| whole.to_f64().contains(pointer))
+            .map(|(whole, scale, _)| ((pointer - whole.loc.to_f64()).to_physical(scale), scale)),
+    };
+    let Some((at, scale)) = place else {
+        return Ok(());
+    };
+    let Some((element, _)) = cursors.element(renderer, icon, at, (scale, 1.0), state.now()) else {
+        return Ok(());
+    };
+    let size = texture.size();
+    let size = Size::<i32, Physical>::from((size.w, size.h));
+    let mut target = renderer.bind(texture)?;
+    let mut frame = renderer.render(&mut target, size, Transform::Normal)?;
+    let dst = element.geometry(Scale::from(1.0));
+    let damage = [Rectangle::from_size(dst.size)];
+    element.draw(&mut frame, element.src(), dst, &damage, &[])?;
+    // Read next in the same GL context, which keeps the order: nothing to wait for.
+    let _ = frame.finish()?;
+    Ok(())
 }
 
 #[cfg(test)]

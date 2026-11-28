@@ -151,6 +151,12 @@ impl<Message> Widget<Message, Theme, Renderer> for Shadowed<'_, Message> {
         renderer: &Renderer,
         operation: &mut dyn Operation,
     ) {
+        // A menu or a panel is glass: it asks for the blur behind it (lot D-37b). `Flat` only
+        // learns the renderer, over content that may not be glass.
+        #[cfg(feature = "layer-shell")]
+        if self.elevation != Elevation::Flat {
+            crate::glass::declare(operation, layout.bounds(), self.radius);
+        }
         self.content
             .as_widget_mut()
             .operate(&mut tree.children[0], layout, renderer, operation);
@@ -210,6 +216,7 @@ impl<Message> Widget<Message, Theme, Renderer> for Shadowed<'_, Message> {
         let gpu = is_gpu(renderer);
         let palette = crate::theme::palette(theme);
         DRAWN.store(if gpu { GPU } else { SOFTWARE }, Ordering::Relaxed);
+        crate::color::set_opaque_glass(!gpu);
         if gpu {
             if let Some(shadow) = self.elevation.blurred(palette) {
                 // A transparent quad that only casts the shadow; the content covers it.

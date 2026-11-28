@@ -226,18 +226,22 @@ fn copy_paste_then_cut_paste_with_the_keyboard() {
     assert_eq!(read(&bench.path("projet/a.txt")), "contenu de a");
     // The pasted copy is selected.
     assert_eq!(bench.selected(), ["a.txt"]);
-    // Pasting a second time in the same place does not touch the first file.
+    // Pasting a second time in the same place asks (lot E-11); keeping both does not touch
+    // the first file.
     bench.ctrl("v");
+    assert!(bench.app.pending_paste.is_some());
+    bench.send(Message::TakenChoice(Some(
+        crate::transfer_job::Taken::KeepBoth,
+    )));
     assert_eq!(bench.names(), ["a (copie).txt", "a.txt"]);
 
-    // Cutting into a folder that already has this name: refused, nothing is overwritten.
+    // Cutting into a folder that already has this name, skipped: nothing is overwritten.
     bench.select("a.txt");
     fs::write(bench.path("projet/src/a.txt"), "modifié").expect("write");
     bench.ctrl("x");
     bench.press(Named::Backspace);
     bench.ctrl("v");
-    let notice = bench.app.notice.clone().expect("error message");
-    assert!(notice.error, "{notice:?}");
+    bench.send(Message::TakenChoice(Some(crate::transfer_job::Taken::Skip)));
     assert_eq!(read(&bench.path("projet/src/a.txt")), "modifié");
     assert_eq!(read(&bench.path("projet/a.txt")), "contenu de a");
 
@@ -1799,4 +1803,181 @@ fn path_bar_captures() {
         capture_at(&bench.app, &format!("evidence-path-sheet-{tag}"), size);
         bench.send(Message::PathCancel);
     }
+}
+
+/// Space opens the large preview of the item, the arrows go to the next one, Space or Escape
+/// close it (lot E-12); the panel of the preview stays where it was.
+#[test]
+fn space_opens_the_large_preview() {
+    let mut bench = Bench::new("quick-look");
+    let shown = bench.app.show_preview;
+    bench.press(Named::Space);
+    assert!(!bench.app.looking, "nothing selected: nothing to look at");
+    bench.select("src");
+    bench.press(Named::Space);
+    assert!(bench.app.looking);
+    assert_eq!(bench.app.show_preview, shown);
+    bench.press(Named::ArrowDown);
+    assert!(bench.app.looking);
+    assert_eq!(bench.selected(), ["a.txt"]);
+    bench.app.settle();
+    capture(&bench.app, "evidence-quick-look");
+    bench.press(Named::Escape);
+    assert!(!bench.app.looking);
+    assert!(bench.app.look_level() > 0.0, "it zooms out");
+    bench.press(Named::Space);
+    bench.press(Named::Space);
+    assert!(!bench.app.looking);
+}
+
+/// A paste onto names already taken asks first: replace (the old one to the trash), keep both,
+/// skip, or call it off (lot E-11).
+#[test]
+fn a_paste_onto_taken_names_asks_first() {
+    use crate::transfer_job::Taken;
+    let mut bench = Bench::new("taken");
+    fs::create_dir_all(bench.path("autre")).expect("folder");
+    fs::write(bench.path("autre/a.txt"), "autre").expect("write");
+    bench.select("a.txt");
+    bench.ctrl("c");
+    bench.send(Message::Go(Location::Folder(bench.path("autre"))));
+    bench.ctrl("v");
+    assert!(bench.app.pending_paste.is_some(), "the choice is asked");
+    bench.send(Message::TakenChoice(None));
+    assert!(bench.app.pending_paste.is_none());
+    assert_eq!(read(&bench.path("autre/a.txt")), "autre");
+    bench.ctrl("v");
+    bench.send(Message::TakenChoice(Some(Taken::Replace)));
+    assert_eq!(read(&bench.path("autre/a.txt")), "contenu de a");
+    assert!(bench.app.progress.is_none(), "done: the bar goes");
+    bench.ctrl("v");
+    bench.send(Message::TakenChoice(Some(Taken::KeepBoth)));
+    assert_eq!(bench.names().len(), 2);
+}
+
+/// The window at the widths of a small laptop, half a 1080p screen, a 1366 laptop and a 1080p
+/// screen (lot E-05, audit B-1): the names stay readable, the columns, the preview and the
+/// sidebar fold around them. Captures in `target/tmp/evidence-width-*.png`.
+#[test]
+fn the_names_stay_at_every_width() {
+    let _theme = crate::testing::in_theme(Theme::Dark);
+    let mut bench = bench_with_files("widths", 3);
+    fs::write(
+        bench.path("projet/compte-rendu-de-la-reunion-du-conseil-d-administration.txt"),
+        "x",
+    )
+    .expect("write");
+    bench.press(Named::F5);
+    bench.select("a.txt");
+    for (width, height) in [
+        (720.0, 460.0),
+        (944.0, 1048.0),
+        (1366.0, 768.0),
+        (1920.0, 1080.0),
+    ] {
+        bench.send(Message::Resized(iced::Size::new(width, height)));
+        bench.app.settle();
+        let panes = bench.app.panes();
+        assert!(
+            panes.name_width(width) >= sherlock_ui::evidence::NAME_MIN_WIDTH,
+            "{width}: {panes:?}"
+        );
+        assert_eq!(panes.preview, width >= 1366.0, "{width}");
+        capture_at(
+            &bench.app,
+            &format!("evidence-width-{width}"),
+            (width, height),
+        );
+    }
+    // « Aperçu » brings back a preview the width had folded; again, it goes. (Space opens the
+    // large preview since E-12.)
+    bench.send(Message::Resized(iced::Size::new(944.0, 1048.0)));
+    bench.send(Message::Run(crate::app::Command::TogglePreview));
+    assert!(bench.app.panes().preview);
+    bench.send(Message::Run(crate::app::Command::TogglePreview));
+    assert!(!bench.app.panes().preview);
+}
+
+/// The rest of the path bar (lot E-04c): « … » lists the folded folders, the sheet remembers
+/// the last folders typed, the search folds to its icon in a narrow window.
+#[test]
+fn folded_folders_recent_folders_and_a_folded_search() {
+    let mut bench = Bench::new("path-rest");
+    let deep = "projet/un-dossier-au-nom-assez-long/deuxieme-niveau/troisieme/quatrieme/fin";
+    fs::create_dir_all(bench.path(deep)).expect("folders");
+    bench.send(Message::Resized(iced::Size::new(720.0, 460.0)));
+    bench.send(Message::Go(Location::Folder(bench.path(deep))));
+    bench.send(Message::Folded(true));
+    let items: Vec<String> = bench
+        .app
+        .folded
+        .items
+        .iter()
+        .map(|(l, _)| l.clone())
+        .collect();
+    assert!(items.contains(&"projet".to_owned()), "{items:?}");
+    let target = bench.app.folded.items[0].1.clone();
+    bench.send(Message::Go(target.clone()));
+    assert_eq!(bench.app.location, target);
+    assert!(!bench.app.folded.open);
+
+    // A folder reached by the field is remembered, the last first, and the sheet opens it.
+    bench.ctrl("l");
+    bench.send(Message::PathInput("~/projet".into()));
+    bench.send(Message::PathSubmit);
+    bench.ctrl("l");
+    bench.send(Message::PathInput(format!("~/{deep}")));
+    bench.send(Message::PathSubmit);
+    let labels: Vec<&str> = bench.app.recent.iter().map(|(_, l)| l.as_str()).collect();
+    assert_eq!(labels, [format!("~/{deep}").as_str(), "~/projet"]);
+    bench.key(
+        Key::Character("g".into()),
+        Modifiers::CTRL | Modifiers::SHIFT,
+    );
+    bench.send(Message::PathRecent(1));
+    assert_eq!(bench.app.location, Location::Folder(bench.path("projet")));
+    assert!(bench.app.path_edit.is_none());
+
+    // At 720, the search is its icon until it is used; Escape folds it back.
+    assert!(bench.app.search_folded());
+    bench.send(Message::OpenSearch);
+    assert!(!bench.app.search_folded());
+    bench.press(Named::Escape);
+    assert!(bench.app.search_folded());
+    bench.send(Message::Resized(iced::Size::new(1366.0, 768.0)));
+    assert!(!bench.app.search_folded());
+}
+
+/// On Wayland the menu and its submenu are popups of their own (lot E-02b): they open with
+/// the menu, follow its submenu, and go once it has folded back; a click outside, which the
+/// compositor reports by closing the popup, closes the menu.
+#[test]
+fn the_menu_and_its_submenu_are_popups_on_wayland() {
+    use crate::app::Sub;
+    let mut bench = bench_with_files("popups", 2);
+    let main = bench.app.pretend_wayland();
+    bench.send(Message::Cursor(iced::Point::new(1250.0, 650.0)));
+    bench.send(Message::RightClick(None));
+    let menu = bench.app.menu.clone().expect("menu open");
+    // A popup is not kept inside the window: it opens where the pointer is.
+    assert_eq!(menu.at, iced::Point::new(1250.0, 650.0));
+    let (popup, _) = bench.app.popups.menu.expect("menu popup");
+    assert!(bench.app.popups.submenu.is_none());
+    bench.send(Message::Submenu(Some(Sub::SortBy)));
+    let (sub, which) = bench.app.popups.submenu.expect("submenu popup");
+    assert_eq!(which, Sub::SortBy);
+    // Each popup draws its own menu; the window no longer does.
+    assert_ne!(popup, sub);
+    assert!(bench.app.popup_view(popup).is_some() && bench.app.popup_view(main).is_none());
+    // A click outside: the compositor closes the popup, the menu closes with it.
+    bench.send(Message::WindowClosed(popup));
+    assert!(bench.app.menu.is_none() && bench.app.popups.menu.is_none());
+    // Escape: the popups stay while the menu folds back, then go.
+    bench.send(Message::RightClick(None));
+    assert!(bench.app.popups.menu.is_some());
+    bench.press(Named::Escape);
+    assert!(bench.app.menu.is_none() && bench.app.popups.menu.is_some());
+    bench.app.settle();
+    bench.send(Message::Inert);
+    assert!(bench.app.popups.menu.is_none(), "gone once folded back");
 }

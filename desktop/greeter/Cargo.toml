@@ -1,0 +1,57 @@
+[package]
+name = "greeter"
+description = "Login screen of SherlockOS, a greeter of greetd (ADR 0026)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "sherlockos-greeter"
+path = "src/main.rs"
+
+[dependencies]
+# Toolkit of the shell (ADR 0014), with the features of the lock screen, whose look it shares.
+iced = { version = "=0.14.0", default-features = false, features = [
+    "advanced",
+    "tiny-skia",
+    "wgpu-bare",
+    "svg",
+    "web-colors",
+    "crisp",
+    "thread-pool",
+    "wayland",
+    "image-without-codecs",
+] }
+# One overlay surface per screen (layer-shell), as the shell programs do.
+iced_exwlshell = { version = "=0.21.4", default-features = false, features = ["macros"] }
+# The look of the lock screen: its background, Sherlock's moods, the machine buttons and the
+# pieces of its view (workspace crate).
+lock = { path = "../lock" }
+sherlock-3d = { path = "../sherlock-3d" }
+sherlock-ui = { path = "../sherlock-ui" }
+# AccountsService on the system bus, for the real names and the system accounts: the version
+# and features the workspace pins.
+zbus = { version = "=5.19.0", default-features = false, features = ["async-io", "blocking-api"] }
+# Reads greetd's replies (greetd-ipc(7)); the requests are written by hand, so that the
+# password goes into a buffer wiped once sent. The version Evidence and sherlockd pin.
+serde_json = "=1.0.154"
+# The `Secret` type of the password, shared with the lock screen (workspace crate).
+system-services = { path = "../system-services" }
+# Wipes the copies of the password made for greetd: the version system-services pins.
+zeroize = { version = "=1.9.1", default-features = false, features = ["alloc"] }
+thiserror = "=2.0.21"
+tracing = "=0.1.44"
+tracing-subscriber = { version = "=0.3.23", default-features = false, features = [
+    "env-filter",
+    "fmt",
+] }
+
+[dev-dependencies]
+iced_test = "=0.14.0"
+# Lays the screenshots of an animation side by side on a board, for the review: the version and
+# features the lock screen already builds.
+image = { version = "=0.25.10", default-features = false, features = ["png"] }
+
+[lints]
+workspace = true

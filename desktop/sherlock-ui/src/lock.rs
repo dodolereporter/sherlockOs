@@ -5,8 +5,11 @@
 //! measures below are choices of the lot, taken from the Mission Control labels. See "Session
 //! lock" in `docs/compositor.md`.
 
+use std::time::Duration;
+
 use crate::color::{Color, Palette};
 use crate::mission_control;
+use crate::motion::Ease;
 
 /// What the rescue screen says.
 pub const RESCUE_TITLE: &str = "Verrouillé";
@@ -15,6 +18,28 @@ pub const RESCUE_HINT: &str = "Appuie sur Entrée pour réessayer";
 /// Height of a pill of the rescue screen, and the gap between the two.
 pub const RESCUE_LABEL_HEIGHT: f32 = mission_control::LABEL_HEIGHT;
 pub const RESCUE_GAP: f32 = 12.0;
+
+/// The curtain (lot D-24d): the picture of the lock, which the compositor lowers from the top
+/// over the last frame of the desktop when the session locks, and raises off the live desktop
+/// once it is unlocked. The lock screen starts its entrance once it is down.
+pub const CURTAIN: Duration = Duration::from_millis(400);
+pub const CURTAIN_EASE: Ease = Ease::OutCubic;
+
+/// Between two compositors (the login screen's, then the session's) the screen goes black: the
+/// curtain fades to black in `CURTAIN_BLACK` before the login screen's compositor stops, and
+/// comes back from black as long when the session's starts. Then it fades out over the desktop
+/// in `CURTAIN_REVEAL`, and the bar and the dock arrive (lot D-24e).
+pub const CURTAIN_BLACK: Duration = Duration::from_millis(250);
+pub const CURTAIN_REVEAL: Duration = Duration::from_millis(600);
+pub const CURTAIN_FADE_EASE: Ease = Ease::OutCubic;
+
+/// How far the curtain is down `elapsed` after it started to move, from 0 (up, out of the
+/// screen) to 1 (down, covering it): lowering when `down`, raising otherwise.
+pub fn curtain(elapsed: Duration, down: bool) -> f32 {
+    let t = elapsed.as_secs_f32() / CURTAIN.as_secs_f32();
+    let way = CURTAIN_EASE.apply(t);
+    if down { way } else { 1.0 - way }
+}
 
 /// The colors of the lock in a palette.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -50,7 +75,7 @@ pub mod screen {
     use std::time::Duration;
 
     use crate::color::{Color, Palette};
-    use crate::motion::{self, Spring};
+    use crate::motion::{self, Ease, Spring};
 
     /// A length proportional to the screen's height, kept between `min` and `max`.
     pub fn fit(height: f32, ratio: f32, min: f32, max: f32) -> f32 {
@@ -102,19 +127,44 @@ pub mod screen {
         fit(height, 0.07, 24.0, 96.0)
     }
 
+    /// The discreet line of the bottom corner (lot D-25i): the network, the keyboard layout
+    /// and the battery, its icons, its text, the gap between them and the margin from the
+    /// corner of the screen.
+    pub const STATUS_ICON: f32 = 16.0;
+    pub const STATUS_TEXT_SIZE: f32 = 12.0;
+    pub const STATUS_GAP: f32 = 16.0;
+    pub const STATUS_MARGIN: f32 = 24.0;
+
+    /// Towards a restart or a power off (lot D-25i): Sherlock waves for `DEPART_WAVE`, then
+    /// the screen fades to black over `DEPART_FADE` and the command runs. Still there
+    /// `DEPART_GIVE_UP` later (logind refused, an inhibitor), the screen comes back.
+    pub const DEPART_WAVE: Duration = Duration::from_millis(1400);
+    pub const DEPART_FADE: Duration = Duration::from_millis(600);
+    pub const DEPART_GIVE_UP: Duration = Duration::from_secs(12);
+    /// The black the screen fades to, as a screen switched off.
+    pub const DEPART_BLACK: Color = Color::rgb(0, 0, 0);
+
     /// Entrance: each element rises by `RISE` and fades in, `STAGGER` after the one before,
     /// on the spring of a window that opens. The first key ends every animation at once.
     pub const RISE: f32 = 16.0;
     pub const STAGGER: Duration = Duration::from_millis(70);
     pub const SPRING: Spring = motion::OPEN_SPRING;
-    /// Exit, once unlocked: everything fades out, in reverse order.
+    /// Exit, once unlocked or logged in: each element fades out in `EXIT`, `STAGGER` after
+    /// the one below it (the machine buttons first, the time last); the background stays.
     pub const EXIT: Duration = Duration::from_millis(220);
+    pub const EXIT_EASE: Ease = Ease::InQuad;
     /// A wrong password: the pill shakes three times, then empties.
     pub const SHAKE: Duration = Duration::from_millis(450);
     pub const SHAKES: f32 = 3.0;
     pub const SHAKE_AMPLITUDE: f32 = 12.0;
     /// One turn of the spinner.
     pub const SPIN: Duration = motion::SPIN;
+
+    /// The curtain (lot D-25e): the picture slides down from the top on `SPRING`, once it is
+    /// decoded (`CURTAIN_WAIT` at most without it), then the date and the time drop in,
+    /// `CURTAIN_LAG` later.
+    pub const CURTAIN_WAIT: Duration = Duration::from_millis(1500);
+    pub const CURTAIN_LAG: Duration = Duration::from_millis(140);
 
     /// The form (bubble, name, pill, machine buttons) shows only on demand, as on macOS: a key,
     /// a click or the pointer bring it, and it leaves again after `FORM_TIMEOUT` without input.
@@ -123,6 +173,26 @@ pub mod screen {
     pub const BUBBLE_FROM: f32 = 0.6;
     /// How long Sherlock is sorry after a refusal, before he rests.
     pub const SORRY: Duration = Duration::from_millis(2500);
+    /// While a key comes in the field, and this long after the last one, Sherlock looks down
+    /// at it, head and eyes, whatever his mood (lot D-24d).
+    pub const TYPING_GAZE: Duration = Duration::from_millis(1500);
+    /// The picture behind the screen fades in once read, over the same picture the compositor
+    /// shows (lot D-24d): nothing jumps when it is ready.
+    pub const PICTURE_FADE: Duration = motion::THEME_FADE;
+
+    /// How much of element `index` is left `elapsed` after the screen started to leave, from 1
+    /// to 0: the last element (`last`, the machine buttons) leaves first, the others follow
+    /// `STAGGER` apart, the time (0) last.
+    pub fn exit(index: u32, last: u32, elapsed: Duration) -> f32 {
+        let behind = STAGGER * last.saturating_sub(index);
+        let t = elapsed.saturating_sub(behind).as_secs_f32() / EXIT.as_secs_f32();
+        1.0 - EXIT_EASE.apply(t)
+    }
+
+    /// How long the exit of `last + 1` elements takes.
+    pub fn exit_length(last: u32) -> Duration {
+        STAGGER * last + EXIT
+    }
 
     /// The picture behind the lock screen, blurred once at start: reduced to this width, blurred
     /// with this deviation (in pixels of the reduced picture), then darkened by `DIM`. Drawn
@@ -175,6 +245,8 @@ pub mod screen {
     pub const WRONG: &str = "Mot de passe incorrect";
     pub const TOO_MANY: &str = "Trop d'essais. Patiente un peu avant de réessayer.";
     pub const UNAVAILABLE: &str = "Vérification impossible. Réessaie.";
+    /// The previous check of the password still runs (lot D-25m).
+    pub const BUSY: &str = "Vérification encore en cours. Réessaie dans un instant.";
     pub const CAPS_LOCK: &str = "Verr. Maj activé";
     pub const SLEEP: &str = "Veille";
     pub const REBOOT: &str = "Redémarrer";
@@ -219,6 +291,28 @@ mod tests {
         let colors = Colors::of(&Palette::DARK);
         assert_eq!(colors.background, Palette::DARK.system_screen);
         assert_eq!(hex(Palette::DARK.system_screen), "0a1424");
+    }
+
+    #[test]
+    fn the_curtain_comes_down_then_goes_up() {
+        assert_eq!(curtain(Duration::ZERO, true), 0.0);
+        let half = curtain(CURTAIN / 2, true);
+        assert!(half > 0.5 && half < 1.0, "{half}");
+        assert_eq!(curtain(CURTAIN, true), 1.0);
+        assert_eq!(curtain(CURTAIN * 2, true), 1.0);
+        assert_eq!(curtain(Duration::ZERO, false), 1.0);
+        assert_eq!(curtain(CURTAIN, false), 0.0);
+    }
+
+    #[test]
+    fn the_elements_leave_in_reverse_order() {
+        let at = |ms| Duration::from_millis(ms);
+        // The buttons (4) go first, the time (0) last.
+        assert!(screen::exit(4, 4, at(100)) < 1.0);
+        assert_eq!(screen::exit(0, 4, at(100)), 1.0);
+        assert!(screen::exit(4, 4, at(100)) < screen::exit(2, 4, at(100)));
+        assert_eq!(screen::exit(4, 4, screen::EXIT), 0.0);
+        assert_eq!(screen::exit(0, 4, screen::exit_length(4)), 0.0);
     }
 
     #[test]

@@ -3,13 +3,18 @@
 //! The library holds the state and the logic, the binary picks the backend.
 //! Architecture and tests: `docs/compositor.md`.
 
+mod activation;
 pub mod anim;
+pub mod arrival;
+pub mod background_effect;
+pub mod blur;
 pub mod capture;
 pub mod card;
 pub mod clicks;
 // The clipboard history of Super + V (lot D-42).
 pub mod clipboard_history;
 pub mod cursor;
+pub mod curtain;
 pub mod damage;
 pub mod decorations;
 pub mod displays;
@@ -20,10 +25,12 @@ pub mod focus;
 pub mod fullscreen;
 pub mod genie;
 pub mod gestures;
+mod greeter;
 mod handlers;
 // The hook of the selections, for the clipboard history (lot D-42).
 pub use handlers::{SECRET_HINT, SelectionOrigin, is_secret};
 pub mod headless;
+pub mod inhibit;
 mod input;
 pub mod keyboard;
 pub mod launcher;
@@ -40,9 +47,13 @@ pub mod output;
 pub mod output_management;
 pub mod pacing;
 pub mod perf;
+pub mod picture;
 pub mod popup_anim;
+pub mod power;
 pub mod render;
 pub mod screencast;
+mod screensaver;
+pub mod screenshot_thumbnail;
 pub mod screenshot_tool;
 mod shell;
 pub mod stats;
@@ -53,9 +64,11 @@ pub mod udev;
 pub mod wallpaper;
 pub mod window_anim;
 pub mod winit;
+mod x11_activation;
 mod x11_paste;
 mod xdnd;
 mod xwayland;
+pub use xwayland::TEST_X_DISPLAY;
 
 use std::{
     borrow::Cow,
@@ -66,7 +79,7 @@ use std::{
     path::PathBuf,
     sync::{
         Arc,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::{Duration, Instant},
 };
@@ -110,13 +123,21 @@ use crate::{
     layout::{Resize, Zone},
 };
 
+/// Keeps the memory of the real session's compositor to itself (lot D-25k, ADR 0023): no other
+/// process of the user may trace it, read its memory (every key typed passes through it, the
+/// passwords of the lock screen included) nor make it act; and no core dump of it is written.
+/// Not inherited by the programs it starts: `execve` makes them dumpable again.
+pub fn keep_memory_private() -> rustix::io::Result<()> {
+    rustix::process::set_dumpable_behavior(rustix::process::DumpableBehavior::NotDumpable)
+}
+
 /// What keeps the compositor from starting.
 #[derive(thiserror::Error)]
 pub enum Error {
     #[error(
         "usage: compositor [--nested [--outputs N]] [--xwayland] [--measure] [--scale S]… \
          [--workspaces N] [--snap-gap PX] [--minimize-effect genie|scale|none] \
-         [--window-animations on|off] [command [arguments…]]"
+         [--window-animations on|off] [--greeter] [--] [command [arguments…]]"
     )]
     Usage,
     #[error("real session: {0}")]
@@ -170,6 +191,9 @@ pub struct State {
     _cursor_shape_state: CursorShapeManagerState,
     xwayland_shell_state: XWaylandShellState,
     layer_shell_state: WlrLayerShellState,
+    /// Every client sees `zwlr_layer_shell_v1`, not only those of the shell socket: set by
+    /// `State::share_layer_shell` (ADR 0021).
+    layer_shell_shared: Arc<AtomicBool>,
     _output_manager_state: OutputManagerState,
     _fractional_scale_state: FractionalScaleManagerState,
     _viewporter_state: ViewporterState,
@@ -211,6 +235,10 @@ pub struct State {
     intercepted_keys: Vec<Keycode>,
     /// The compositor runs in a window of another session (`--nested`).
     nested: bool,
+    /// The compositor of the login screen (`--greeter`, `greeter.rs`).
+    greeter: bool,
+    /// The bar and the dock arriving once the session opens (`arrival.rs`).
+    arrival: arrival::Arrival,
     /// Switches to another console (Ctrl + Alt + Fn), in a real session.
     switch_vt: Option<Box<dyn FnMut(i32)>>,
     /// Writes the session's log to disk, while locked (lot D-25f).
@@ -223,10 +251,15 @@ pub struct State {
     xwm: Option<X11Wm>,
     /// Number of the X11 display (`DISPLAY=:N`), once XWayland is ready.
     pub x_display: Option<u32>,
+    /// First X11 display number tried, `None`: smithay's search from 0 (the tests start high,
+    /// lot D-43).
+    x_first_display: Option<u32>,
     /// The Wayland socket the programs the compositor starts connect to (`WAYLAND_DISPLAY`).
     socket_name: Option<OsString>,
     /// The program of Super + Space, if not the usual launcher (`launcher.rs`).
     launcher_program: Option<PathBuf>,
+    /// The program of Super + comma, if not Control Room (`launcher.rs`).
+    settings_program: Option<PathBuf>,
     /// The program of F4 and of the four finger pinch, if not the usual one (`launcher.rs`).
     applications_program: Option<PathBuf>,
     /// XWayland source in the loop, to stop it.
@@ -265,8 +298,17 @@ pub struct State {
     capture: capture::Capture,
     /// The session lock (lot D-25a, ADR 0023).
     lock: lock::SessionLock,
+    /// The picture of the lock between the login, the session and the lock (lot D-24e).
+    curtain: curtain::Curtain,
     /// What locks the session besides Super + L: inactivity, logind, the lid (lot D-25a3).
     triggers: triggers::Triggers,
+    /// Applications that bring their window forward, and the windows that ask for attention
+    /// (lot Q-52).
+    activation: activation::Activation,
+    /// What keeps the session awake: a visible video, the bus, logind (lot D-43).
+    inhibitors: inhibit::Inhibitors,
+    /// The screens off, like an old television (lot D-38).
+    power: power::Power,
     /// What was copied, for Super + V (lot D-42).
     clipboard: clipboard_history::ClipboardHistory,
 }
@@ -350,7 +392,10 @@ impl State {
                 },
             )
             .map_err(|err| err.error)?;
+        // The blur behind glass, asked for by any client (lot D-37, ADR 0027).
+        background_effect::create_global(&dh);
 
+        let layer_shell_shared = Arc::new(AtomicBool::new(false));
         Ok(Self {
             compositor_state: CompositorState::new::<Self>(&dh),
             xdg_shell_state: XdgShellState::new::<Self>(&dh),
@@ -360,8 +405,14 @@ impl State {
             _cursor_shape_state: CursorShapeManagerState::new::<Self>(&dh),
             // Only XWayland sees this protocol: it associates its X11 windows with its surfaces.
             xwayland_shell_state: XWaylandShellState::new::<Self>(&dh),
-            // Anchored surfaces of the shell (ADR 0005).
-            layer_shell_state: WlrLayerShellState::new::<Self>(&dh),
+            // Anchored surfaces of the shell (ADR 0005), for the clients of the shell socket only
+            // (ADR 0021): an application must not cover the screens and take the keyboard with
+            // an imitation of the lock screen or of a password dialog.
+            layer_shell_state: WlrLayerShellState::new_with_filter::<Self, _>(&dh, {
+                let shared = layer_shell_shared.clone();
+                move |client| Self::is_shell_client(client) || shared.load(Ordering::Relaxed)
+            }),
+            layer_shell_shared,
             // Logical place and size of each screen, which toolkits read to size their surfaces.
             _output_manager_state: OutputManagerState::new_with_xdg_output::<Self>(&dh),
             // Fractional scale of each surface's screen, and buffers cropped and scaled by the
@@ -376,7 +427,7 @@ impl State {
             space: Space::default(),
             popups: PopupManager::default(),
             popup_grab: None,
-            screencast: screencast::Screencast::default(),
+            screencast: screencast::Screencast::new(&dh),
 
             reveals: fullscreen::Reveals::default(),
             unmapped_layers: Vec::new(),
@@ -395,6 +446,8 @@ impl State {
             cursor_status: CursorImageStatus::default_named(),
             intercepted_keys: Vec::new(),
             nested: false,
+            greeter: false,
+            arrival: arrival::Arrival::default(),
             switch_vt: None,
             log_sync: log_sync::LogSync::new(
                 std::env::var_os(log_sync::LOG_VAR).map(std::path::PathBuf::from),
@@ -403,15 +456,14 @@ impl State {
             wallpaper: wallpaper::Wallpaper::default(),
             xwm: None,
             x_display: None,
+            x_first_display: None,
             socket_name: None,
             launcher_program: None,
+            settings_program: None,
             applications_program: None,
             xwayland: None,
             listener: None,
-            shell: {
-                screencast::create_globals(&dh);
-                shell::Shell::new(&dh)
-            },
+            shell: shell::Shell::new(&dh),
             snap_gap: sherlock_ui::window::SNAP_GAP,
             minimize_effect: genie::Effect::default(),
             redraw_epoch: 0,
@@ -427,7 +479,13 @@ impl State {
             osd: osd::Osd::default(),
             capture: capture::Capture::default(),
             lock: lock::SessionLock::new(&dh),
+            curtain: curtain::Curtain::default(),
             triggers: triggers::Triggers::default(),
+            activation: activation::Activation::new(
+                smithay::wayland::xdg_activation::XdgActivationState::new::<Self>(&dh),
+            ),
+            inhibitors: inhibit::Inhibitors::new(&dh),
+            power: power::Power::new(),
             clipboard: clipboard_history::ClipboardHistory::default(),
             loop_signal: event_loop.get_signal(),
             loop_handle: event_loop.handle(),
@@ -448,7 +506,8 @@ impl State {
         tracing::info!(socket = ?name, "Wayland socket open");
         self.accept_on(socket, event_loop)?;
         self.socket_name = Some(name.clone());
-        if let Some(dir) = std::env::var_os("XDG_RUNTIME_DIR") {
+        // The login screen has no shell (`greeter.rs`).
+        if let Some(dir) = std::env::var_os("XDG_RUNTIME_DIR").filter(|_| !self.greeter) {
             self.listen_shell_next_to(&PathBuf::from(dir).join(&name), event_loop);
         }
         Ok(name)
@@ -464,7 +523,9 @@ impl State {
         let socket = ListeningSocket::bind_absolute(path.clone())?;
         self.accept_on(socket, event_loop)?;
         self.socket_name = Some(path.clone().into_os_string());
-        self.listen_shell_next_to(&path, event_loop);
+        if !self.greeter {
+            self.listen_shell_next_to(&path, event_loop);
+        }
         Ok(())
     }
 
@@ -567,6 +628,8 @@ impl State {
             Some(window) => {
                 let count = FOCUS_COUNT.fetch_add(1, Ordering::Relaxed);
                 window_data(window).focused_at.set(count);
+                // It has what it asked for (lot Q-52).
+                self.attention_done(Some(window));
                 // From behind another window, it comes to the front with an animation (lot D-19d).
                 self.start_raise(window);
                 self.space.raise_element(window, true);
@@ -687,6 +750,24 @@ impl State {
         }
     }
 
+    /// Frame callbacks of the surfaces shown on `output`: windows, anchored surfaces and the
+    /// lock surface. After each frame of a screen, and slowly while the screens are dark.
+    pub fn send_frames(&self, output: &Output) {
+        let time = self.start_time.elapsed();
+        for window in self.space.elements() {
+            if self.window_output(window).as_ref() == Some(output) {
+                self.send_window_frame(window, output, time);
+            }
+        }
+        for layer in smithay::desktop::layer_map_for_output(output).layers() {
+            layer.send_frame(output, time, Some(Duration::ZERO), |_, _| {
+                Some(output.clone())
+            });
+        }
+        self.send_lock_frames(output, time);
+        self.send_drag_frames(output, time);
+    }
+
     /// Something that may show on a screen changed: the screens draw a frame, those of the
     /// real session at their next vertical blank. Called for every client request, input event,
     /// screen change and wallpaper loaded, and by the methods that change the desktop.
@@ -722,10 +803,12 @@ impl State {
             layer_map_for_output(output).cleanup();
         }
         self.popups.cleanup();
+        self.attention_done(None);
         self.end_minimize_effects();
         self.end_closings();
         self.end_popup_closings();
         self.end_clicks();
+        self.refresh_curtain();
         self.refresh_screencast();
         self.end_drag_return();
         self.refresh_reveals();
@@ -736,6 +819,7 @@ impl State {
         self.update_scales();
         self.refresh_output_management();
         self.refresh_lock();
+        self.refresh_power();
         self.release_sleep();
         self.perf.stop(perf::Phase::Refresh, since);
         if self.shell_epoch != Some(self.redraw_epoch) {
@@ -775,6 +859,8 @@ pub struct ClientState {
     compositor_state: CompositorClientState,
     /// Connected through the shell socket: sees the globals of the shell (ADR 0021).
     shell: bool,
+    /// Sees the capture globals: the portal backend, on the shell socket (ADR 0028).
+    capture: bool,
 }
 
 impl ClientData for ClientState {

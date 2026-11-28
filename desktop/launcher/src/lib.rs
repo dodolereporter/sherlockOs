@@ -15,6 +15,19 @@ pub mod source;
 pub mod startup;
 pub mod system;
 
+/// Taken by every test of this crate that starts a process (lot Q-30). Until its `exec`, a
+/// child is a copy of this program: it holds a copy of every descriptor, the lock another test
+/// has just released included, so that lock looked still taken; and its `/proc/<id>/exe` is
+/// still this program, so a stranger looked like a launcher and was signalled.
+#[cfg(test)]
+pub(crate) static PROCESSES: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Holds `PROCESSES` for as long as the guard lives; a test that panicked leaves it usable.
+#[cfg(test)]
+pub(crate) fn processes() -> std::sync::MutexGuard<'static, ()> {
+    PROCESSES.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -35,17 +48,17 @@ use iced::futures::channel::oneshot;
 /// Name of the layer-shell surface, readable by the compositor.
 pub const NAMESPACE: &str = "launcher";
 
-/// Surface settings for a panel `height` high: anchored to the top only, so centered, at the
-/// board's distance from the screen top whatever the bar reserves (exclusive zone -1), above
-/// the windows and the bar, with the keyboard all to itself.
-pub fn surface(height: f32) -> LayerShellSettings {
+/// Surface settings for a panel `height` high, placed by `fit` on its screen: anchored to the
+/// top only, so centered, at its distance from the screen top whatever the bar reserves
+/// (exclusive zone -1), above the windows and the bar, with the keyboard all to itself.
+pub fn surface(height: f32, fit: launcher::Fit) -> LayerShellSettings {
     LayerShellSettings {
         anchor: Anchor::Top,
         layer: Layer::Overlay,
-        size: LayerSize::px(launcher::WIDTH as u32, height.ceil() as u32),
+        size: LayerSize::px(fit.width.ceil() as u32, height.ceil() as u32),
         exclusive_zone: -1,
         margin: Margin {
-            top: launcher::TOP as i32,
+            top: fit.top.round() as i32,
             ..Margin::default()
         },
         keyboard_interactivity: KeyboardInteractivity::Exclusive,
@@ -71,8 +84,8 @@ pub fn screen_surface() -> NewLayerShellSettings {
 
 /// The surface of a resident launcher in software, whose surfaces are opaque: the panel alone,
 /// as `surface` places it.
-pub fn panel_surface(height: f32) -> NewLayerShellSettings {
-    let panel = surface(height);
+pub fn panel_surface(height: f32, fit: launcher::Fit) -> NewLayerShellSettings {
+    let panel = surface(height, fit);
     NewLayerShellSettings {
         anchor: panel.anchor,
         layer: panel.layer,
@@ -246,8 +259,10 @@ pub fn run(mode: Mode) -> Result<(), iced_exwlshell::Error> {
             start_mode: StartMode::Background,
             ..LayerShellSettings::default()
         },
-        None => surface(started.0.height()),
+        None => surface(started.0.height(), started.0.fit()),
     };
+    // iced_exwlshell reports there the screen of the surface: the panel fits it (L-1).
+    let (broadcast, screens) = iced_exwlshell::shell::channel();
     let reload: app::Reload = Arc::new(sources);
     // The daemon wants a boot function it may call again: the launcher is handed over once.
     let first = std::sync::Mutex::new(Some(started));
@@ -257,6 +272,7 @@ pub fn run(mode: Mode) -> Result<(), iced_exwlshell::Error> {
             .ok()
             .and_then(|mut l| l.take())
             .unwrap_or_else(launcher);
+        launcher = launcher.with_screens(screens.clone());
         let mut tasks = Vec::new();
         if let Some(inbox) = resident.clone() {
             launcher = launcher.resident(inbox, reload.clone());
@@ -278,7 +294,10 @@ pub fn run(mode: Mode) -> Result<(), iced_exwlshell::Error> {
         })
         .settings(settings())
         .wl_settings(ExWlSettings {
+            // On the shell socket, the only one that offers anchored surfaces (lot D-46).
+            with_connection: Some(shell_protocol::connect.into()),
             layer_settings: layer,
+            shell_broadcast: broadcast,
             ..ExWlSettings::default()
         })
         .run()

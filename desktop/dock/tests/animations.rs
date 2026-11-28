@@ -667,6 +667,48 @@ fn the_icon_stops_bouncing_at_the_timeout() {
     assert!(!dock.animating());
 }
 
+/// Lot Q-52: a window that asks for attention (refused the keyboard by the compositor) makes
+/// its icon bounce a few hops, once, then rest; asking again later bounces it again.
+#[test]
+fn the_icon_of_a_window_asking_for_attention_bounces_a_few_hops() {
+    let data = quick_app("quick-attention");
+    let mut dock = dock(&[data], &["org.example.Quick"], flat(), None);
+    settle(&mut dock);
+    let index = dock
+        .items
+        .iter()
+        .position(|i| i.name == "Rapide")
+        .expect("pinned");
+    let asking = |attention: bool| {
+        let mut window = Window::new(7, "QuickExample", false);
+        window.attention = attention;
+        Message::Windows(Windows {
+            list: vec![window],
+            ..Windows::default()
+        })
+    };
+    let _ = dock.update(asking(false));
+    let t0 = dock.now();
+    assert!(dock.calls.is_empty() && dock.lift(index, t0) == 0.0);
+    let _ = dock.update(asking(true));
+    let t0 = dock.now();
+    let period = tokens::BOUNCE_PERIOD;
+    assert!(dock.animating());
+    assert!(dock.lift(index, t0 + period / 2) > 20.0, "it hops");
+    // Still asking at the next list: not started again.
+    let _ = dock.update(asking(true));
+    assert_eq!(dock.calls.len(), 1);
+    let end = t0 + period * tokens::ATTENTION_HOPS;
+    assert!(dock.lift(index, end - period / 2) > 0.0);
+    let _ = dock.tick(end);
+    assert!(dock.calls.is_empty() && !dock.animating());
+    assert_eq!(dock.lift(index, end + period / 2), 0.0, "then it rests");
+    // Given the keyboard, then asking again: it bounces again.
+    let _ = dock.update(asking(false));
+    let _ = dock.update(asking(true));
+    assert_eq!(dock.calls.len(), 1);
+}
+
 /// A capture sets the active theme: one at a time.
 static THEME: Mutex<()> = Mutex::new(());
 
@@ -723,6 +765,26 @@ fn the_animations_render_without_a_screen() {
     let _ = dock.tick(dock.now() + ms(400));
     assert!(dock.held().is_some());
     assert!(capture(&dock, "dock-drag").expect("screenshot written") > 2_000);
+    color::set_active(Theme::Dark);
+}
+
+/// An application without an icon, its initial drawn instead, arriving: at its first frame
+/// its side is 0. Text of size 0 made the text engine panic (`cosmic-text`, `buffer.rs`: « line
+/// height cannot be 0 »), which killed the dock at the start of a session without screen,
+/// where no theme gives the applications their icons (lot Q-32).
+#[test]
+fn an_initial_arriving_from_nothing_is_drawn() {
+    let _theme = in_dark();
+    let data = quick_app("quick-arrives");
+    let mut dock = dock(&[data], &FOUR, flat(), None);
+    settle(&mut dock);
+    let mut config = flat();
+    let mut pinned: Vec<String> = FOUR.map(String::from).to_vec();
+    pinned.push(String::from("org.example.Quick"));
+    config.pinned = Some(pinned);
+    let _ = dock.update(Message::Config(Box::new(config)));
+    assert!(dock.animating(), "it arrives");
+    assert!(capture(&dock, "dock-initial-arrives").expect("screenshot written") > 2_000);
     color::set_active(Theme::Dark);
 }
 

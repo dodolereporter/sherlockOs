@@ -77,6 +77,8 @@ pub(crate) struct Tool {
     menu: bool,
     /// The window under the pointer, in window mode.
     window: Option<Window>,
+    /// The screen as it was when the tool opened, for the loupe.
+    frozen: Option<std::sync::Arc<crate::capture::Image>>,
 }
 
 /// An image to take once the timer is done.
@@ -178,8 +180,24 @@ impl State {
             over: None,
             menu: false,
             window: None,
+            frozen: None,
         });
         self.tool_motion(p);
+        // The screen without the tool, for the loupe, once the key's event is handled.
+        self.loop_handle.insert_idle(|state| {
+            let Some(output) = state.capture.tool.as_ref().map(|t| t.output.clone()) else {
+                return;
+            };
+            if let Some(tool) = &mut state.capture.tool {
+                tool.hidden = true;
+            }
+            let image = state.draw_target(&Target::Screen(output));
+            if let Some(tool) = &mut state.capture.tool {
+                tool.hidden = false;
+                tool.frozen = image.map(std::sync::Arc::new);
+            }
+            state.queue_redraw();
+        });
         self.queue_redraw();
     }
 
@@ -499,7 +517,8 @@ impl State {
                 tool.hidden = true;
             }
             self.loop_handle.insert_idle(move |state| {
-                state.take_with(&target, crop, &options);
+                let shadow = matches!(target, Target::Window(_));
+                state.take_with(&target, crop, &options, shadow);
                 state.capture.tool = None;
                 state.queue_redraw();
             });
@@ -527,7 +546,8 @@ impl State {
         if left.is_zero() {
             if let Some(pending) = self.capture.pending.take() {
                 let options = self.capture.options;
-                self.take_with(&pending.target, pending.crop, &options);
+                let shadow = matches!(pending.target, Target::Window(_));
+                self.take_with(&pending.target, pending.crop, &options, shadow);
             }
             self.queue_redraw();
             return;
@@ -688,12 +708,44 @@ pub fn push_items(items: &mut Vec<Item>, state: &State, (output, view): (&Output
     moving |= tool
         .settle
         .is_some_and(|s| !s.iter().all(|a| a.is_done(now, GEOMETRY_PRECISION)));
-    if let (Some(a), Some(Drag::Draw { .. } | Drag::Resize { .. })) = (area, tool.drag) {
-        let scale = output.current_scale().fractional_scale();
+    let scale = output.current_scale().fractional_scale();
+    let drawing = matches!(tool.drag, Some(Drag::Draw { .. } | Drag::Resize { .. }));
+    let aiming =
+        tool.drag.is_none() && area.is_none() && !bar.rect.contains(tool.pointer) && !tool.menu;
+    // The loupe, beside the pointer, with the size under it.
+    let loupe = f64::from(ui::LOUPE_PIXELS) * f64::from(ui::LOUPE_ZOOM);
+    let label_h = f64::from(ui::LABEL_HEIGHT);
+    let gap = f64::from(ui::LOUPE_BORDER) * 2.0;
+    let (lx, ly) = ui::beside(tool.pointer, (loupe, loupe + gap + label_h), &bounds);
+    if let (Some(frozen), true) = (
+        &tool.frozen,
+        options.mode == Mode::Area && (drawing || aiming),
+    ) {
+        let (px, py) = (
+            ((tool.pointer.0 - bounds.x) * scale).floor() as i64,
+            ((tool.pointer.1 - bounds.y) * scale).floor() as i64,
+        );
+        let diameter = (loupe * scale).round() as u32;
+        let ring = (colors.text, ui::LOUPE_BORDER * scale as f32);
+        let pixels = (ui::LOUPE_PIXELS, diameter);
+        if let Some(picture) = crate::picture::loupe(frozen, (px, py), pixels, ring, colors.accent)
+        {
+            paint.items.push(Item::Picture {
+                key: Key::of(None, Part::CaptureLoupe),
+                rect: view.rect(logical(&Rect::new(lx, ly, loupe, loupe))),
+                picture,
+                alpha: paint.alpha,
+            });
+        }
+    }
+    if let (Some(a), true) = (area, drawing) {
         let text = ui::size_text((a.w * scale).round() as u32, (a.h * scale).round() as u32);
         let w = f64::from(label_width(&text));
-        let h = f64::from(ui::LABEL_HEIGHT);
-        let (x, y) = ui::beside(tool.pointer, (w, h), &bounds);
+        let h = label_h;
+        let (x, y) = match tool.frozen {
+            Some(_) => (lx + (loupe - w) / 2.0, ly + loupe + gap),
+            None => ui::beside(tool.pointer, (w, h), &bounds),
+        };
         let mc = sherlock_ui::mission_control::Colors::of(color::palette());
         paint.label(
             &Rect::new(x, y, w, h),

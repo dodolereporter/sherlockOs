@@ -125,6 +125,30 @@ pub mod texts {
     pub const APPEARANCE_ABOUT: &str = "Le thème, le fond d'écran et le dock.";
     pub const TOUCHPAD: &str = "Pavé tactile et souris";
     pub const TOUCHPAD_ABOUT: &str = "Comment tes doigts cliquent, glissent et défilent.";
+    pub const BLUETOOTH: &str = "Bluetooth";
+    pub const BLUETOOTH_ABOUT: &str = "Tes casques, souris et claviers sans fil.";
+    // The Bluetooth page (D-26o).
+    pub const BLUETOOTH_SWITCH: &str = "Bluetooth";
+    pub const BLUETOOTH_SWITCH_HELP: &str = "Les appareils appairés se reconnectent seuls.";
+    pub const BLUETOOTH_WORDS: &str = "sans fil casque écouteurs souris clavier manette appairer";
+    pub const MY_DEVICES: &str = "Mes appareils";
+    pub const NEARBY: &str = "Appareils à proximité";
+    pub const NEARBY_SEARCH: &str = "Appareils à proximité Bluetooth";
+    pub const SEARCHING: &str = "Recherche…";
+    pub const NO_PAIRED: &str = "Aucun appareil appairé.";
+    pub const NOTHING_NEARBY: &str = "Aucun appareil à proximité pour l'instant.";
+    pub const BLUETOOTH_OFF_NOTE: &str = "Le Bluetooth est coupé.";
+    pub const BLUETOOTH_LOADING: &str = "Lecture du Bluetooth…";
+    pub const BLUETOOTH_UNAVAILABLE: &str = "Pas de Bluetooth sur cet ordinateur.";
+    pub const CONNECT: &str = "Connecter";
+    pub const DISCONNECT: &str = "Déconnecter";
+    pub const PAIR: &str = "Appairer";
+    pub const RENAME: &str = "Renommer";
+    pub const CONFIRM: &str = "Confirmer";
+    pub const OK: &str = "OK";
+    pub const DEVICE_NAME: &str = "Nom de l'appareil";
+    pub const BLUETOOTH_REFUSED: &str = "Refusé.";
+    pub const BLUETOOTH_FAILED: &str = "Le Bluetooth n'a pas répondu.";
     pub const SOUND: &str = "Son";
     pub const SOUND_ABOUT: &str = "Où le son sort, d'où il entre, et à quel volume.";
     pub const LOCK: &str = "Verrouillage";
@@ -136,6 +160,46 @@ pub mod texts {
     pub const CLIPBOARD_ABOUT: &str = "Ce que Super + V garde de ce que tu copies.";
     pub const DEFAULT_APPS: &str = "Applications par défaut";
     pub const DEFAULT_APPS_ABOUT: &str = "Ce qui s'ouvre pour chaque sorte de fichier ou de lien.";
+
+    pub const NETWORK: &str = "Réseau";
+    pub const NETWORK_ABOUT: &str = "Le Wi-Fi, les réseaux autour de toi et ceux que tu gardes.";
+
+    // « Réseau ».
+    pub const WIFI: &str = "Wi-Fi";
+    pub const WIFI_HELP: &str = "Coupé, l'ordinateur ne cherche plus de réseau.";
+    pub const WIFI_HARDWARE_OFF: &str =
+        "Coupé par l'interrupteur ou le mode avion de l'ordinateur.";
+    pub const NETWORKS: &str = "Réseaux";
+    pub const NETWORK_LOADING: &str = "Lecture du Wi-Fi…";
+    pub const NETWORK_UNAVAILABLE: &str = "Le gestionnaire de réseau ne répond pas.";
+    pub const NO_WIFI: &str = "Aucune carte Wi-Fi trouvée.";
+    pub const NO_NETWORK: &str = "Aucun réseau trouvé.";
+    pub const CONNECTED: &str = "Connecté";
+    pub const OPEN_NETWORK: &str = "Ouvert";
+    pub const PROTECTED_NETWORK: &str = "Protégé par un mot de passe";
+    pub const ENTERPRISE_NETWORK: &str = "Entreprise ou WEP";
+    pub const FORGET: &str = "Oublier";
+    pub const SCAN: &str = "Rechercher";
+    pub const OTHER_NETWORK: &str = "Autre réseau…";
+    pub const OTHER_NETWORK_SEARCH: &str = "Rejoindre un réseau caché";
+    pub const NETWORK_NAME: &str = "Nom du réseau";
+    pub const SECURITY_NONE: &str = "Aucune";
+    pub const SECURITY_PASSWORD: &str = "Mot de passe";
+    pub const SECURITY_WEP: &str = "WEP";
+    pub const SECURITY_ENTERPRISE: &str = "Entreprise";
+    pub const PEAP: &str = "PEAP";
+    pub const TTLS: &str = "TTLS";
+    pub const IDENTITY: &str = "Identifiant";
+    pub const PASSWORD: &str = "Mot de passe";
+    pub const WEP_KEY: &str = "Clé WEP";
+    pub const DOMAIN: &str = "Domaine du serveur (facultatif)";
+    pub const DOMAIN_HELP: &str =
+        "Ton établissement le donne : il prouve que c'est bien son serveur qui répond.";
+    pub const CANCEL: &str = "Annuler";
+    pub const JOIN: &str = "Rejoindre";
+    pub const NETWORK_REFUSED: &str = "Refusé : tu n'as pas le droit de changer ce réglage.";
+    pub const NETWORK_FAILED: &str = "Échec : le réseau n'a pas pu être rejoint.";
+    pub const NETWORK_WRONG_PASSWORD: &str = "Mot de passe incorrect : le réseau l'a refusé.";
 
     // « Apparence ».
     pub const THEME: &str = "Thème";
@@ -321,6 +385,7 @@ pub mod texts {
     pub const MAGNIFICATION_SEARCH: &str = "Intensité du grossissement";
     pub const AUTO_HIDE_SEARCH: &str = "Masquage du dock";
     pub const POSITION_SEARCH: &str = "Position du dock";
+    pub const NETWORK_WORDS: &str = "wifi internet réseau sans fil eduroam mot de passe";
     pub const THEME_WORDS: &str = "sombre clair nuit jour mode couleurs";
     pub const HOURS_WORDS: &str = "thème heure automatique matin soir";
     pub const WALLPAPER_WORDS: &str = "image arrière-plan bureau";

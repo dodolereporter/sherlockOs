@@ -84,7 +84,10 @@ pub fn palette(theme: &Theme) -> &'static Palette {
         return shown;
     }
     (0..=color::MIX_STEPS)
-        .map(Palette::at_step)
+        .map(|step| match shown.top_bar_glass.a >= 1.0 {
+            true => Palette::opaque_at_step(step),
+            false => Palette::at_step(step),
+        })
         .find(|p| text == p.text_primary.exact())
         .unwrap_or(&Palette::DARK)
 }
