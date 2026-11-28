@@ -42,9 +42,53 @@ pub fn keyboard_room() -> bool {
     KEYBOARD_ROOM.with(std::cell::Cell::get)
 }
 
+thread_local! {
+    /// The logical height of the bar's screen, when the compositor gave it: a panel never goes
+    /// past its bottom (UI-08). On the interface thread, set when a panel opens.
+    static SCREEN_HEIGHT: std::cell::Cell<Option<f32>> = const { std::cell::Cell::new(None) };
+}
+
+/// Room kept free under a panel, above the bottom of the screen (where the dock may be).
+pub const SCREEN_ROOM: f32 = 24.0;
+/// The notification centre is never shorter than this under the calendar: below, both scroll
+/// together in the panel.
+pub const CENTER_MIN: f32 = 120.0;
+
+/// Tells the panels the logical height of the screen (`None`: unknown, the board's sizes).
+pub fn reserve_screen(height: Option<f32>) {
+    SCREEN_HEIGHT.with(|cell| cell.set(height));
+}
+
+/// The height a panel may take under the bar, down to `SCREEN_ROOM` above the bottom of the
+/// screen; unbounded when the screen is unknown.
+pub fn available() -> f32 {
+    let top = metrics::TOP_BAR_MARGIN_TOP + metrics::TOP_BAR_HEIGHT + panels::BELOW_BAR;
+    SCREEN_HEIGHT
+        .with(std::cell::Cell::get)
+        .map_or(f32::INFINITY, |screen| {
+            // A screen too small for anything still gets a panel it can scroll.
+            (screen - top - SCREEN_ROOM).max(CENTER_MIN)
+        })
+}
+
+/// The height of the notification centre under the calendar: the board's, else what the
+/// screen leaves, `CENTER_MIN` at least.
+pub fn center_height() -> f32 {
+    let left = available() - panels::CALENDAR_HEIGHT - panels::PANEL_GAP;
+    left.clamp(CENTER_MIN, panels::CENTER_HEIGHT)
+}
+
 impl Panel {
-    /// Size of the panel itself, without the room for its shadow.
+    /// Size of the panel itself, without the room for its shadow: its content's, within the
+    /// height the screen leaves it (`available`). What does not fit scrolls.
     pub fn size(self) -> (f32, f32) {
+        let (width, height) = self.content_size();
+        (width, height.min(available()))
+    }
+
+    /// Size of the panel's content, as the board lays it out, the notification centre at
+    /// `center_height`.
+    pub fn content_size(self) -> (f32, f32) {
         match self {
             Self::Control if keyboard_room() => (panels::QUICK_WIDTH, panels::CONTROL_HEIGHT),
             Self::Control => (
@@ -53,7 +97,7 @@ impl Panel {
             ),
             Self::Calendar => (
                 panels::CENTER_WIDTH,
-                panels::CALENDAR_HEIGHT + panels::PANEL_GAP + panels::CENTER_HEIGHT,
+                panels::CALENDAR_HEIGHT + panels::PANEL_GAP + center_height(),
             ),
         }
     }
@@ -434,6 +478,49 @@ mod tests {
         let surface_top = metrics::TOP_BAR_MARGIN_TOP + top as f32;
         let (ix, iy, _, _) = input_rect(panel, margins, shared);
         (surface_left + ix as f32, surface_top + iy as f32)
+    }
+
+    /// Every screen of the brief, as logical heights: 1280 × 720, 1366 × 768 at 1.25,
+    /// 1920 × 1080 at 1.5, 1280 × 800 at 1.5, 4K at 2 and at 1.
+    const SCREENS: [f32; 6] = [720.0, 614.4, 720.0, 533.3, 1080.0, 2160.0];
+
+    #[test]
+    fn the_panels_fit_in_every_screen_and_scroll_what_does_not() {
+        let top = metrics::TOP_BAR_MARGIN_TOP + metrics::TOP_BAR_HEIGHT + panels::BELOW_BAR;
+        for keyboard in [false, true] {
+            reserve_keyboard(keyboard);
+            // Unknown screen: the board's sizes.
+            reserve_screen(None);
+            for panel in [Panel::Control, Panel::Calendar] {
+                assert_eq!(panel.size(), panel.content_size());
+            }
+            assert_eq!(center_height(), panels::CENTER_HEIGHT);
+            for screen in SCREENS {
+                reserve_screen(Some(screen));
+                for panel in [Panel::Control, Panel::Calendar] {
+                    let (_, height) = panel.size();
+                    assert!(
+                        top + height + SCREEN_ROOM <= screen + 0.01,
+                        "{panel:?} on {screen}: {height}"
+                    );
+                    // What is cut scrolls; nothing is cut on a screen tall enough.
+                    let (_, full) = panel.content_size();
+                    if screen >= 1080.0 {
+                        assert_eq!(height, full, "{panel:?} on {screen}");
+                    }
+                }
+                let center = center_height();
+                assert!((CENTER_MIN..=panels::CENTER_HEIGHT).contains(&center));
+            }
+        }
+        // On 1366 × 768 at 1.25, the centre gives up some height but the calendar stays whole
+        // above it, without scrolling.
+        reserve_screen(Some(614.4));
+        let (_, height) = Panel::Calendar.size();
+        assert_eq!(height, Panel::Calendar.content_size().1);
+        assert!(center_height() < panels::CENTER_HEIGHT);
+        reserve_screen(None);
+        reserve_keyboard(false);
     }
 
     #[test]
