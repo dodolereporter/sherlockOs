@@ -5,10 +5,18 @@
 //! started again later shows at once; never on the login screen. They wait for the curtain of the
 //! opening to be half gone (`curtain.rs`, lot D-24e). A key or a click ends it at once, the
 //! curtain with it. Tokens: `sherlock_ui::greeter`.
+//!
+//! The desktop revealed (lot D-24g), at the opening and at each unlock: the wallpaper comes
+//! back from a slight zoom while the blurred picture of the curtain leaves it, and the windows
+//! reappear one after another, the front one first (`reappear_delay`). A key or a click puts
+//! them in place at once.
 
 use std::time::Duration;
 
-use sherlock_ui::greeter::{ARRIVAL_SPRING, ARRIVAL_STAGGER, ARRIVAL_WINDOW};
+use sherlock_ui::greeter::{
+    ARRIVAL_SPRING, ARRIVAL_STAGGER, ARRIVAL_WINDOW, ARRIVAL_ZOOM, ARRIVAL_ZOOM_FROM,
+    REAPPEAR_LAST, REAPPEAR_STAGGER,
+};
 use sherlock_ui::motion::Animation;
 use smithay::utils::{Logical, Rectangle};
 
@@ -45,6 +53,26 @@ impl Part {
 pub struct Arrival {
     shown: Vec<(Part, Duration)>,
     ended: bool,
+    /// When the desktop was last revealed (lot D-24g), until a key or a click.
+    revealed: Option<Duration>,
+}
+
+/// When the `index`-th window from the front starts to reappear, after the reveal: one after
+/// another, the last ones together, so that all is done within 800 ms.
+pub fn reappear_delay(index: usize) -> Duration {
+    let index = u32::try_from(index).unwrap_or(u32::MAX);
+    REAPPEAR_STAGGER.saturating_mul(index).min(REAPPEAR_LAST)
+}
+
+/// The zoom of the wallpaper at `now`, the desktop revealed at `start`: from
+/// `ARRIVAL_ZOOM_FROM` to 1. `None` once at its size.
+pub fn zoom(start: Duration, now: Duration) -> Option<f64> {
+    if now >= start + ARRIVAL_ZOOM {
+        return None;
+    }
+    let t = now.saturating_sub(start).as_secs_f32() / ARRIVAL_ZOOM.as_secs_f32();
+    let eased = f64::from(sherlock_ui::motion::Ease::OutCubic.apply(t));
+    Some(ARRIVAL_ZOOM_FROM + (1.0 - ARRIVAL_ZOOM_FROM) * eased)
 }
 
 /// Where a part stands at `now`, from 0 (out of the screen) to 1 (in place); it may overshoot
@@ -87,7 +115,42 @@ impl State {
     /// A key or a click: everything is in place at once.
     pub(crate) fn end_arrival(&mut self) {
         self.arrival.ended = true;
+        if self.arrival.revealed.take().is_some() {
+            for window in self.space.elements() {
+                crate::window_data(window)
+                    .motion
+                    .borrow_mut()
+                    .end_reappearing();
+            }
+            self.queue_redraw();
+        }
         self.end_curtain_opening();
+    }
+
+    /// The desktop is revealed from `start` (lot D-24g): the wallpaper zooms back, the windows
+    /// shown reappear one after another, the front one first.
+    pub(crate) fn reveal_desktop(&mut self, start: Duration) {
+        self.arrival.revealed = Some(start);
+        let now = self.now();
+        let shown: Vec<_> = self
+            .space
+            .elements()
+            .rev()
+            .filter(|w| self.is_visible(w) && self.minimize_progress(w, now).is_none())
+            .cloned()
+            .collect();
+        for (index, window) in shown.iter().enumerate() {
+            crate::window_data(window)
+                .motion
+                .borrow_mut()
+                .reappear(start + reappear_delay(index));
+        }
+        self.queue_redraw();
+    }
+
+    /// The zoom of the wallpaper at `now`; `None` at its size.
+    pub fn wallpaper_zoom(&self, now: Duration) -> Option<f64> {
+        zoom(self.arrival.revealed?, now)
     }
 
     /// Where the part named `namespace` stands at `now`; `None` once in place.
@@ -122,5 +185,19 @@ mod tests {
         assert_eq!(offset(Part::Bar, bar, screen, 0.0), -46.0);
         assert_eq!(offset(Part::Dock, dock, screen, 0.0), 100.0);
         assert_eq!(offset(Part::Dock, dock, screen, 1.0), 0.0);
+    }
+
+    #[test]
+    fn the_windows_reappear_one_by_one_within_800_ms() {
+        let at = |ms| Duration::from_millis(ms);
+        assert_eq!(reappear_delay(0), Duration::ZERO);
+        assert_eq!(reappear_delay(1), at(40));
+        assert_eq!(reappear_delay(30), REAPPEAR_LAST, "the last ones together");
+        assert!(REAPPEAR_LAST + sherlock_ui::greeter::REAPPEAR < at(800));
+        // The wallpaper comes back from 1.05 to its size.
+        assert_eq!(zoom(at(100), at(100)), Some(ARRIVAL_ZOOM_FROM));
+        let half = zoom(at(100), at(400)).unwrap();
+        assert!(half > 1.0 && half < ARRIVAL_ZOOM_FROM, "{half}");
+        assert_eq!(zoom(at(100), at(100) + ARRIVAL_ZOOM), None);
     }
 }
