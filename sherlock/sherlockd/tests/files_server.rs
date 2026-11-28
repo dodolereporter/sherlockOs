@@ -368,7 +368,7 @@ mod tests {
         let docs = dir.join("docs");
         let (mut servers, asked) = servers(&dir, Decision::Denied).await;
         let at = |p: &str| docs.join(p).to_str().unwrap().to_owned();
-        for (tool, arguments) in [
+        for (i, (tool, arguments)) in [
             (
                 "supprimer_definitivement",
                 json!({ "chemin": at("note.txt") }),
@@ -379,21 +379,28 @@ mod tests {
                 json!({ "chemin": at("note.txt"), "contenu": "" }),
             ),
             ("creer_dossier", json!({ "chemin": at("new") })),
-        ] {
+        ]
+        .into_iter()
+        .enumerate()
+        {
             let refused = servers.call(tool, arguments).await;
-            assert!(
-                matches!(refused, Err(McpError::Refused { .. })),
-                "{tool}: {refused:?}"
-            );
+            // Three refusals, then nothing more is asked (lot A-20, consent fatigue).
+            let expected = if i < sherlockd::broker::MAX_REFUSALS {
+                matches!(refused, Err(McpError::Refused { .. }))
+            } else {
+                matches!(refused, Err(McpError::StoppedAsking { .. }))
+            };
+            assert!(expected, "{tool}: {refused:?}");
         }
-        assert_eq!(asked.lock().unwrap().len(), 4);
+        assert_eq!(asked.lock().unwrap().len(), sherlockd::broker::MAX_REFUSALS);
         assert_eq!(
             std::fs::read_to_string(docs.join("note.txt")).unwrap(),
             INJECTION
         );
         assert!(!docs.join("new").exists());
         let decisions = journal(&dir);
-        assert!(decisions.iter().all(|l| l["decision"] == "denied"));
+        let kept = |l: &Value| l["decision"] == "denied" || l["decision"] == "stopped";
+        assert!(decisions.iter().all(kept), "{decisions:?}");
         servers.shutdown().await;
         let _ = std::fs::remove_dir_all(&dir);
     }
