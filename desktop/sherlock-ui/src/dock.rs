@@ -172,6 +172,12 @@ pub mod text {
     pub const EMPTY_TRASH: &str = "Vider la corbeille";
     pub const EMPTY_TRASH_CONFIRM: &str = "Reclique pour vider";
     pub const QUIT: &str = "Quitter";
+    // The options of an icon and the end of its menu (D-21i).
+    pub const OPTIONS: &str = "Options";
+    pub const OPEN_AT_LOGIN: &str = "Ouvrir à l’ouverture de session";
+    pub const SHOW_IN_EVIDENCE: &str = "Afficher dans Evidence";
+    pub const HIDE: &str = "Masquer";
+    pub const FORCE_QUIT: &str = "Forcer à quitter";
     /// App Expose (lot D-21c2): Mission Control on the windows of one application.
     pub const SHOW_ALL: &str = "Afficher toutes les fenêtres";
     /// Title of the dock's own menu: a right click on its separator or between its icons.

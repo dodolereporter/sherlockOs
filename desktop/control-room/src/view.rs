@@ -262,6 +262,7 @@ impl App {
             ]
             .spacing(cr::TITLE_GAP);
             let cards = match page {
+                Page::Displays => self.displays(inner),
                 Page::Sound => self.sound(inner),
                 Page::Bluetooth => self.bluetooth_page(inner),
                 Page::Network => self.network_page(inner),

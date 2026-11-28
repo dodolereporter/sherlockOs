@@ -132,12 +132,13 @@ impl Notification {
         self.actions.iter().any(|(key, _)| key == DEFAULT_ACTION)
     }
 
-    /// The actions shown as buttons: the first ones but the default one.
+    /// The actions shown as buttons, but the default one: a row of `ui::MAX_BUTTONS`, then the
+    /// « Options » list (`ui::MAX_OPTIONS`).
     pub fn buttons(&self) -> impl Iterator<Item = &(String, String)> {
         self.actions
             .iter()
             .filter(|(key, _)| key != DEFAULT_ACTION)
-            .take(ui::MAX_BUTTONS)
+            .take(ui::MAX_BUTTONS - 1 + ui::MAX_OPTIONS)
     }
 }
 
@@ -343,7 +344,10 @@ mod tests {
                 .iter()
                 .all(|(_, l)| l.chars().count() <= ui::MAX_LABEL_CHARS + 1)
         );
-        assert_eq!(note.buttons().count(), ui::MAX_BUTTONS);
+        assert_eq!(
+            note.buttons().count(),
+            ui::MAX_BUTTONS - 1 + ui::MAX_OPTIONS
+        );
         assert_eq!(note.icon, Icon::None);
     }
 }

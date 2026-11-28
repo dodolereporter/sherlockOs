@@ -8,6 +8,7 @@ pub mod ask;
 pub mod calc;
 pub mod files;
 pub mod instance;
+pub mod journal;
 pub mod launch;
 pub mod search;
 pub mod service;

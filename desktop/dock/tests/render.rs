@@ -264,8 +264,13 @@ fn the_menu_of_an_icon_renders_its_entries() {
         "1 fenêtre",
         "Nouvelle fenêtre",
         "Nouvel onglet",
-        "Retirer du Dock",
+        "Options",
+        "Garder dans le Dock",
+        "Ouvrir à l’ouverture de session",
+        "Afficher dans Evidence",
+        "Masquer",
         "Quitter",
+        "Forcer à quitter",
     ] {
         assert!(ui.find(text).is_ok(), "{text} missing from the menu");
     }

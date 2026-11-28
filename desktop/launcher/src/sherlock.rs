@@ -20,6 +20,8 @@ use sherlock_ui::launcher::sherlock::{self as tokens, text};
 const MAX_LINE: u64 = 256 * 1024;
 /// Events read for one request, at most.
 const MAX_EVENTS: usize = 10_000;
+/// Steps of a plan taken, at most, as sherlockd bounds them.
+const MAX_PLAN: usize = 12;
 /// Exchanges kept, and handed to sherlockd for its recap.
 pub const MAX_EXCHANGES: usize = 20;
 
@@ -32,6 +34,16 @@ pub struct Step {
     pub state: String,
     /// Run at the read level, with no consent asked.
     pub read: bool,
+    /// The step of the plan it takes (lot A-19e).
+    pub plan: Option<usize>,
+}
+
+/// A step of the plan Sherlock announced before acting (lot A-19e).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Planned {
+    pub title: String,
+    pub description: String,
+    pub tool: String,
 }
 
 /// A request and what came back for it.
@@ -50,6 +62,9 @@ pub struct Exchange {
     pub born: Duration,
     pub texts_at: Vec<Duration>,
     pub steps_at: Vec<Duration>,
+    /// The plan announced, and when.
+    pub plan: Vec<Planned>,
+    pub plan_at: Option<Duration>,
 }
 
 impl Exchange {
@@ -62,6 +77,7 @@ impl Exchange {
         std::iter::once(self.born)
             .chain(self.texts_at.iter().copied())
             .chain(self.steps_at.iter().copied())
+            .chain(self.plan_at)
             .chain(self.ended)
     }
 }
@@ -76,6 +92,8 @@ pub fn shown(born: Duration, now: Duration) -> f32 {
 #[derive(Debug, Default)]
 pub struct Conversation {
     pub exchanges: Vec<Exchange>,
+    /// When its first request was asked, in seconds since 1970: the journal's filter.
+    pub started: Option<i64>,
     child: Option<Child>,
 }
 
@@ -111,6 +129,8 @@ impl Conversation {
         now: Duration,
     ) -> Option<mpsc::UnboundedReceiver<Value>> {
         let input = self.input(request);
+        self.started
+            .get_or_insert_with(appearance_config::epoch_now);
         self.exchanges.push(Exchange {
             request: request.to_owned(),
             born: now,
@@ -153,7 +173,29 @@ impl Conversation {
                 summary: field("summary").to_owned(),
                 state: field("state").to_owned(),
                 read: false,
+                plan: event
+                    .get("plan")
+                    .and_then(Value::as_u64)
+                    .and_then(|i| usize::try_from(i).ok()),
             }),
+            "plan" if exchange.plan.is_empty() => {
+                let steps = event.get("steps").and_then(Value::as_array);
+                exchange.plan = steps
+                    .into_iter()
+                    .flatten()
+                    .take(MAX_PLAN)
+                    .map(|step| {
+                        let field =
+                            |name: &str| step.get(name).and_then(Value::as_str).unwrap_or_default();
+                        Planned {
+                            title: field("title").to_owned(),
+                            description: field("description").to_owned(),
+                            tool: field("tool").to_owned(),
+                        }
+                    })
+                    .collect();
+                exchange.plan_at = Some(now);
+            }
             "state" => {
                 if let Some(step) = exchange.steps.iter_mut().find(|s| s.id == field("id")) {
                     step.state = field("state").to_owned();
@@ -235,12 +277,10 @@ impl Drop for Conversation {
 /// its end), the field of the next request. `field` names the field, for the focus.
 pub fn view<'a, M: Clone + 'a>(
     conversation: &'a Conversation,
-    request: &'a str,
     model: Option<std::sync::Arc<sherlock_3d::Model>>,
     now: Duration,
-    on_input: impl Fn(String) -> M + 'a,
-    on_submit: M,
-    field: iced::widget::Id,
+    field: Field<'a, M>,
+    journal: Journal<'a, M>,
 ) -> iced::Element<'a, M> {
     use iced::widget::{Space, column, container, row, scrollable, text, text_input};
     use iced::{Alignment, Length};
@@ -267,11 +307,19 @@ pub fn view<'a, M: Clone + 'a>(
             .width(Length::Fill),
     ]
     .spacing(2);
-    let header = row![bubble, title]
-        .spacing(look::GAP)
-        .align_y(Alignment::Center)
-        .padding([0.0, look::SEARCH_PADDING])
-        .height(tokens::HEADER_HEIGHT);
+    let switch = match journal.entries {
+        Some(_) => tokens::text::CONVERSATION,
+        None => tokens::text::JOURNAL,
+    };
+    let header = row![
+        bubble,
+        title,
+        ui::secondary_button(switch, Some(journal.toggle))
+    ]
+    .spacing(look::GAP)
+    .align_y(Alignment::Center)
+    .padding([0.0, look::SEARCH_PADDING])
+    .height(tokens::HEADER_HEIGHT);
     let words = |said: &'a str, tint: color::Color| {
         text(said)
             .size(tokens::TEXT_SIZE)
@@ -299,32 +347,60 @@ pub fn view<'a, M: Clone + 'a>(
         for (said, born) in exchange.texts.iter().zip(&exchange.texts_at) {
             body = body.push(appear(words(said, p.text_primary).into(), *born));
         }
-        if !exchange.steps.is_empty() {
+        if !exchange.steps.is_empty() || !exchange.plan.is_empty() {
             body = body.push(ui::section_label(tokens::text::PLAN));
         }
-        for ((place, step), born) in exchange.steps.iter().enumerate().zip(&exchange.steps_at) {
-            let number = container(text((place + 1).to_string()).size(tokens::SMALL_SIZE))
+        // A card of the plan: its number, two lines, its state.
+        let card = |number: usize, first: String, second: String, state: String, waiting: bool| {
+            let number = container(text(number.to_string()).size(tokens::SMALL_SIZE))
                 .center(tokens::STEP_NUMBER)
                 .style(look::key(false));
             let lines = column![
-                ui::ellipsis(step.tool.as_str()).font(typography::UI_SEMIBOLD),
-                ui::ellipsis(step.summary.as_str())
+                ui::ellipsis(first).font(typography::UI_SEMIBOLD),
+                ui::ellipsis(second)
                     .size(tokens::SMALL_SIZE)
                     .color(p.text_secondary),
             ]
             .width(Length::Fill);
-            let state = text(tokens::state_line(&step.state, step.read))
-                .size(tokens::SMALL_SIZE)
-                .color(p.text_secondary);
-            let card = row![number, lines, state]
+            let state = text(state).size(tokens::SMALL_SIZE).color(p.text_secondary);
+            let row = row![number, lines, state]
                 .spacing(look::GAP)
                 .align_y(Alignment::Center);
-            let waiting = step.state == "waiting";
-            let card = container(card)
+            container(row)
                 .padding(tokens::STEP_PADDING)
                 .width(Length::Fill)
-                .style(look::step(waiting));
-            body = body.push(appear(card.into(), *born));
+                .style(look::step(waiting))
+        };
+        // The plan announced, each step with the state of the call that took it (A-19e).
+        for (place, planned) in exchange.plan.iter().enumerate() {
+            let taken = exchange.steps.iter().find(|s| s.plan == Some(place));
+            let state = taken.map_or_else(
+                || tokens::text::PLANNED.to_owned(),
+                |s| tokens::state_line(&s.state, s.read),
+            );
+            let waiting = taken.is_some_and(|s| s.state == "waiting");
+            let second = format!("{} · {}", planned.description, planned.tool);
+            let shown = card(place + 1, planned.title.clone(), second, state, waiting);
+            body = body.push(appear(shown.into(), exchange.plan_at.unwrap_or(now)));
+        }
+        // The calls outside the plan, after it.
+        let unplanned = exchange
+            .steps
+            .iter()
+            .zip(&exchange.steps_at)
+            .filter(|(step, _)| step.plan.is_none_or(|i| i >= exchange.plan.len()));
+        for (place, (step, born)) in unplanned.enumerate() {
+            let state = tokens::state_line(&step.state, step.read);
+            let waiting = step.state == "waiting";
+            let number = exchange.plan.len() + place + 1;
+            let shown = card(
+                number,
+                step.tool.clone(),
+                step.summary.clone(),
+                state,
+                waiting,
+            );
+            body = body.push(appear(shown.into(), *born));
         }
         let ended = exchange.ended.unwrap_or(now);
         if let Some(answer) = &exchange.answer {
@@ -337,17 +413,56 @@ pub fn view<'a, M: Clone + 'a>(
             body = body.push(words(tokens::text::THINKING, p.text_tertiary));
         }
     }
+    if let Some(entries) = journal.entries {
+        let all = journal.all;
+        let filters = row![
+            ui::chip(
+                tokens::text::THIS_CONVERSATION,
+                !all,
+                Some((journal.filter)(false))
+            ),
+            ui::chip(tokens::text::EVERYTHING, all, Some((journal.filter)(true))),
+        ]
+        .spacing(tokens::STEP_GAP);
+        let since = if all { None } else { conversation.started };
+        let mut list = column![ui::section_label(tokens::text::JOURNAL_SUBTITLE), filters]
+            .spacing(tokens::GAP)
+            .padding(tokens::PADDING);
+        let shown: Vec<_> = entries
+            .iter()
+            .filter(|e| since.is_none_or(|since| e.time >= since))
+            .collect();
+        if shown.is_empty() {
+            list = list.push(words(tokens::text::JOURNAL_EMPTY, p.text_secondary));
+        }
+        for entry in shown {
+            let line = row![
+                text(crate::journal::time(entry))
+                    .size(tokens::SMALL_SIZE)
+                    .color(p.text_tertiary)
+                    .width(tokens::JOURNAL_TIME),
+                ui::ellipsis(crate::journal::line(entry))
+                    .size(tokens::TEXT_SIZE)
+                    .width(Length::Fill),
+            ]
+            .spacing(look::GAP)
+            .align_y(Alignment::Center);
+            list = list.push(line);
+        }
+        let notes = scrollable(list).height(Length::Fill).width(Length::Fill);
+        return column![header, notes].height(Length::Fill).into();
+    }
     let talk = scrollable(body)
         .anchor_bottom()
         .height(Length::Fill)
         .width(Length::Fill);
-    let mut input = text_input(tokens::text::FIELD, request)
-        .id(field)
+    let mut input = text_input(tokens::text::FIELD, field.text)
+        .id(field.id)
         .size(look::QUERY_SIZE)
         .padding(0)
         .style(look::query);
     if !conversation.running() {
-        input = input.on_input(on_input).on_submit(on_submit);
+        input = input.on_input(field.on_input).on_submit(field.on_submit);
     }
     let ask = row![
         ui::icon(
@@ -363,6 +478,23 @@ pub fn view<'a, M: Clone + 'a>(
     .padding([0.0, look::SEARCH_PADDING])
     .height(look::SEARCH_HEIGHT);
     column![header, talk, ask].height(Length::Fill).into()
+}
+
+/// The field of the next request: its text, its messages, its id for the focus.
+pub struct Field<'a, M> {
+    pub text: &'a str,
+    pub on_input: Box<dyn Fn(String) -> M + 'a>,
+    pub on_submit: M,
+    pub id: iced::widget::Id,
+}
+
+/// The journal in the panel (lot A-19d): its entries when it shows, newest first, whether all
+/// of them show or those of the conversation, and the messages of its buttons.
+pub struct Journal<'a, M> {
+    pub entries: Option<&'a [crate::journal::Entry]>,
+    pub all: bool,
+    pub toggle: M,
+    pub filter: Box<dyn Fn(bool) -> M + 'a>,
 }
 
 /// The program of Sherlock's service: beside the session's programs, or in the `PATH`.
@@ -472,6 +604,27 @@ mod tests {
         // The next request carries the answered one.
         let input: Value = serde_json::from_str(&c.input("Et ensuite ?")).unwrap();
         assert_eq!(input["history"][0][1], "C'est fait.");
+    }
+
+    #[test]
+    fn the_plan_announced_first_is_kept_and_the_steps_take_it() {
+        let mut c = running("Installe Steam");
+        let at = Duration::from_secs;
+        let plan = json!({"event": "plan", "steps": [
+            {"title": "Vérifier", "description": "Les paquets.", "tool": "list"},
+            {"title": "Installer", "description": "steam", "tool": "install"},
+        ]});
+        c.apply(&plan, at(1));
+        let step = json!({"event": "step", "id": "a", "tool": "install", "summary": "{}", "state": "waiting", "plan": 1});
+        c.apply(&step, at(2));
+        let e = &c.exchanges[0];
+        assert_eq!(e.plan.len(), 2);
+        assert_eq!(e.plan[1].title, "Installer");
+        assert_eq!(e.plan_at, Some(at(1)));
+        assert_eq!(e.steps[0].plan, Some(1));
+        // A second plan in the same request is ignored.
+        c.apply(&json!({"event": "plan", "steps": []}), at(3));
+        assert_eq!(c.exchanges[0].plan.len(), 2);
     }
 
     #[test]
