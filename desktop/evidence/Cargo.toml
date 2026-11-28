@@ -16,6 +16,9 @@ iced = { version = "=0.14.0", default-features = false, features = [
     "image-without-codecs",
     "thread-pool",
 ] }
+# Wayland runtime (ADR 0029): an `xdg_toplevel` window, and soon its menus as `xdg_popup`s.
+# Same version and features as the bar, the dock and the launcher; already in the lock.
+iced_exwlshell = { version = "=0.21.4", default-features = false, features = ["macros"] }
 # Image preview decoders, PNG and JPEG only. Version pulled by iced 0.14.
 image = { version = "=0.25.10", default-features = false, features = ["jpeg", "png"] }
 # Local time (localtime_r) for the dates of the listing and the trash. Already pulled by iced
@@ -33,7 +36,8 @@ zbus = { version = "=5.19.0", default-features = false, features = ["async-io", 
 # Drag and drop and the clipboard of files with the other applications (lot E-03), on the
 # window's own Wayland connection (`src/dnd.rs`): winit neither starts a drag nor takes a drop
 # on Wayland, and iced's clipboard only knows text. The versions and features winit and
-# smithay-clipboard already pull (`client_system`, `dlopen`): nothing new is built.
+# smithay-clipboard already pull (`client_system`, `dlopen`): nothing new is built. The client
+# also reads the compositor's globals before choosing the runtime (ADR 0029, `shell`).
 wayland-backend = { version = "=0.3.17", default-features = false, features = [
     "client_system",
     "dlopen",
