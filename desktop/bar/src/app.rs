@@ -114,6 +114,8 @@ pub struct Bar {
     pub link: Option<Link>,
     /// The Bluetooth radio; `None` without an adapter: no indicator.
     pub radio: Option<Radio>,
+    /// Do not disturb holds: the moon among the indicators (D-23e).
+    pub do_not_disturb: bool,
     /// The menus of the active application (lot D-36).
     pub global: GlobalMenu,
     /// The name of each application by its `app_id`, from its desktop entry: `None` while it
@@ -128,6 +130,8 @@ pub struct Bar {
 /// An indicator of the bar. Together they make one button, which opens the control centre.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Indicator {
+    /// The moon while Do not disturb holds (D-23e).
+    DoNotDisturb,
     Bluetooth,
     Network,
     Sound,
@@ -154,6 +158,8 @@ pub enum Target {
 pub enum Message {
     Surface(Id),
     Clock(LocalTime),
+    /// Do not disturb read again: whether it holds (D-23e).
+    DoNotDisturb(bool),
     Battery(Option<Battery>),
     Network(Network),
     Sound(Sound),
@@ -383,7 +389,13 @@ impl Bar {
                 return self.pick_entry(level, index).chain(self.close_tray());
             }
             Message::Surface(id) => self.surface = Some(id),
-            Message::Clock(time) => self.clock = Some(time),
+            Message::Clock(time) => {
+                self.clock = Some(time);
+                // Once a minute, Do not disturb read again off the interface thread: set from
+                // Control Room, or its end reached.
+                return read_do_not_disturb();
+            }
+            Message::DoNotDisturb(on) => self.do_not_disturb = on,
             Message::Battery(battery) => self.battery = Some(battery),
             Message::Network(network) => self.network = Some(network),
             Message::Sound(sound) => self.sound = Some(sound),
@@ -472,7 +484,11 @@ impl Bar {
             }
             Message::Quick(message) => {
                 self.quick.now = animated::clock();
-                return self.quick.update(message).map(Message::Quick);
+                let task = self.quick.update(message).map(Message::Quick);
+                if let Some(on) = self.quick.do_not_disturb {
+                    self.do_not_disturb = on;
+                }
+                return task;
             }
             Message::HistoryDone(done) => {
                 if let Err(error) = done {
@@ -1228,6 +1244,12 @@ impl Bar {
         let tint = p.text_secondary;
         let glyph = |frames| ui::live_icon(frames, tint);
         let mut items = Vec::new();
+        if self.do_not_disturb {
+            items.push((
+                Indicator::DoNotDisturb,
+                glyph(vec![panels::Glyph::Moon.svg()]),
+            ));
+        }
         if let Some(radio) = self.radio {
             items.push((
                 Indicator::Bluetooth,
@@ -1343,6 +1365,29 @@ pub fn appearance(path: &Path) -> UnboundedReceiver<Theme> {
         tracing::warn!(%error, "the bar will not follow the appearance file");
     }
     receiver
+}
+
+/// Whether Do not disturb holds, read from the notifications file on a thread of its own.
+fn read_do_not_disturb() -> Task<Message> {
+    let Some(path) = notifications_config::path() else {
+        return Task::none();
+    };
+    let (sender, receiver) = iced::futures::channel::oneshot::channel();
+    let spawned = std::thread::Builder::new()
+        .name(String::from("do-not-disturb"))
+        .spawn(move || {
+            let on = notifications_config::NotificationsConfig::load(&path)
+                .is_ok_and(|(config, _)| config.active_now());
+            let _ = sender.send(on);
+        });
+    if let Err(error) = spawned {
+        tracing::warn!(%error, "cannot read Do not disturb");
+        return Task::none();
+    }
+    Task::perform(
+        async move { receiver.await.unwrap_or(false) },
+        Message::DoNotDisturb,
+    )
 }
 
 /// The screen of a surface, from iced_exwlshell's reports.

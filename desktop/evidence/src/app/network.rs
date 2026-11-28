@@ -7,6 +7,27 @@ use iced::Task;
 use sherlock_ui::texts::evidence as texts;
 
 use super::{App, Location, Message, Notice};
+use sherlock_ui::motion::Fade;
+
+/// The sheet that asks a server's name and password (lot E-07b).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Login {
+    pub host: String,
+    pub server: String,
+    pub user: String,
+    pub domain: String,
+    pub password: String,
+    /// Keep them in the keyring.
+    pub remember: bool,
+}
+
+/// A field of the sheet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Field {
+    User,
+    Domain,
+    Password,
+}
 use crate::smb;
 
 impl App {
@@ -30,9 +51,82 @@ impl App {
         });
         let uri = server.uri();
         let host = host.to_owned();
-        Task::perform(async move { smb::mount(&uri, None) }, move |result| {
-            Message::ServerMounted(host.clone(), result)
-        })
+        let lookup = host.clone();
+        // The name and the password kept in the keyring, if any; else as a guest.
+        Task::perform(
+            async move {
+                let kept = crate::keyring::find(&lookup);
+                smb::mount(&uri, kept.as_ref())
+            },
+            move |result| Message::ServerMounted(host.clone(), result),
+        )
+    }
+
+    /// The sheet for `host`, its name prefilled from the last try.
+    fn ask_login(&mut self, host: String) {
+        let server = self
+            .server(&host)
+            .map(|s| s.name.clone())
+            .unwrap_or_default();
+        let user = self.login_user.clone();
+        self.login = Some(Login {
+            host,
+            server,
+            user,
+            remember: true,
+            ..Login::default()
+        });
+        self.login_fade = Some(Fade::new(0.0, 1.0, self.now(), sherlock_ui::motion::FADE));
+    }
+
+    pub(super) fn login_input(&mut self, field: Field, value: String) {
+        if let Some(login) = &mut self.login {
+            match field {
+                Field::User => login.user = value,
+                Field::Domain => login.domain = value,
+                Field::Password => login.password = value,
+            }
+        }
+    }
+
+    pub(super) fn login_remember(&mut self, on: bool) {
+        if let Some(login) = &mut self.login {
+            login.remember = on;
+        }
+    }
+
+    /// Connects with what the sheet holds, and keeps it in the keyring when asked and it worked.
+    pub(super) fn login_submit(&mut self) -> Task<Message> {
+        let Some(login) = self.login.take() else {
+            return Task::none();
+        };
+        let Some(server) = self.server(&login.host).cloned() else {
+            return Task::none();
+        };
+        self.busy += 1;
+        self.notice = Some(Notice {
+            text: texts::connecting(&server.name),
+            error: false,
+        });
+        let credentials = smb::Credentials {
+            user: login.user.clone(),
+            domain: login.domain.clone(),
+            password: login.password,
+        };
+        let (uri, host, remember) = (server.uri(), login.host.clone(), login.remember);
+        let target = login.host;
+        // The name is kept to prefill the sheet if it has to ask again.
+        self.login_user = login.user;
+        Task::perform(
+            async move {
+                let result = smb::mount(&uri, Some(&credentials));
+                if result.is_ok() && remember && !crate::keyring::keep(&host, &credentials) {
+                    tracing::info!("the password is not kept: no keyring, or a locked one");
+                }
+                result
+            },
+            move |result| Message::ServerMounted(target.clone(), result),
+        )
     }
 
     pub(super) fn server_mounted(
@@ -46,6 +140,12 @@ impl App {
                 self.notice = None;
                 self.mounted.insert(host, folder.clone());
                 self.go(Location::Folder(folder))
+            }
+            // The server wants a name and a password: the sheet asks for them.
+            Err(smb::Error::Credentials) => {
+                self.notice = None;
+                self.ask_login(host);
+                Task::none()
             }
             Err(error) => {
                 tracing::warn!(?error, "server not mounted");
