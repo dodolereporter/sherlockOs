@@ -41,6 +41,8 @@ pub enum Part {
     Dim,
     Highlight,
     Label,
+    /// The « × » of the window under the pointer (lot D-33c).
+    CloseButton,
     MiniBar,
     /// Mission Control: the background, the border and the name of the thumbnail of a
     /// workspace, by its index.
