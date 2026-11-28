@@ -4,6 +4,7 @@ mod appearance;
 mod apps;
 mod clipboard;
 pub(crate) mod displays;
+mod keyboard;
 mod lock;
 mod sound;
 mod touchpad;

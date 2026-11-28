@@ -2,7 +2,8 @@
 
 Control Room is the settings application of the desktop (lot D-26a). Each setting is written to
 the file that its program already reads and follows live: nothing has to be restarted, and every
-setting survives a restart. The look follows the « Réglages » board
+setting survives a restart. It opens from « Réglages » in the bar's Sherlock menu, or with
+Super + comma (lot Q-31). The look follows the « Réglages » board
 (`docs/design/planches/Reglages.dc.html`): a sidebar of 240 with the search on top, the page on
 the right in cards. Its sizes, motions and French texts are in `sherlock_ui::control_room`.
 
@@ -17,7 +18,7 @@ To try it without touching your own settings, give it a configuration folder of 
 ## Pages
 
 D-26a1 brought the appearance and touchpad pages; D-26a2 sound, lock and default applications;
-D-26b the screens.
+D-26b the screens; D-26c the keyboard page and the gestures of the touchpad page.
 
 | Page | Setting | File | Read by |
 | --- | --- | --- | --- |
@@ -25,7 +26,9 @@ D-26b the screens.
 | « Apparence » | Theme: Sombre, Clair, Auto, and the hours of Auto (half-hour steps) | `$XDG_CONFIG_HOME/appearance/appearance.conf` | Every program (`appearance-config`) |
 | « Apparence » | Wallpaper among the installed ones, « Suivre le thème » | `$XDG_CONFIG_HOME/sherlockos/wallpaper.conf` | Compositor |
 | « Apparence » | Dock: size, magnification and its strength, hiding, edge | `$XDG_CONFIG_HOME/dock/dock.conf` | Dock |
+| « Clavier » | Layout (a menu of common xkb layouts, or « Celle du système »), delay before repetition (150 to 1000 ms) and repeats per second (2 to 50), a field to try them, the desktop's shortcuts listed | `$XDG_CONFIG_HOME/sherlockos/keyboard.conf` | Compositor |
 | « Pavé tactile et souris » | Right click: « Appuyer à deux doigts » (default) or « Coin en bas à droite »; tap to click; natural scrolling; speed; off while typing | `$XDG_CONFIG_HOME/sherlockos/touchpad.conf` | Compositor |
+| « Pavé tactile et souris » | Gestures: three fingers down (« Rien » or « Réduire la fenêtre »), tap and drag, drag lock; the gestures that do not change are listed | `$XDG_CONFIG_HOME/sherlockos/touchpad.conf` | Compositor |
 | « Pavé tactile et souris » | « Montrer les clics » | `$XDG_CONFIG_HOME/sherlockos/pointer.conf` | Compositor |
 | « Son » | Output and microphone to use, the volume of each | PipeWire, through `pactl` | Every application |
 | « Verrouillage » | Delay before the lock: 1 to 60 minutes, or never | `$XDG_CONFIG_HOME/sherlockos/lock.conf` (`idle-minutes`) | Compositor (D-25a) |
@@ -86,6 +89,18 @@ The changes reach `pactl` one at a time, in the order they were made, through a 
 keeps only the last volume of each device, as the media keys do.
 Without `pactl`, the page says that the sound does not answer. `wpctl` alone is not enough to list
 the devices: the media keys still fall back on it, this page does not.
+
+**Keyboard.** The menu offers the layouts of `control_room::KEYBOARD_LAYOUTS`, each checked
+against xkb by a test of the compositor. A layout written in the file by hand that the menu does
+not offer shows as « Autre disposition » and is kept until another is chosen; « Celle du
+système » empties the `layout` key. The two sliders write once they rest, as the others. The
+field to try the keys keeps 200 characters at most and writes nothing. The shortcuts are a table
+of `control_room::texts::SHORTCUT_LIST`, the ones `input.rs` and `capture.rs` take: it must
+follow them. In nested mode Alt stands for Super, which the page says.
+
+**Gestures.** « Toucher puis glisser » waits for « Toucher pour cliquer », and « Glissement
+prolongé » for both: their switches are disabled otherwise. Three fingers up, left and right,
+and two fingers pinched are listed under them, without a setting.
 
 **Clipboard.** `clipboard.conf` is read by the compositor within a second of a change (see
 "Clipboard history" in `docs/compositor.md`). « Historique du presse-papiers » off forgets
@@ -181,6 +196,9 @@ configuration:
 - default applications written to a temporary `mimeapps.list` and `xdg-terminals.list`, then
   read back by `mime-apps`;
 - the lock delay written and read back;
+- the keyboard page: layout, delay and rate written, read back after the application is opened
+  again (a restart), a hand-written layout kept, « Celle du système » emptying the key, the
+  field to try bounded; the right click offers « Appuyer à deux doigts » first and the corner;
 - captures of every page, dark and light, at 1920 by 1032 (a window maximized on a 1080p
   screen, under the bar) and 520 by 760, in `target/tmp/control-room-*.png`.
 
@@ -195,11 +213,13 @@ The touchpad page, dark and light:
 
 ![Touchpad, dark](control-room/touchpad-wide-dark.png)
 ![Touchpad, light](control-room/touchpad-wide-light.png)
+![Keyboard, dark](control-room/keyboard-wide-dark.png)
 
 Narrow window: one column, the sidebar folded, then unfolded over the page during a search:
 
 ![Appearance, narrow](control-room/appearance-narrow-dark.png)
 ![Touchpad, narrow, light](control-room/touchpad-narrow-light.png)
+![Keyboard, narrow, light](control-room/keyboard-narrow-light.png)
 ![Sidebar unfolded](control-room/sidebar-narrow.png)
 
 Sound, lock and default applications:

@@ -1,0 +1,18 @@
+# cargo-nextest, the CI's test runner (lot Q-18b, docs/ci.md): one process per test, the tests
+# of every binary side by side, where `cargo test` runs the binaries one after the other.
+# `just test` keeps `cargo test`; `just test-ci` runs this.
+
+[profile.ci]
+# Every failure is reported, not only the first one.
+fail-fast = false
+# A test slower than a minute is named in the log, as `cargo test` did.
+slow-timeout = { period = "60s" }
+# The failures are printed again at the end, where the log is read first.
+final-status-level = "fail"
+
+# Tests that measure time against a fake service (the media keys and their repeats, the session
+# lock and logind, the watchers of `system-services`) run alone: the drawing tests beside them
+# would slow down the fake services they wait for, and turn a timing into a failure.
+[[profile.ci.overrides]]
+filter = "(package(compositor) & (binary(media_keys) | binary(session_lock) | binary(perf))) | package(system-services)"
+threads-required = "num-test-threads"
