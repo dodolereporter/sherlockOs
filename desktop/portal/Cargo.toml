@@ -1,0 +1,17 @@
+[package]
+name = "portal"
+description = "Portal backend of the session: screen sharing through PipeWire, with our picker"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+# PipeWire, loaded at run time (ADR 0028): nothing to build against. The version already in
+# the lock.
+libloading = "=0.8.9"
+thiserror = "=2.0.21"
+tracing = "=0.1.44"
+
+[lints]
+workspace = true
