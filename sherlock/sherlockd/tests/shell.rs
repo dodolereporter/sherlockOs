@@ -25,12 +25,18 @@ mod tests {
     /// The fake `claude`: logged in; reads the request; writes the init and the tool call, then
     /// the broker's decision in the journal as the proxy would, then the rest of the transcript.
     fn fake_claude(dir: &Path) {
-        let transcript = Path::new(env!("CARGO_MANIFEST_DIR")).join(ECHO);
+        fake_claude_with(dir, ECHO, 2);
+    }
+
+    /// The same with `transcript`, the decision written after its first `head` lines.
+    fn fake_claude_with(dir: &Path, transcript: &str, head: usize) {
+        let transcript = Path::new(env!("CARGO_MANIFEST_DIR")).join(transcript);
         let journal = dir.join("state/sherlock/journal.jsonl");
         let script = format!(
-            "#!/bin/sh\n[ \"$1\" = auth ] && exit 0\ncat > /dev/null\nhead -n 2 '{t}'\n\
+            "#!/bin/sh\n[ \"$1\" = auth ] && exit 0\ncat > /dev/null\nhead -n {head} '{t}'\n\
              printf '%s\\n' '{{\"id\":1,\"tool\":\"echo\",\"level\":\"lecture\",\"decision\":\"granted\"}}' >> '{j}'\n\
-             sleep 1\ntail -n +3 '{t}'\n",
+             sleep 1\ntail -n +{next} '{t}'\n",
+            next = head + 1,
             t = transcript.display(),
             j = journal.display(),
         );
@@ -110,5 +116,26 @@ mod tests {
             .output()
             .unwrap();
         assert!(!output.status.success());
+    }
+
+    /// Lot A-19e: the plan announced first goes out as a `plan` event, and the call that takes
+    /// its step says which.
+    #[test]
+    fn the_plan_comes_first_and_the_steps_take_it() {
+        let dir = folder("plan");
+        fake_claude_with(&dir, "tests/transcripts/plan.jsonl", 3);
+        let path = format!("{}:/usr/bin:/bin", dir.join("bin").display());
+        let events = ask(&dir, &path, "Dis bonjour");
+        let kinds: Vec<&str> = events.iter().filter_map(|e| e["event"].as_str()).collect();
+        assert_eq!(
+            kinds,
+            [
+                "started", "plan", "step", "state", "state", "text", "answer"
+            ],
+            "{events:#?}"
+        );
+        assert_eq!(events[1]["steps"][0]["tool"], "echo");
+        assert_eq!(events[2]["plan"], 0);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

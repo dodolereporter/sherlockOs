@@ -27,6 +27,19 @@ pub const MAX_INPUT_BYTES: usize = 64 * 1024;
 pub const MAX_HISTORY: usize = 20;
 /// Bytes of the arguments of a step shown.
 pub const MAX_SUMMARY: usize = 160;
+/// Steps of an announced plan taken, at most, and the length of their title and description.
+pub const MAX_PLAN_STEPS: usize = 12;
+const MAX_TITLE: usize = 120;
+const MAX_DESCRIPTION: usize = 300;
+
+/// What the model is asked, in the system instructions of `--ask` (lot A-19e): announce its
+/// plan first, in a block the shell reads. In French, since the model reads it.
+pub const PLAN_INSTRUCTIONS: &str = "Avant d'appeler le moindre outil, annonce ton plan une seule fois, dans un \
+     bloc <plan>…</plan> qui contient seulement une liste JSON d'étapes, chacune \
+     {\"title\": …, \"description\": …, \"tool\": …} (l'outil que l'étape appellera, sans \
+     préfixe). Écris le bloc avant tout autre texte, puis agis. Sans outil à appeler, pas de \
+     bloc.";
+
 /// Longest journal line read; a longer one is skipped.
 const MAX_JOURNAL_LINE: usize = 8 * 1024;
 
@@ -140,6 +153,36 @@ struct Step {
 #[derive(Debug, Default)]
 pub struct Events {
     steps: VecDeque<Step>,
+    /// The tools of the plan announced, by step; `true` once a call took that step.
+    plan: Vec<(String, bool)>,
+}
+
+/// The plan in `text`, and the text without it: `None` without a readable `<plan>` block. Each
+/// step is `{"title", "description", "tool"}`, bounded.
+pub fn plan(text: &str) -> Option<(Vec<Value>, String)> {
+    let start = text.find("<plan>")?;
+    let end = start + text[start..].find("</plan>")?;
+    let body = &text[start + "<plan>".len()..end];
+    let steps: Vec<Value> = serde_json::from_str(body.trim()).ok()?;
+    let steps: Vec<Value> = steps
+        .iter()
+        .take(MAX_PLAN_STEPS)
+        .map(|step| {
+            let field = |name: &str, max| {
+                cut(
+                    step.get(name).and_then(Value::as_str).unwrap_or_default(),
+                    max,
+                )
+            };
+            json!({
+                "title": field("title", MAX_TITLE),
+                "description": field("description", MAX_DESCRIPTION),
+                "tool": field("tool", MAX_TITLE),
+            })
+        })
+        .collect();
+    let rest = format!("{}{}", &text[..start], &text[end + "</plan>".len()..]);
+    Some((steps, rest.trim().to_owned()))
 }
 
 impl Events {
@@ -148,7 +191,25 @@ impl Events {
         match message {
             Message::User(_) => Vec::new(),
             Message::Assistant(ModelReply::Text(text)) => {
-                vec![json!({ "event": "text", "text": text })]
+                let mut events = Vec::new();
+                let mut said = text.as_str();
+                let rest;
+                // The plan, announced first (lot A-19e): once per request.
+                if self.plan.is_empty()
+                    && let Some((steps, left)) = plan(text)
+                {
+                    self.plan = steps
+                        .iter()
+                        .map(|s| (s["tool"].as_str().unwrap_or_default().to_owned(), false))
+                        .collect();
+                    events.push(json!({ "event": "plan", "steps": steps }));
+                    rest = left;
+                    said = &rest;
+                }
+                if !said.is_empty() {
+                    events.push(json!({ "event": "text", "text": said }));
+                }
+                events
             }
             Message::Assistant(ModelReply::ToolCalls(calls)) => calls
                 .iter()
@@ -158,12 +219,21 @@ impl Events {
                         tool: call.name.clone(),
                         state: State::Waiting,
                     });
+                    // The step of the plan it takes: the first one of that tool not taken.
+                    let planned = self
+                        .plan
+                        .iter_mut()
+                        .position(|(tool, taken)| *tool == call.name && !*taken);
+                    if let Some(index) = planned {
+                        self.plan[index].1 = true;
+                    }
                     json!({
                         "event": "step",
                         "id": call.id,
                         "tool": call.name,
                         "summary": cut(&call.arguments.to_string(), MAX_SUMMARY),
                         "state": State::Waiting.key(),
+                        "plan": planned,
                     })
                 })
                 .collect(),
@@ -354,6 +424,34 @@ mod tests {
             events.message(&result("2", true)).is_empty(),
             "refused stays"
         );
+    }
+
+    #[test]
+    fn the_plan_announced_first_is_read_and_its_steps_taken_in_order() {
+        let text = "Voici.\n<plan>[{\"title\":\"Lire\",\"description\":\"La liste.\",\"tool\":\"list\"},\
+                    {\"title\":\"Relancer\",\"description\":\"\",\"tool\":\"restart\"}]</plan>";
+        let mut events = Events::default();
+        let shown = events.message(&Message::Assistant(ModelReply::Text(text.into())));
+        assert_eq!(shown[0]["event"], "plan");
+        assert_eq!(shown[0]["steps"][1]["title"], "Relancer");
+        assert_eq!(shown[0]["steps"][0]["tool"], "list");
+        assert_eq!(shown[1]["text"], "Voici.");
+        let call = |id: &str, name: &str| {
+            Message::Assistant(ModelReply::ToolCalls(vec![ToolCall {
+                id: id.into(),
+                name: name.into(),
+                arguments: json!({}),
+            }]))
+        };
+        assert_eq!(events.message(&call("b", "restart"))[0]["plan"], 1);
+        assert_eq!(events.message(&call("a", "list"))[0]["plan"], 0);
+        assert!(
+            events.message(&call("c", "list"))[0]["plan"].is_null(),
+            "not planned"
+        );
+        // A block that is not a list of steps stays text.
+        assert!(plan("<plan>pas du JSON</plan>").is_none());
+        assert!(plan("sans bloc").is_none());
     }
 
     #[test]
