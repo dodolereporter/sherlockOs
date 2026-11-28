@@ -2250,3 +2250,42 @@ fn the_completion_list_and_tooltips_are_popups_without_a_grab() {
     bench.send(Message::Hover(None));
     assert!(bench.app.unfocused.tooltip.is_none());
 }
+
+/// Lot Q-56: « Se connecter en tant que… », from the server's right-click menu or from its
+/// button, opens the sheet even when the guest got in; a share the guest may not read opens it
+/// too.
+#[test]
+fn a_server_offers_to_connect_as_someone() {
+    use crate::app::{Command, MenuItem};
+    use crate::network::Server;
+    use sherlock_ui::texts::evidence as t;
+    let mut bench = Bench::new("login-as");
+    let host = String::from("nas.local");
+    bench.send(Message::Servers(vec![Server {
+        name: "NAS du salon".into(),
+        host: host.clone(),
+    }]));
+    // The guest got in: the server's folder is shown.
+    fs::create_dir_all(bench.path("nas")).expect("folder");
+    bench.send(Message::ServerMounted(host.clone(), Ok(bench.path("nas"))));
+    assert!(bench.app.login.is_none());
+    bench.send(Message::ServerMenu(host.clone()));
+    let items = bench.app.menu_items(false);
+    let has = |label: &str| {
+        items
+            .iter()
+            .any(|i| matches!(i, MenuItem::Action { label: l, .. } if *l == label))
+    };
+    assert!(has(t::LOGIN_AS) && has(t::EJECT));
+    bench.send(Message::Run(Command::ServerLoginAs));
+    let login = bench.app.login.clone().expect("sheet open");
+    assert_eq!(login.server, "NAS du salon");
+    bench.send(Message::LoginCancel);
+    // The button beside the server does the same.
+    bench.send(Message::LoginAs(host.clone()));
+    assert!(bench.app.login.is_some());
+    bench.send(Message::LoginCancel);
+    // A share the guest may not read: the listing fails, the sheet asks.
+    bench.send(Message::Go(Location::Folder(bench.path("nas/private"))));
+    assert!(bench.app.login.as_ref().is_some_and(|l| l.host == host));
+}

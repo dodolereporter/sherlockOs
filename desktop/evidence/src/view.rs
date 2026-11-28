@@ -334,19 +334,27 @@ impl App {
                     active,
                     Some(Message::OpenServer(server.host.clone())),
                 );
-                let line: Element<'_, Message> = match folder {
-                    Some(_) => row![
-                        container(item).width(Length::Fill),
-                        ui::icon_button(
-                            Icon::Eject,
-                            t::EJECT,
-                            Some(Message::EjectServer(server.host.clone())),
-                        )
-                    ]
-                    .align_y(Alignment::Center)
-                    .into(),
-                    None => item.into(),
-                };
+                // A right click offers to connect as someone (lot Q-56), as does the button
+                // beside it, even when the guest gets in.
+                let item =
+                    mouse_area(item).on_right_press(Message::ServerMenu(server.host.clone()));
+                let mut line = row![
+                    container(item).width(Length::Fill),
+                    ui::icon_button(
+                        Icon::Person,
+                        t::LOGIN_AS,
+                        Some(Message::LoginAs(server.host.clone())),
+                    )
+                ]
+                .align_y(Alignment::Center);
+                if folder.is_some() {
+                    line = line.push(ui::icon_button(
+                        Icon::Eject,
+                        t::EJECT,
+                        Some(Message::EjectServer(server.host.clone())),
+                    ));
+                }
+                let line: Element<'_, Message> = line.into();
                 nav = nav.push(line);
             }
         }
