@@ -3885,6 +3885,8 @@ dependencies = [
 name = "system-services"
 version = "0.0.0"
 dependencies = [
+ "async-io",
+ "futures-lite",
  "libc",
  "thiserror 2.0.21",
  "tracing",

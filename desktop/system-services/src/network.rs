@@ -1,12 +1,13 @@
 //! Wi-Fi through NetworkManager on the system bus: switch it on and off, the network it is on,
 //! the networks around, joining one (with its password when it has none saved, or a hidden one
-//! by its name), following the activation to its end, and forgetting a saved network.
+//! by its name), following the activation to its end, and forgetting a saved network. Shared
+//! by the bar's quick settings and Control Room's network page, which also joins WEP and
+//! enterprise networks (`join_with`).
 
 use std::collections::HashMap;
 use std::time::Duration;
 
-use iced::futures::StreamExt;
-use iced::futures::future::Either;
+use futures_lite::StreamExt;
 use zbus::Connection;
 use zbus::zvariant::{ObjectPath, OwnedObjectPath, OwnedValue, Value};
 
@@ -449,13 +450,12 @@ pub async fn outcome(bus: &Connection, active: &str, limit: Duration) -> Result<
         }
         Outcome::Failed(0)
     };
-    let timer = crate::bus::pause(limit);
-    Ok(
-        match iced::futures::future::select(Box::pin(ended), Box::pin(timer)).await {
-            Either::Left((end, _)) => end,
-            Either::Right(((), _)) => Outcome::TimedOut,
-        },
-    )
+    // A timer of zbus's own runtime (async-io): no thread, no interface toolkit.
+    let timer = async {
+        async_io::Timer::after(limit).await;
+        Outcome::TimedOut
+    };
+    Ok(futures_lite::future::or(ended, timer).await)
 }
 
 /// Joins `network` and follows the activation to its end. A connection created for it that
@@ -467,6 +467,12 @@ pub async fn join(
     password: Option<&str>,
 ) -> Result<Outcome> {
     let attempt = connect(bus, device, network, password).await?;
+    follow(bus, &attempt).await
+}
+
+/// Follows `attempt` to its end, `ACTIVATION_LIMIT` at most, and deletes the connection it
+/// created when it fails.
+async fn follow(bus: &Connection, attempt: &Attempt) -> Result<Outcome> {
     let end = outcome(bus, attempt.active.as_str(), ACTIVATION_LIMIT).await?;
     if let (Outcome::WrongPassword | Outcome::Failed(_), Some(created)) = (end, &attempt.created)
         && let Err(problem) = delete(bus, created).await
@@ -568,9 +574,8 @@ pub enum Eap {
     Ttls,
 }
 
-/// The longest name, identity, password or domain taken: NetworkManager's SSID is 32 bytes,
-/// the others are bounded so that nothing unbounded goes to the bus.
-pub const MAX_SSID: usize = 32;
+/// The longest identity, password or domain taken (the name: `MAX_SSID`), so that nothing
+/// unbounded goes to the bus.
 pub const MAX_FIELD: usize = 256;
 
 /// The settings of a new connection to the network `ssid` with `credentials`; `hidden`: the
@@ -659,44 +664,34 @@ fn is_hex_key(key: &str) -> bool {
 }
 
 /// Joins the network `ssid` with `credentials`, on `device`: through `point` (an access point
-/// of the scan) or, for a hidden network, by its name. NetworkManager keeps the connection,
-/// its secrets readable by root only, and asks polkit.
-pub async fn join(
+/// of the scan) or, for a hidden network, by its name (lot D-26n, Control Room). NetworkManager
+/// keeps the connection, its secrets readable by root only, and asks polkit; the activation is
+/// followed to its end as `join` does, and the connection deleted when it fails.
+pub async fn join_with(
     bus: &Connection,
     device: &str,
     ssid: &str,
     point: Option<&str>,
     credentials: &Credentials,
-) -> Result<()> {
+) -> Result<Outcome> {
     let settings = connection(ssid, point.is_none(), credentials)?;
     let device = object(device)?;
-    let point = object(point.unwrap_or("/"))?;
-    bus.call_method(
-        Some(SERVICE),
-        PATH,
-        Some(MANAGER),
-        "AddAndActivateConnection",
-        &(settings, &device, &point),
-    )
-    .await?;
-    Ok(())
-}
-
-/// Forgets the network `ssid`: its saved connection is deleted, with its secrets. `false` when
-/// none was saved.
-pub async fn forget(bus: &Connection, ssid: &str) -> Result<bool> {
-    let Some(connection) = saved(bus, ssid).await? else {
-        return Ok(false);
+    let point = object(point.unwrap_or(ANY_POINT))?;
+    let reply = bus
+        .call_method(
+            Some(SERVICE),
+            PATH,
+            Some(MANAGER),
+            "AddAndActivateConnection",
+            &(settings, &device, &point),
+        )
+        .await?;
+    let (created, active): (OwnedObjectPath, OwnedObjectPath) = reply.body().deserialize()?;
+    let attempt = Attempt {
+        active,
+        created: Some(created),
     };
-    bus.call_method(
-        Some(SERVICE),
-        connection.as_str(),
-        Some(CONNECTION),
-        "Delete",
-        &(),
-    )
-    .await?;
-    Ok(true)
+    follow(bus, &attempt).await
 }
 
 #[cfg(test)]
