@@ -20,7 +20,7 @@ use iced_exwlshell::shell::{ShellEvent, ShellReceiver};
 use iced_exwlshell::to_layer_message;
 use sherlock_ui::animated::hoverable;
 use sherlock_ui::ellipsis::ellipsis;
-use sherlock_ui::motion::{Animation, GEOMETRY_PRECISION};
+use sherlock_ui::motion::{Animation, Fade, GEOMETRY_PRECISION};
 use sherlock_ui::notifications::{self as ui, SPRING};
 use sherlock_ui::{color, typography};
 
@@ -199,6 +199,8 @@ struct Bubble {
     options: bool,
     /// The pointer is over it; a button is held on it.
     hovered: bool,
+    /// The opacity of its « × », fading in and out with the pointer (lot D-23f).
+    close: Fade,
     pressed: bool,
     /// How far the fingers pulled it to the right, and when they last moved.
     swipe: f32,
@@ -257,6 +259,7 @@ impl Notifications {
             !b.top.is_done(now, GEOMETRY_PRECISION)
                 || !b.slide.is_done(now, GEOMETRY_PRECISION)
                 || b.swipe != 0.0
+                || !b.close.is_done(now)
         })
     }
 
@@ -316,6 +319,9 @@ impl Notifications {
             Message::Hover(serial, held) => {
                 if let Some(bubble) = self.bubble_mut(serial) {
                     bubble.hovered = held;
+                    let shown = bubble.close.value(now);
+                    let target = if held { 1.0 } else { 0.0 };
+                    bubble.close = Fade::new(shown, target, now, ui::CLOSE_FADE);
                     bubble.pressed &= held;
                 }
                 if let Some(id) = self.live(serial) {
@@ -487,6 +493,7 @@ impl Notifications {
                 leaving: false,
                 options: false,
                 hovered: false,
+                close: Fade::new(0.0, 0.0, Duration::ZERO, Duration::ZERO),
                 pressed: false,
                 swipe: 0.0,
                 swiped_at: None,
@@ -607,13 +614,14 @@ impl Notifications {
         let layers = self.bubbles.iter().map(|b| {
             let id = b.serial;
             let dx = at(&b.slide, now) + b.swipe;
-            let slid = float(bubble(b)).translate(move |_, _| Vector::new(dx, 0.0));
+            let slid = float(bubble(b, now)).translate(move |_, _| Vector::new(dx, 0.0));
             // Keyed by the serial: a bubble that takes the place of another is measured anew.
             let measured = sensor(slid)
                 .key(id)
                 .anticipate(f32::MAX)
-                .on_show(move |size| Message::Measured(id, size.height))
-                .on_resize(move |size| Message::Measured(id, size.height));
+                // Its height without the room of « × » above it.
+                .on_show(move |size| Message::Measured(id, size.height - ui::CLOSE_OUTSET))
+                .on_resize(move |size| Message::Measured(id, size.height - ui::CLOSE_OUTSET));
             pin(measured).y(at(&b.top, now)).into()
         });
         Stack::with_children(layers)
@@ -635,7 +643,29 @@ fn at(animation: &Animation, now: Duration) -> f32 {
 
 /// A bubble: application, title, body and action buttons, as a card of the board. A click
 /// closes it or runs its default action; the pointer over it holds its timer.
-fn bubble(b: &Bubble) -> Element<'_, Message> {
+fn bubble(b: &Bubble, now: Duration) -> Element<'_, Message> {
+    // The room of « × », half outside the top left corner (lot D-23f), and the badge in it.
+    let room = Padding::ZERO.top(ui::CLOSE_OUTSET).left(ui::CLOSE_OUTSET);
+    let card = container(card(b)).padding(room);
+    if b.behind {
+        return card.into();
+    }
+    let shown = b.close.value(now);
+    let mut layers = iced::widget::stack![card];
+    if shown > 0.0 {
+        let badge = ui::close_badge(Message::Dismiss(b.serial), shown);
+        // Its centre on the curve of the corner.
+        layers = layers.push(container(badge).padding(ui::CLOSE_ON_CURVE));
+    }
+    // The pointer over the bubble or its « × »: the badge stays while it goes to it.
+    mouse_area(layers)
+        .on_enter(Message::Hover(b.serial, true))
+        .on_exit(Message::Hover(b.serial, false))
+        .into()
+}
+
+/// The card of a bubble, without the room of its « × ».
+fn card(b: &Bubble) -> Element<'_, Message> {
     let note = &b.note;
     let id = b.serial;
     // Behind the newest of its application, only its edge shows: an empty card of its height,
@@ -668,7 +698,7 @@ fn bubble(b: &Bubble) -> Element<'_, Message> {
         .into(),
     };
     // The application's name and the title on one line each, ending with « … » (D-23c).
-    let mut header = row![
+    let header = row![
         glyph,
         ellipsis(app_name(note))
             .size(ui::HEADER_SIZE)
@@ -677,10 +707,6 @@ fn bubble(b: &Bubble) -> Element<'_, Message> {
     ]
     .spacing(ui::HEADER_GAP)
     .align_y(Alignment::Center);
-    // « × » while the pointer is over it (D-23d).
-    if b.hovered && !b.behind {
-        header = header.push(ui::close_button(Message::Dismiss(id)));
-    }
     let mut content = column![header].spacing(ui::ROW_GAP);
     if !note.summary.is_empty() {
         content = content.push(ellipsis(note.summary.as_str()).font(typography::UI_SEMIBOLD));
@@ -747,10 +773,7 @@ fn bubble(b: &Bubble) -> Element<'_, Message> {
     // The blur behind its glass (lot D-37b).
     let card = sherlock_ui::glass::glass(card, ui::RADIUS);
     // A bubble behind another opens its pile; the others take a click, a press, a swipe.
-    let area = mouse_area(card)
-        .on_enter(Message::Hover(id, true))
-        .on_exit(Message::Hover(id, false))
-        .interaction(mouse::Interaction::Pointer);
+    let area = mouse_area(card).interaction(mouse::Interaction::Pointer);
     area.on_press(Message::Press(id))
         .on_release(Message::Click(id))
         .on_scroll(move |delta| match delta {

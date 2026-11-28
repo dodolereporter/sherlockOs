@@ -18,7 +18,7 @@ use sherlock_ui::theme::{self, Tone};
 use sherlock_ui::{color, metrics, typography};
 
 use crate::app::{
-    App, Command, Location, Menu, MenuItem, Message, RENAME, SEARCH, Sub, WindowAction,
+    App, Command, HintTarget, Location, Menu, MenuItem, Message, RENAME, SEARCH, Sub, WindowAction,
 };
 use crate::clock;
 use crate::devices::Volume;
@@ -115,10 +115,12 @@ impl App {
             ui::divider(),
             self.status_bar(),
         ];
+        // The window's body is painted here: on Wayland its surface starts transparent.
         let mut layers: Vec<Element<'_, Message>> = vec![
             container(page)
                 .width(Length::Fill)
                 .height(Length::Fill)
+                .style(theme::window)
                 .into(),
         ];
         // On Wayland the menu is in popups of its own (`popup`); drawn here under winit only.
@@ -213,11 +215,13 @@ impl App {
             t::BACK,
             self.can_go_back().then_some(Message::Back),
         );
+        let back = self.hinted(back, HintTarget::Back);
         let forward = ui::toolbar_button(
             Icon::Chevron,
             t::FORWARD,
             self.can_go_forward().then_some(Message::Forward),
         );
+        let forward = self.hinted(forward, HintTarget::Forward);
         let trail = self.path_bar();
         let mut line = row![back, forward, trail]
             .spacing(metrics::GAP_ICON)
@@ -226,7 +230,8 @@ impl App {
             line = line.push(ui::branch_chip(t::branch(branch)));
         }
         let search: Element<'_, Message> = if self.search_folded() {
-            ui::toolbar_button(Icon::Search, t::SEARCH, Some(Message::OpenSearch)).into()
+            let button = ui::toolbar_button(Icon::Search, t::SEARCH, Some(Message::OpenSearch));
+            self.hinted(button, HintTarget::Search)
         } else {
             ui::search_field(
                 &t::search_placeholder(&self.location_name()),
@@ -246,12 +251,30 @@ impl App {
         if self.show_preview {
             preview = preview.status(button::Status::Pressed);
         }
-        let line = line.push(search).push(preview);
+        let line = line
+            .push(search)
+            .push(self.hinted(preview, HintTarget::Preview));
         container(line)
             .width(Length::Fill)
             .height(metrics::TOOLBAR_HEIGHT)
             .padding([0.0, metrics::TOOLBAR_PADDING])
             .align_y(Alignment::Center)
+            .into()
+    }
+
+    /// A toolbar button whose tooltip, on Wayland, is a popup of its own that leaves the
+    /// keyboard where it is (lot E-02c); under winit, the tooltip of `sherlock_ui`.
+    fn hinted<'a>(
+        &self,
+        control: ui::Control<'a, Message>,
+        target: HintTarget,
+    ) -> Element<'a, Message> {
+        if !self.menus_in_popups() {
+            return control.into();
+        }
+        mouse_area(control.without_tooltip())
+            .on_enter(Message::Hover(Some(target)))
+            .on_exit(Message::Hover(None))
             .into()
     }
 
@@ -313,19 +336,27 @@ impl App {
                     active,
                     Some(Message::OpenServer(server.host.clone())),
                 );
-                let line: Element<'_, Message> = match folder {
-                    Some(_) => row![
-                        container(item).width(Length::Fill),
-                        ui::icon_button(
-                            Icon::Eject,
-                            t::EJECT,
-                            Some(Message::EjectServer(server.host.clone())),
-                        )
-                    ]
-                    .align_y(Alignment::Center)
-                    .into(),
-                    None => item.into(),
-                };
+                // A right click offers to connect as someone (lot Q-56), as does the button
+                // beside it, even when the guest gets in.
+                let item =
+                    mouse_area(item).on_right_press(Message::ServerMenu(server.host.clone()));
+                let mut line = row![
+                    container(item).width(Length::Fill),
+                    ui::icon_button(
+                        Icon::Person,
+                        t::LOGIN_AS,
+                        Some(Message::LoginAs(server.host.clone())),
+                    )
+                ]
+                .align_y(Alignment::Center);
+                if folder.is_some() {
+                    line = line.push(ui::icon_button(
+                        Icon::Eject,
+                        t::EJECT,
+                        Some(Message::EjectServer(server.host.clone())),
+                    ));
+                }
+                let line: Element<'_, Message> = line.into();
                 nav = nav.push(line);
             }
         }

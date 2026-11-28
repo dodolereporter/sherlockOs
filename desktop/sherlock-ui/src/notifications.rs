@@ -96,6 +96,18 @@ pub const SWIPE_RESISTANCE: f32 = 0.25;
 pub const SWIPE_LINE: f32 = 40.0;
 /// The cross of « × », inside its button the size of the tile.
 pub const CLOSE_GLYPH: f32 = 12.0;
+/// « × » of a bubble, as on macOS (lot D-23f, the author's choice): a round badge on the top
+/// left corner, half outside the bubble, its side, its cross; the surface keeps `CLOSE_OUTSET`
+/// of room for it above and on the left. It fades in over `CLOSE_FADE` under the pointer.
+pub const CLOSE_SIZE: f32 = 16.0;
+pub const CLOSE_BADGE_GLYPH: f32 = 9.0;
+pub const CLOSE_OUTSET: f32 = CLOSE_SIZE / 2.0;
+pub const CLOSE_FADE: Duration = Duration::from_millis(120);
+/// How far inside the corner of the bubble's box the badge's centre sits: on the curve of its
+/// rounded corner, as on macOS, not beside it.
+pub const CLOSE_ON_CURVE: f32 = RADIUS * (1.0 - std::f32::consts::FRAC_1_SQRT_2);
+// The room above the badge is taken from the gap under the bar: the bubbles stay in place.
+const _: () = assert!(CLOSE_OUTSET <= BELOW_BAR);
 /// The theme icon of a notification is looked up at twice the tile (screens at scale 2).
 pub const ICON_LOOKUP_SIZE: u32 = 40;
 
@@ -214,6 +226,34 @@ mod styles {
             }
         }
         all.into()
+    }
+
+    /// « × » of a bubble under the pointer, the macOS badge (lot D-23f): round, on the glass of
+    /// a card, its border, at `opacity`.
+    pub fn close_badge<'a, Message: Clone + 'a>(
+        on_press: Message,
+        opacity: f32,
+    ) -> iced::Element<'a, Message> {
+        let p = crate::color::palette();
+        let glyph = crate::component::icon(
+            crate::icon::Icon::Close,
+            CLOSE_BADGE_GLYPH,
+            p.text_secondary,
+        );
+        let content = container(glyph).center(iced::Length::Fill);
+        let mut control = crate::component::Control::new(
+            content,
+            theme::secondary,
+            Some(on_press),
+            CLOSE_SIZE / 2.0,
+        );
+        control.label = Some(text::CLOSE);
+        control.button = control
+            .button
+            .width(CLOSE_SIZE)
+            .height(CLOSE_SIZE)
+            .padding(0);
+        crate::animated::reveal(control).opacity(opacity).into()
     }
 
     /// « × » of a bubble under the pointer (D-23d): the size of the application's tile, so that

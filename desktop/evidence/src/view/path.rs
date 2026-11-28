@@ -214,7 +214,7 @@ impl App {
     }
 
     /// How far the completion list has come in.
-    fn suggest_level(&self, edit: &PathEdit) -> f32 {
+    pub(crate) fn suggest_level(&self, edit: &PathEdit) -> f32 {
         let shown = if edit.suggestions.is_empty() {
             0.0
         } else {
@@ -226,7 +226,9 @@ impl App {
     }
 
     /// The completion list under the field of the toolbar, sliding in and out.
-    pub(super) fn path_suggestions(&self) -> Option<Element<'_, Message>> {
+    /// The completion list, fading and sliding in and out; its rows answer only while the
+    /// field is open. Drawn by its popup on Wayland (lot E-02c), inside the window under winit.
+    pub(crate) fn suggestions_panel(&self) -> Option<Element<'_, Message>> {
         let live = self.path_edit.is_some();
         let edit = self.path_edit.as_ref().or(self.path_leaving.as_ref())?;
         let level = self.suggest_level(edit);
@@ -237,20 +239,25 @@ impl App {
         if count == 0 {
             return None;
         }
-        let (left, span) = self.path_bar_span();
+        let (_, span) = self.path_bar_span();
         let menu = ui::floating_menu([list], span.min(more::GO_TO_WIDTH));
         let slide = (1.0 - level) * more::COMPLETION_SLIDE;
         let menu = reveal(menu).opacity(level).offset(0.0, -slide);
-        let menu: Element<'_, Message> = if live {
+        Some(if live {
             menu.into()
         } else {
             menu.inert().into()
-        };
-        let top = metrics::TITLE_BAR_HEIGHT
-            + metrics::BORDER_WIDTH
-            + (metrics::TOOLBAR_HEIGHT + metrics::BREADCRUMB_HEIGHT) / 2.0
-            + metrics::MENU_PADDING;
-        Some(pin(menu).x(left).y(top).into())
+        })
+    }
+
+    /// The completion list under the field of the toolbar, inside the window (winit).
+    pub(super) fn path_suggestions(&self) -> Option<Element<'_, Message>> {
+        if self.menus_in_popups() {
+            return None;
+        }
+        let (left, _) = self.path_bar_span();
+        let menu = self.suggestions_panel()?;
+        Some(pin(menu).x(left).y(super::folded_top()).into())
     }
 
     /// The folders folded behind « … », in a menu under it, fading in and out.
