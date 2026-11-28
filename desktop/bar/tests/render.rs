@@ -497,6 +497,46 @@ fn the_outputs_and_inputs_render_in_both_themes() {
     }
 }
 
+/// The panels on short screens (UI-08), the logical heights of 1280 × 800 at 1.5 (`-533`),
+/// 1366 × 768 at 1.25 (`-614`) and 1920 × 1080 at 1.5 (`-720`): `calendar-<height>`, the
+/// centre shorter, or both scrolling together on the shortest; `control-centre-<height>`, the
+/// settings scrolling in a panel that ends above the bottom of the screen.
+#[test]
+fn the_panels_fit_short_screens() {
+    for (screen, tag) in [(533.3, "533"), (614.4, "614"), (720.0, "720")] {
+        let mut state = sample();
+        state.panel_margins = panel::margins(false);
+        state.month = Some(Month {
+            year: 2026,
+            month: 11,
+        });
+        state.history = board_history();
+        board_quick(&mut state);
+        let light = KeyboardLight {
+            brightness: 1,
+            max: 3,
+            through: Through::UPower,
+        };
+        let _ = state
+            .quick
+            .update(quick::Message::Keyboard(Load::Ready(light)));
+        panel::reserve_keyboard(true);
+        panel::reserve_screen(Some(screen));
+        for (which, name) in [
+            (Panel::Calendar, "calendar"),
+            (Panel::Control, "control-centre"),
+        ] {
+            let size = panel_size(&state, which);
+            let top = 54.0;
+            assert!(top + size.1 <= screen, "{name} on {screen}: {size:?}");
+            let ui = Simulator::with_size(bar::settings(), size, state.view_panel(which));
+            assert_written(capture(ui, &format!("{name}-{tag}")));
+        }
+        panel::reserve_screen(None);
+        panel::reserve_keyboard(false);
+    }
+}
+
 /// The motions inside a panel, caught halfway (UI-01): `page-sliding`, the Wi-Fi networks
 /// coming in over the main page going out, both cut to the glass; `panels-switching`, the
 /// control centre turning into the calendar in the surface both share on the GPU, a mask going
