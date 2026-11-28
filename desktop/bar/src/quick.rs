@@ -339,6 +339,9 @@ pub enum Message {
     Energy(Load<Power>),
     ToggleWifi,
     ShowNetworks(bool),
+    /// « Réglages Wi-Fi… » and the others: Control Room on that page (`--page`), or on its
+    /// first one without. Started by the bar, which has the programs (D-20f).
+    OpenSettings(Option<&'static str>),
     Join(Network),
     /// « Ouvrir les Réglages » under a network joined from Control Room only (lot D-26n).
     OpenNetworkSettings,
@@ -672,6 +675,7 @@ impl Quick {
                     });
                 }
             }
+            Message::OpenSettings(_) => {}
             Message::ShowNetworks(show) => {
                 let page = if show { Page::Networks } else { Page::Main };
                 self.turn_page(page, show);
@@ -1279,22 +1283,15 @@ impl Quick {
     fn view_main<'a>(&'a self, user: &'a str, battery: Option<Battery>) -> Element<'a, Message> {
         let tiles = column![
             row![self.wifi_tile(), self.bluetooth_tile()].spacing(panels::TILE_GAP),
-            row![self.do_not_disturb_tile(), game_tile()].spacing(panels::TILE_GAP),
+            // « Mode jeu » and « Carte graphique » are not there: nothing behind them yet
+            // (D-20f). The tile keeps its width, half the row.
+            row![self.do_not_disturb_tile(), space::horizontal()].spacing(panels::TILE_GAP),
         ]
         .spacing(panels::TILE_GAP);
-        let gpu = words::GPU_CHOICES
-            .iter()
-            .map(|label| (*label, false, None))
-            .collect();
         column![
             tiles,
             self.volume_row(),
             self.lights(),
-            group(
-                words::GPU,
-                Some(words::SOON.to_owned()),
-                panels::segmented(gpu)
-            ),
             self.energy_group(battery),
             space::vertical(),
             self.footer(user),
@@ -1564,6 +1561,7 @@ impl Quick {
                     .style(panels::error_text),
             );
         }
+        page = page.push(settings_link(words::WIFI_SETTINGS, Some(NETWORK_PAGE)));
         page.into()
     }
 
@@ -1713,24 +1711,28 @@ fn refusal(outcome: Outcome) -> &'static str {
     }
 }
 
+/// Control Room's pages the bar opens (`control-room --page <id>`).
+pub const NETWORK_PAGE: &str = "network";
+pub const SOUND_PAGE: &str = "sound";
+pub const BLUETOOTH_PAGE: &str = "bluetooth";
+
+/// « Réglages … » at the bottom of a page: Control Room on `page`.
+fn settings_link<'a>(label: &'a str, page: Option<&'static str>) -> Element<'a, Message> {
+    let open = Some(Message::OpenSettings(page));
+    column![
+        ui::divider(),
+        ui::menu_item_with(None, label, Trailing::None, open)
+    ]
+    .spacing(metrics::GAP_TIGHT)
+    .into()
+}
+
 fn typed(password: String) -> Message {
     Message::Password(Secret::new(password))
 }
 
 fn switch_wifi(_: bool) -> Message {
     Message::ToggleWifi
-}
-
-/// The tile of the game mode: there is no game mode yet.
-fn game_tile<'a>() -> Element<'a, Message> {
-    panels::quick_tile(
-        Glyph::Gamepad,
-        words::GAME_MODE,
-        words::SOON.to_owned(),
-        0.0,
-        None,
-        None,
-    )
 }
 
 /// A labelled group (« Carte graphique », « Énergie »): its label, a note on its right, its

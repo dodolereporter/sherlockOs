@@ -801,8 +801,6 @@ fn the_quick_settings_answer_their_clicks() {
         "Maison",
         "Bluetooth",
         "Désactivé",
-        "Mode jeu",
-        "Bientôt",
         "Haut-parleurs intégrés",
         "Équilibré",
         "Camille",
@@ -812,6 +810,10 @@ fn the_quick_settings_answer_their_clicks() {
             ui.find(text).is_ok(),
             "{text} missing from the quick settings"
         );
+    }
+    // Nothing that does nothing (D-20f).
+    for gone in ["Mode jeu", "Carte graphique", "Bientôt"] {
+        assert!(ui.find(gone).is_err(), "{gone} still shown");
     }
     ui.click("Bluetooth").expect("tile found");
     ui.click("Économie").expect("profile found");
@@ -825,11 +827,6 @@ fn the_quick_settings_answer_their_clicks() {
             Message::Quick(quick::Message::ToggleDoNotDisturb),
         ]
     ));
-    // The game mode and the graphics card do nothing yet.
-    let mut ui = Simulator::with_size(bar::settings(), size, state.view_panel(Panel::Control));
-    ui.click("Mode jeu").expect("tile found");
-    ui.click("NVIDIA").expect("segment found");
-    assert_eq!(ui.into_messages().count(), 0);
 }
 
 /// The battery of the bar at 5, 50 and 100 % on its own, charging at 54 %, plugged in and

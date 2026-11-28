@@ -105,6 +105,7 @@ impl State {
                                 state.xwm = Some(xwm);
                                 state.x_display = Some(display_number);
                                 state.connect_xdnd(display_number);
+                                state.listen_x11_activation(display_number);
                                 Some(display_number)
                             }
                             Err(err) => {
@@ -352,6 +353,12 @@ impl XwmHandler for State {
         {
             self.minimize(&window);
         }
+    }
+
+    /// `WM_CHANGE_STATE` to `NormalState`: the application asks for its window back, as with
+    /// `_NET_ACTIVE_WINDOW` from an application (lot Q-52).
+    fn unminimize_request(&mut self, _xwm: XwmId, surface: X11Surface) {
+        self.x11_activation(&surface, 1);
     }
 
     fn resize_request(&mut self, _xwm: XwmId, surface: X11Surface, _button: u32, edge: ResizeEdge) {
