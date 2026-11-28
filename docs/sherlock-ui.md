@@ -30,13 +30,25 @@ unsafe { renderer.apply() };
 ```
 
 `Choice::detect` reads `/sys/class/drm` (never `lspci`, which wakes a sleeping card) and the
-Vulkan loader's folders. With a single chip on `amdgpu`, an AMD chip that drives the screen
-(`boot_vga`), and Mesa's Vulkan manifest (`radeon_icd*.json`, not the 32-bit ones), it renders
-with wgpu on Vulkan, the loader seeing that manifest only (`VK_DRIVER_FILES`): a dedicated card,
-NVIDIA or Radeon, is never asked anything. It also unsets `VK_ADD_DRIVER_FILES`,
-`__NV_PRIME_RENDER_OFFLOAD` and `DRI_PRIME`. Otherwise it renders with tiny-skia, a dedicated
-Radeon card included (an Intel laptop with a Radeon card, an APU with a Radeon card). It also
-sets Mesa's `vk_wsi_force_bgra8_unorm_first=true`, for 8-bit alpha (see ADR 0018).
+Vulkan loader's folders. It looks for the chip that drives the screen (`boot_vga`, or the only
+chip). If its kernel driver is one the shell renders on, it renders with wgpu on Vulkan, the
+loader seeing only the manifests of that chip's driver (`VK_DRIVER_FILES`, 32-bit ones left
+out): `amdgpu` with RADV (`radeon_icd*`), `i915` or `xe` with ANV and HASVK (`intel_icd*`,
+`intel_hasvk_icd*`), NVIDIA's own driver with `nvidia_icd*` (lot UI-09). A dedicated card that
+does not drive the screen is never asked anything, nor is a second chip of the same family
+(an APU and a Radeon card: RADV would open both). It also unsets `VK_ADD_DRIVER_FILES`,
+`__NV_PRIME_RENDER_OFFLOAD` and `DRI_PRIME`, and sets Mesa's
+`vk_wsi_force_bgra8_unorm_first=true`, for 8-bit alpha (see ADR 0018).
+
+Otherwise (no chip, nouveau, a virtual GPU, two chips of one family, the driver missing) it
+renders with wgpu on Mesa's Vulkan driver on the processor, lavapipe (`lvp_icd*`), when it is
+installed: the glass stays translucent, the corners round, and the panels and menus animate
+(`Choice::Vulkan` with `software: Some(reason)`). Only without lavapipe does it fall back to
+tiny-skia, whose buffers (softbuffer, `XRGB8888`) have no alpha: there, every glass of the
+palette is laid over the theme's desktop color (`color::set_opaque_glass`, set by
+`surface::Shadowed` when it sees the software renderer), so that the bar and the bubbles show
+their color over the desktop instead of a mix with black; the corners outside the rounded
+surfaces stay black, and the panels open without animation.
 `ICED_BACKEND` set by the user wins (`ICED_BACKEND=tiny-skia bar` forces software); set to
 `wgpu`, it is kept and the Vulkan restriction still applies where it can. If wgpu finds no
 adapter that can present, iced falls back to tiny-skia by itself.

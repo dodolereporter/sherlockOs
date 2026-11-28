@@ -127,6 +127,56 @@ fn the_bar_and_its_menu_render_in_both_themes() {
     }
 }
 
+/// Lot UI-09: without a GPU the bar renders with tiny-skia, whose buffers lose their alpha.
+/// Its glass is then drawn opaque, the color it shows over the desktop, not mixed with black:
+/// in the light theme a light glass, and « 12 % » of a low battery readable. At 1920 and 1366,
+/// `bar-software-light-1920` and `bar-software-light-1366`, copied to `screenshots/`.
+#[test]
+fn in_software_the_bar_glass_is_opaque_with_its_own_color() {
+    for width in [1920.0, 1366.0] {
+        in_theme(Theme::Light, || {
+            let mut state = sample();
+            let low = Battery {
+                percent: 12,
+                charge: Charge::Discharging,
+                minutes: Some(25),
+            };
+            let _ = state.update(Message::Battery(Some(low)));
+            let size = (
+                width - 2.0 * metrics::TOP_BAR_MARGIN_SIDE,
+                metrics::TOP_BAR_HEIGHT,
+            );
+            let ui = Simulator::with_size(bar::settings(), size, state.view_bar());
+            let name = format!("bar-software-light-{width}");
+            let (path, _) = capture(ui, &name).unwrap();
+            // tiny-skia drew it: the glass is opaque from the first frame on.
+            assert_eq!(sherlock_ui::surface::gpu_drawn(), Some(false));
+            let p = color::palette();
+            assert!(p.top_bar_glass.a >= 1.0);
+            let expected = color::Palette::LIGHT
+                .top_bar_glass
+                .over(color::Palette::LIGHT.desktop);
+            assert_eq!(p.top_bar_glass, expected);
+            // A pixel of glass in the middle of the bar, between the workspaces and the
+            // clock: opaque, of that color (at the capture's scale).
+            let image = image::open(&path).unwrap().to_rgba8();
+            let pixel = image.get_pixel(image.width() / 2, image.height() - 4);
+            assert_eq!(pixel.0[3], 255, "opaque");
+            let close = |a: u8, b: u8| a.abs_diff(b) <= 2;
+            assert!(
+                close(pixel.0[0], expected.r) && close(pixel.0[1], expected.g),
+                "{:?} for {expected:?}",
+                pixel.0
+            );
+            // « 12 % » in amber on it: 4.5 to 1 at least.
+            assert!(p.amber_text.contrast(p.top_bar_glass) >= 4.5);
+            let copy = format!("{}/screenshots/{name}.png", env!("CARGO_MANIFEST_DIR"));
+            std::fs::copy(&path, copy).unwrap();
+        });
+    }
+    color::set_opaque_glass(false);
+}
+
 /// The bar attached to the top edge, as over a maximized window: the whole width, square
 /// corners, opaque. The third workspace holds no window: its chip is bare. `bar-attached`, then
 /// `bar-attached-light`.
