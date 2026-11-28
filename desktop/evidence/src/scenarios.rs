@@ -1853,6 +1853,55 @@ fn tabs_keep_their_folders() {
     let _ = bench.app.view();
 }
 
+/// Ctrl+Z undoes a rename, a move to the trash and a new folder, Ctrl+Maj+Z redoes them
+/// (lot E-10).
+#[test]
+fn undo_and_redo_with_the_keyboard() {
+    let mut bench = Bench::new("undo");
+    bench.select("a.txt");
+    bench.press(Named::F2);
+    bench.send(Message::RenameInput("notes.txt".into()));
+    bench.send(Message::RenameSubmit);
+    assert!(bench.path("projet/notes.txt").exists());
+    bench.ctrl("z");
+    assert!(bench.path("projet/a.txt").exists() && !bench.path("projet/notes.txt").exists());
+    assert_eq!(bench.selected(), ["a.txt"]);
+    bench.key(
+        Key::Character("Z".into()),
+        Modifiers::CTRL | Modifiers::SHIFT,
+    );
+    assert!(bench.path("projet/notes.txt").exists());
+
+    // To the trash, and back to its place.
+    bench.select("notes.txt");
+    bench.press(Named::Delete);
+    assert!(!bench.path("projet/notes.txt").exists());
+    bench.ctrl("z");
+    assert_eq!(read(&bench.path("projet/notes.txt")), "contenu de a");
+
+    // A new folder undone goes to the trash, never deleted for good.
+    bench.key(
+        Key::Character("N".into()),
+        Modifiers::CTRL | Modifiers::SHIFT,
+    );
+    bench.press(Named::Escape);
+    assert!(bench.path("projet/Nouveau dossier").is_dir());
+    bench.ctrl("z");
+    assert!(!bench.path("projet/Nouveau dossier").exists());
+    // A new step forgets what was undone.
+    bench.select("notes.txt");
+    bench.ctrl("d");
+    assert!(bench.app.steps.redo.is_empty());
+    // Nothing left to undo says so.
+    let mut left = bench.app.steps.undo.len();
+    while left > 0 {
+        bench.ctrl("z");
+        left -= 1;
+    }
+    bench.ctrl("z");
+    assert!(bench.app.notice.as_ref().is_some_and(|n| !n.error));
+}
+
 /// A change made by another program shows without F5 (lot E-09): the listing is read again,
 /// the selection kept, but not while a menu is open.
 #[test]

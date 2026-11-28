@@ -30,6 +30,7 @@ use crate::probe::{Probe, Step};
 use crate::selection::{Click, Lasso, Selection, edge_scroll};
 use crate::trash::Trash;
 use crate::udisks::UDisks;
+use crate::undo::Step as Undoable;
 use sherlock_ui::motion::{self, Animation, Fade};
 
 mod network;
@@ -175,6 +176,9 @@ pub enum Command {
     DeviceEject,
     /// Sort by a column, from the « Trier par » submenu: the same column again reverses.
     SortBy(Column),
+    /// Undo the last step done to the disk, or redo the last undone (lot E-10).
+    Undo,
+    Redo,
     /// The large preview of the item under the cursor, opened or closed (lot E-12).
     QuickLook,
     /// The list view, from the « Vue » submenu: the only view so far.
@@ -250,6 +254,17 @@ pub struct Notice {
 /// the error.
 pub type Outcome = Result<(String, Vec<PathBuf>), String>;
 
+/// Which list a finished step goes to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Recorded {
+    /// Done by the user: undoable, and nothing to redo any more.
+    Done,
+    /// Undone: it can be redone.
+    Undone,
+    /// Redone: it can be undone again.
+    Redone,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WindowAction {
     Drag,
@@ -307,6 +322,8 @@ pub enum Message {
     ConfirmEmpty,
     CancelEmpty,
     Done(Outcome),
+    /// An operation that can be undone is over: its outcome, and its step for the history.
+    Stepped(Outcome, Option<crate::undo::Step>, Recorded),
     /// The names a paste would take, found off the interface thread: the items, where they
     /// go, whether they move, and the names already there (lot E-11).
     Taken(Vec<PathBuf>, PathBuf, bool, Vec<String>),
@@ -496,6 +513,8 @@ pub struct App {
     pub(crate) volumes: Vec<Volume>,
     /// The tabs of the window (lot D-27b).
     pub(crate) tabs: tabs::Tabs,
+    /// What can be undone and redone (lot E-10).
+    pub(crate) steps: crate::undo::History,
     /// The folder shown changed on disk: reread once nothing is being done in it (a menu, a
     /// rename, a lasso).
     folder_changed: bool,
@@ -601,6 +620,7 @@ impl App {
             preview_fade: None,
             volumes: Vec::new(),
             tabs: tabs::Tabs::default(),
+            steps: crate::undo::History::default(),
             folder_changed: false,
             progress: None,
             pending_paste: None,
@@ -985,6 +1005,8 @@ impl App {
             in_trash: self.location == Location::Trash,
             show_hidden: self.show_hidden,
             show_preview: self.show_preview,
+            can_undo: !self.steps.undo.is_empty(),
+            can_redo: !self.steps.redo.is_empty(),
             can_back: self.can_go_back(),
             can_forward: self.can_go_forward(),
             places: self
@@ -1149,6 +1171,16 @@ impl App {
                 return self.empty_trash();
             }
             Message::CancelEmpty => self.confirm_empty = false,
+            Message::Stepped(outcome, step, how) => {
+                if let (Ok(_), Some(step)) = (&outcome, step) {
+                    match how {
+                        Recorded::Done => self.steps.done(step),
+                        Recorded::Undone => self.steps.undone(step),
+                        Recorded::Redone => self.steps.redone(step),
+                    }
+                }
+                return self.handle(Message::Done(outcome));
+            }
             Message::Taken(sources, dest, moving, names) => {
                 if names.is_empty() {
                     return self.transfer(
@@ -2300,6 +2332,8 @@ impl App {
                     let active = self.tabs.active;
                     self.close_tab(active)
                 }
+                ("z", false) => self.run(Command::Undo),
+                ("z", true) | ("y", _) => self.run(Command::Redo),
                 ("f", _) => {
                     self.search_open = true;
                     operation::focus(SEARCH)
@@ -2340,7 +2374,7 @@ impl App {
             Command::Rename if !in_trash => return self.start_rename(),
             Command::Duplicate if !in_trash && !selected.is_empty() => {
                 let text = texts::copying(selected.len());
-                return self.spawn(text, move || done(ops::duplicate(&selected)?));
+                return self.spawn_step(text, move || made(ops::duplicate(&selected)?));
             }
             Command::CopyPath if !selected.is_empty() => {
                 let paths: Vec<String> = selected.iter().map(|p| p.display().to_string()).collect();
@@ -2371,11 +2405,16 @@ impl App {
                     return Task::none();
                 };
                 let count = selected.len();
-                return self.spawn(texts::MOVE_TO_TRASH.into(), move || {
-                    for path in &selected {
-                        trash.put(path)?;
-                    }
-                    Ok((texts::trashed(count), Vec::new()))
+                return self.spawn_step(texts::MOVE_TO_TRASH.into(), move || {
+                    let ids = selected
+                        .iter()
+                        .map(|path| trash.put(path))
+                        .collect::<ops::Result<Vec<_>>>()?;
+                    Ok((
+                        texts::trashed(count),
+                        Vec::new(),
+                        Some(Undoable::Trashed(ids)),
+                    ))
                 });
             }
             Command::Restore if in_trash => return self.restore(),
@@ -2394,6 +2433,8 @@ impl App {
                 self.refilter();
             }
             Command::ViewList => {}
+            Command::Undo => return self.undo(false),
+            Command::Redo => return self.undo(true),
             Command::QuickLook => self.quick_look(!self.looking),
             Command::EditPath => return self.start_path_edit(false, None),
             Command::GoToFolder => return self.start_path_edit(true, None),
@@ -2428,6 +2469,63 @@ impl App {
             _ => {}
         }
         Task::none()
+    }
+
+    /// Runs an operation off the interface thread, and keeps its step for Ctrl+Z (lot E-10).
+    fn spawn_step(
+        &mut self,
+        text: String,
+        job: impl FnOnce() -> ops::Result<(String, Vec<PathBuf>, Option<Undoable>)> + Send + 'static,
+    ) -> Task<Message> {
+        self.spawn_recorded(text, Recorded::Done, job)
+    }
+
+    fn spawn_recorded(
+        &mut self,
+        text: String,
+        how: Recorded,
+        job: impl FnOnce() -> ops::Result<(String, Vec<PathBuf>, Option<Undoable>)> + Send + 'static,
+    ) -> Task<Message> {
+        self.busy += 1;
+        self.notice = (!text.is_empty()).then_some(Notice { text, error: false });
+        Task::perform(
+            async move {
+                match job() {
+                    Ok((text, select, step)) => (Ok((text, select)), step),
+                    Err(error) => {
+                        tracing::warn!(%error, "operation refused");
+                        (Err(error.to_string()), None)
+                    }
+                }
+            },
+            move |(outcome, step)| Message::Stepped(outcome, step, how),
+        )
+    }
+
+    /// Undoes the last step (Ctrl+Z), or redoes the last undone (Ctrl+Maj+Z, Ctrl+Y).
+    fn undo(&mut self, redo: bool) -> Task<Message> {
+        let list = if redo {
+            &mut self.steps.redo
+        } else {
+            &mut self.steps.undo
+        };
+        let Some(step) = list.pop() else {
+            self.notice = Some(Notice {
+                text: texts::NOTHING_TO_UNDO.into(),
+                error: false,
+            });
+            return Task::none();
+        };
+        let trash = self.config.trash.clone();
+        let (text, how) = if redo {
+            (texts::REDONE, Recorded::Redone)
+        } else {
+            (texts::UNDONE, Recorded::Undone)
+        };
+        self.spawn_recorded(String::new(), how, move || {
+            let back = step.undo(trash.as_ref())?;
+            Ok((text.to_owned(), back.shown(), Some(back)))
+        })
     }
 
     /// Runs an operation off the interface thread: big copies do not block it.
@@ -2553,13 +2651,23 @@ impl App {
         } else {
             texts::copying(sources.len())
         };
-        self.spawn(text, move || {
-            let report = if moving {
-                crate::transfer_job::move_(&sources, &dest, taken, trash.as_ref(), progress)?
+        // Kept for Ctrl+Z (E-10): a move goes back, a copy goes to the trash.
+        self.spawn_step(text, move || {
+            if moving {
+                let report =
+                    crate::transfer_job::move_(&sources, &dest, taken, trash.as_ref(), progress)?;
+                let step = crate::undo::moved(&sources, &report);
+                let (text, select) = done(report)?;
+                Ok((text, select, Some(step)))
             } else {
-                crate::transfer_job::copy(&sources, &dest, taken, trash.as_ref(), progress)?
-            };
-            done(report)
+                made(crate::transfer_job::copy(
+                    &sources,
+                    &dest,
+                    taken,
+                    trash.as_ref(),
+                    progress,
+                )?)
+            }
         })
     }
 
@@ -2571,9 +2679,13 @@ impl App {
         // reread listing has selected it.
         self.search.clear();
         self.pending_rename = true;
-        self.spawn(String::new(), move || {
+        self.spawn_step(String::new(), move || {
             let path = ops::new_folder(&dir)?;
-            Ok((String::new(), vec![path]))
+            Ok((
+                String::new(),
+                vec![path.clone()],
+                Some(Undoable::Made(vec![path])),
+            ))
         })
     }
 
@@ -2605,9 +2717,13 @@ impl App {
         let Some((path, name)) = self.renaming.take() else {
             return Task::none();
         };
-        self.spawn(String::new(), move || {
+        self.spawn_step(String::new(), move || {
             let renamed = ops::rename(&path, &name)?;
-            Ok((String::new(), vec![renamed]))
+            let step = (renamed != path).then(|| Undoable::Renamed {
+                from: path,
+                to: renamed.clone(),
+            });
+            Ok((String::new(), vec![renamed], step))
         })
     }
 
@@ -2717,6 +2833,13 @@ fn read_location(
                 .collect())
         }
     }
+}
+
+/// A copy as a step: what it made, which an undo puts in the trash.
+fn made(report: ops::Report) -> ops::Result<(String, Vec<PathBuf>, Option<Undoable>)> {
+    let step = Undoable::Made(report.paths.clone());
+    let (text, select) = done(report)?;
+    Ok((text, select, Some(step)))
 }
 
 /// Starts a program without waiting for it; a thread reaps it when it ends.
