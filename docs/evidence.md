@@ -29,12 +29,22 @@ screen's edge (`flip_x`, `flip_y`, `slide_x`, `slide_y`). The submenu is a child
 beside its entry, which the compositor flips to the left the same way. The popups grab the
 pointer and the keyboard: the arrows, Enter and Escape drive the menu as before, and a click
 outside closes it (`popup_done`). The menu unfolds and folds back inside its popup, which goes
-once it has faded out. Under winit, both are still drawn inside the window. The completion list,
-the drop-down lists and the tooltips follow in E-02c. The menu of the folders folded behind
+once it has faded out. Under winit, both are still drawn inside the window. The menu of the folders folded behind
 « … » in the path bar is a popup the same way, under « … » (lot E-04d): a click outside closes
 it at once, Escape or a choice let it fade out first. Under X11, it keeps iced's own runtime on winit. The title
 bar's buttons work on both: moving, maximizing and minimizing become `xdg_toplevel` requests, and
 closing the window, from its button or from the compositor, ends the program.
+
+The path field's completion list and the tooltips of the toolbar's buttons (back, forward,
+search, preview) are popups too (lot E-02c), but without a grab: they leave the keyboard where it
+is, so the field keeps typing, Tab, the arrows and Escape while the list follows what is typed.
+This uses the `grab` option of `IcedNewPopupSettings`, which the published `iced_exwlshell`
+lacks: the repository carries a patched copy in `third_party/iced_exwlshell/`, through
+`[patch.crates-io]` (`third_party/iced_exwlshell/SHERLOCKOS.md` says what changed; the change is
+proposed upstream). The list's popup is made again when its number of rows or its width changes.
+A tooltip waits 600 ms under the pointer, fades in, and goes when the pointer leaves its button;
+its input region is empty, so it never takes the hover. Under winit, both stay drawn inside the
+window; the other tooltips (title bar, sidebar, tabs) are still iced's, inside the window.
 
 Before choosing, Evidence reads the compositor's globals: `iced_exwlshell` needs `xdg_wm_base` 2
 at least, and an older compositor (WSLg's Weston offers version 1) gets the winit runtime

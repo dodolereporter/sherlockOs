@@ -67,7 +67,7 @@ pub fn submenu_anchor(parent: Padding, row_top: f32, sub: Padding) -> Rect {
 }
 
 /// The size of a popup holding a menu box of `width` by `height`.
-fn popup_size(width: f32, height: f32, margins: Padding) -> Option<PixelSize> {
+pub(super) fn popup_size(width: f32, height: f32, margins: Padding) -> Option<PixelSize> {
     PixelSize::try_px(
         (width + margins.left + margins.right).ceil() as u32,
         (height + margins.top + margins.bottom).ceil() as u32,
@@ -75,7 +75,12 @@ fn popup_size(width: f32, height: f32, margins: Padding) -> Option<PixelSize> {
 }
 
 /// Clicks reach the menu box only: the shadow around it is not part of the menu.
-fn input_region(id: window::Id, width: f32, height: f32, margins: Padding) -> Task<Message> {
+pub(super) fn input_region(
+    id: window::Id,
+    width: f32,
+    height: f32,
+    margins: Padding,
+) -> Task<Message> {
     let (x, y) = (margins.left as i32, margins.top as i32);
     let (w, h) = (width.ceil() as i32, height.ceil() as i32);
     let region = RegionActionCB::new(move |region| {
@@ -89,11 +94,11 @@ fn input_region(id: window::Id, width: f32, height: f32, margins: Padding) -> Ta
     })
 }
 
-fn position((x, y, _, _): Rect) -> Position {
+pub(super) fn position((x, y, _, _): Rect) -> Position {
     Position::new(x, y)
 }
 
-fn extent((_, _, width, height): Rect) -> Option<PixelSize> {
+pub(super) fn extent((_, _, width, height): Rect) -> Option<PixelSize> {
     PixelSize::try_px(width, height)
 }
 
@@ -123,7 +128,7 @@ impl App {
             (None, Some(closing)) => Some((closing.menu.clone(), closing.items.clone())),
             (None, None) => None,
         };
-        let mut tasks = vec![self.sync_folded(main, margins)];
+        let mut tasks = vec![self.sync_folded(main, margins), self.sync_unfocused(main)];
         // The menu's popup: closed when nothing shows, opened again where the menu moved.
         let wanted = shown.as_ref().map(|(menu, _)| menu.at);
         if let Some((id, at)) = self.popups.menu
@@ -219,6 +224,20 @@ impl App {
 
     /// The compositor closed a popup (a click outside it, `popup_done`): its menu closes.
     pub(super) fn popup_closed(&mut self, id: window::Id) {
+        // The completion list and the tooltip have no grab: closed by the compositor only
+        // when their window goes; they are opened again if still wanted.
+        if self
+            .unfocused
+            .suggestions
+            .is_some_and(|(list, ..)| list == id)
+        {
+            self.unfocused.suggestions = None;
+            return;
+        }
+        if self.unfocused.tooltip.is_some_and(|(tip, _)| tip == id) {
+            self.unfocused.tooltip = None;
+            return;
+        }
         // A click outside the menu of « … »: it goes at once.
         if self.popups.folded == Some(id) {
             self.popups.folded = None;

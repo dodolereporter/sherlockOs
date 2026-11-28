@@ -1,4 +1,7 @@
 [workspace]
+# The patched copy of iced_exwlshell (`third_party/iced_exwlshell/SHERLOCKOS.md`) is not a
+# member: it keeps its own lints and format.
+exclude = ["third_party"]
 resolver = "3"
 members = [
     "desktop/appearance-config",
@@ -76,3 +79,8 @@ opt-level = 3
 opt-level = 3
 [profile.dev.package.swash]
 opt-level = 3
+
+# A popup without a keyboard grab, proposed upstream (lot E-02c,
+# `third_party/iced_exwlshell/SHERLOCKOS.md`).
+[patch.crates-io]
+iced_exwlshell = { path = "third_party/iced_exwlshell" }
