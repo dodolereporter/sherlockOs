@@ -45,7 +45,7 @@ fn titles(apps: &Apps, query: &str) -> Vec<String> {
 fn recorded() -> (Launcher, Arc<Mutex<Vec<Command>>>) {
     let started = Arc::new(Mutex::new(Vec::new()));
     let record = Arc::clone(&started);
-    let spawn: app::Spawn = Arc::new(move |command: &Command| {
+    let spawn: app::Spawn = Arc::new(move |command: &Command, _: Option<&str>| {
         if let Ok(mut record) = record.lock() {
             record.push(command.clone());
         }
