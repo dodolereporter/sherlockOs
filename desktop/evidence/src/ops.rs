@@ -8,7 +8,7 @@ use std::fmt;
 use std::fs;
 use std::io;
 use std::os::unix::ffi::OsStrExt;
-use std::os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt};
+use std::os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 use sherlock_ui::texts::evidence as texts;
@@ -20,6 +20,8 @@ pub enum Error {
     Exists(String),
     /// Empty name, ".", ".." or containing "/".
     InvalidName,
+    /// A name with a control character: a line feed, an escape, a tab (lot E-06).
+    ControlCharacter,
     /// Copying or moving a folder into itself.
     IntoItself,
     /// The user's trash is not on the same disk.
@@ -36,6 +38,7 @@ impl fmt::Display for Error {
         match self {
             Self::Exists(name) => f.write_str(&texts::already_exists(name)),
             Self::InvalidName => f.write_str(texts::INVALID_NAME),
+            Self::ControlCharacter => f.write_str(texts::CONTROL_IN_NAME),
             Self::IntoItself => f.write_str(texts::INTO_ITSELF),
             Self::OtherDisk => f.write_str(texts::OTHER_DISK),
             Self::NotInTrash => f.write_str(texts::NOT_IN_TRASH),
@@ -77,9 +80,39 @@ pub fn validate_name(name: &str) -> Result<()> {
         name.trim().is_empty() || name == "." || name == ".." || name.contains(['/', '\0']);
     if invalid {
         Err(Error::InvalidName)
+    } else if name.chars().any(char::is_control) {
+        Err(Error::ControlCharacter)
     } else {
         Ok(())
     }
+}
+
+/// Small files Evidence reads whole (a trash record, `user-dirs.dirs`, an SVG icon): at most
+/// this much, like the `.desktop` files (audit F-8).
+pub const SMALL_FILE: u64 = 64 * 1024;
+
+/// The content of a regular file of at most `limit` bytes; an error for a larger one, a named
+/// pipe or a device (opened without waiting for a writer).
+pub fn read_small(path: &Path, limit: u64) -> io::Result<Vec<u8>> {
+    use std::io::Read;
+    let file = fs::File::options()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open(path)?;
+    if !file.metadata()?.is_file() {
+        return Err(io::ErrorKind::InvalidInput.into());
+    }
+    let mut bytes = Vec::new();
+    file.take(limit + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > limit {
+        return Err(io::ErrorKind::FileTooLarge.into());
+    }
+    Ok(bytes)
+}
+
+/// `read_small`, as text.
+pub fn read_small_text(path: &Path, limit: u64) -> Option<String> {
+    String::from_utf8(read_small(path, limit).ok()?).ok()
 }
 
 fn exists(path: &Path) -> bool {
@@ -195,6 +228,12 @@ fn times(meta: &fs::Metadata) -> fs::FileTimes {
     times
 }
 
+/// The permissions a copy keeps: never setuid nor setgid, as `cp` without `-p` (audit F-7).
+/// The sticky bit of a folder stays.
+fn kept_mode(meta: &fs::Metadata) -> u32 {
+    meta.mode() & 0o1777
+}
+
 /// Copies one regular file into a new file that must not exist yet.
 fn copy_file(from: &Path, to: &Path, meta: &fs::Metadata) -> io::Result<()> {
     // O_NONBLOCK: if the source was swapped for a FIFO since it was checked, opening it
@@ -209,7 +248,7 @@ fn copy_file(from: &Path, to: &Path, meta: &fs::Metadata) -> io::Result<()> {
     let mut target = fs::File::options()
         .write(true)
         .create_new(true)
-        .mode(meta.mode() & 0o7777)
+        .mode(kept_mode(meta))
         .open(to)?;
     // By chunks, counted and stoppable (lot E-11). A copy cut short leaves nothing behind.
     if let Err(error) = crate::transfer_job::copy_bytes(&mut source, &mut target) {
@@ -217,7 +256,7 @@ fn copy_file(from: &Path, to: &Path, meta: &fs::Metadata) -> io::Result<()> {
         let _ = fs::remove_file(to);
         return Err(error);
     }
-    target.set_permissions(meta.permissions())?;
+    target.set_permissions(fs::Permissions::from_mode(kept_mode(meta)))?;
     target.set_times(times(meta))
 }
 
@@ -254,13 +293,13 @@ fn copy_recursive(
             let item = item?;
             copy_recursive(&item.path(), &to.join(item.file_name()), report, &mut false)?;
         }
-        fs::set_permissions(to, meta.permissions())?;
+        fs::set_permissions(to, fs::Permissions::from_mode(kept_mode(&meta)))?;
         fs::File::open(to)?.set_times(times(&meta))?;
     } else if kind.is_file() {
         copy_file(from, to, &meta)?;
         *created = true;
     } else if kind.is_fifo() {
-        make_fifo(to, meta.mode())?;
+        make_fifo(to, kept_mode(&meta))?;
         *created = true;
     } else {
         report.skipped += 1;
@@ -411,6 +450,28 @@ pub fn new_folder(dir: &Path) -> Result<PathBuf> {
 mod tests {
     use super::*;
     use crate::testing::TempDir;
+
+    #[test]
+    fn a_copy_drops_setuid_and_a_name_refuses_controls() {
+        let tmp = TempDir::new("setuid");
+        let src = tmp.path().join("outil");
+        write(&src, "x");
+        fs::set_permissions(&src, fs::Permissions::from_mode(0o4755)).expect("chmod");
+        let dest = tmp.path().join("dest");
+        fs::create_dir(&dest).expect("folder");
+        copy_into(&[src], &dest).expect("copy");
+        let mode = fs::metadata(dest.join("outil")).expect("copied").mode();
+        assert_eq!(mode & 0o7777, 0o755);
+        assert!(matches!(
+            validate_name("a\nb"),
+            Err(Error::ControlCharacter)
+        ));
+        assert!(matches!(
+            validate_name("a\u{1b}[31m"),
+            Err(Error::ControlCharacter)
+        ));
+        assert!(validate_name("été 2026.txt").is_ok());
+    }
 
     fn write(path: &Path, content: &str) {
         if let Some(parent) = path.parent() {

@@ -78,6 +78,8 @@ fn main() -> Result<(), iced_exwlshell::Error> {
     iced_exwlshell::layershell::application(|| (), namespace, update, view)
         .theme(|_: &()| theme::theme())
         .wl_settings(ExWlSettings {
+            // On the shell socket, the only one that offers anchored surfaces (lot D-46).
+            with_connection: Some(shell_protocol::connect.into()),
             layer_settings: LayerShellSettings {
                 anchor: Anchor::Top | Anchor::Bottom | Anchor::Left | Anchor::Right,
                 layer: Layer::Background,
