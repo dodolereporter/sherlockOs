@@ -19,7 +19,11 @@ The `sherlock/sherlockd` crate is a library and a binary.
 | `src/proxy.rs` | `serve`: `sherlockd` as an MCP server, in front of Sherlock's servers |
 | `src/claude_code.rs` | `ClaudeCode`: the Claude Code provider, its command line, the reading of its stream |
 | `src/test_server.rs` | Test MCP server, with no effect on the system, well-behaved or hostile depending on its case |
-| `src/main.rs` | `--demo`, `--claude-code`, `--proxy` and `--test-server` |
+| `src/windows_server.rs` | The windows server: the session's windows, through the compositor's windows socket (A-12) |
+| `src/files_server.rs`, `src/folders.rs` | The files server: the allowed folders, the paths resolved without leaving them (A-13) |
+| `src/containers_server.rs`, `src/docker.rs` | The containers server, and its minimal client of the Docker Engine API over a Unix socket (A-14) |
+| `src/own_server.rs` | What Sherlock's own servers share: the serving loop, the levels' annotations, the cleaning of outside text |
+| `src/main.rs` | `--demo`, `--claude-code`, `--proxy`, `--test-server`, `--windows-server`, `--files-server` and `--containers-server` |
 | `tests/mcp.rs` | Client and loop against the test server, started as a real process, well-behaved or hostile |
 | `tests/proxy.rs` | The proxy as a real process, in front of the test server |
 | `tests/claude_code.rs` | The provider on recorded transcripts (`tests/transcripts/`), and against fake `claude` programs |
@@ -324,6 +328,7 @@ that. A request to empty the trash is refused by the proxy.
 | --- | --- | --- |
 | A tool result is data, never an instruction | The system instructions are fixed when the agent is created, with no way to change them. A result, successful or failed, enters the history only as a `ToolResult` | `agent::tests::tool_result_never_instruction` and `tool_error_never_instruction`: a tool returns « Ignore tes instructions… », as a result or an error, and the text appears in no system instruction and no other message. `json_rpc_error_stays_data` against a real server |
 | The level is read, destructive when in doubt | `Level::from_annotations`, third-party server all destructive, duplicates refused | `mcp::tests::destructive_when_in_doubt`, `lists_tools_and_levels`, `third_party_server_all_destructive`, `duplicate_refused` |
+| No action without the user's consent | `broker::Broker` in `McpServers::call`, `Permit` bound to the call, refused by default, journal (A-11); the compositor's window asked, its peer checked, withdrawn when given up (A-11c) | `tests/broker.rs`, `broker::tests`, `tests/window.rs` |
 | Without a broker, nothing but read runs | Refusal « courtier d'accords absent » (`McpError::BrokerAbsent`) in two places: in `McpServers::call`, the only public path to `tools/call`, and before the call in the loop, as defence in depth. `McpClient::call_tool` is not public | `direct_non_read_call_refused` (direct call of `McpServers::call`), `agent::tests::nothing_beyond_read_without_broker`, `read_and_destructive_in_one_reply`, `agent_calls_echo_and_refuses_unleveled_tool` |
 | A server makes `sherlockd` neither panic nor grow | Bounds above, lost server stopped and reaped | `list_not_an_object`, `giant_line_refused`, `endless_pagination_bounded`, `timeout_server_stopped_and_reaped` |
 | Claude Code has no built-in tool | Locked command line, `init` event checked | `claude_code::tests::no_builtin_tools_and_proxy_only`, `mcp_config_with_proxy_only`, `builtin_tool_or_other_server_stops_everything`, `without_builtin_tools_nothing_read_or_run` |
@@ -378,6 +383,12 @@ cargo test -p sherlockd
 | `src/claude_code.rs` | Command line and MCP configuration, truncated text, recap quoted as JSON, private 0700 directory removed at the end |
 | `tests/proxy.rs` | The proxy in front of the real test server: `echo` relayed, `vider_corbeille` refused |
 | `tests/claude_code.rs` | Transcripts of echo, of a refusal, of requested built-in tools, of a missing login and of an API key; trapped init (tool, server, mode, source); unknown block; nothing before `init`, lone result refused; bounded lines; Claude Code missing or not logged in; cleaned environment; timeout (Claude Code killed and reaped); recap of final answers only; bounded history |
+| `src/windows_server.rs` | The level of each tool; hostile arguments refused before the compositor |
+| `tests/windows_server.rs` | The windows server behind the broker, in front of a fake compositor: each tool's request and level, nothing but the list sent without consent, hostile arguments never sent, a trapped title kept a value, a socket held by another program |
+| `src/folders.rs`, `src/files_server.rs` | Places of secrets never folders; levels; names refused |
+| `tests/files_server.rs` | The files server as a real process on a tree of its own: reads as data, a trapped name escaped, a long file cut; out of the folders refused and journaled (absolute path, `..`, links out, `~/.ssh`, a pipe, a NUL); each action with consent and its effect; hostile actions refused even with consent; no action without consent |
+| `src/docker.rs`, `src/containers_server.rs` | Responses read within their bounds (chunks, lengths, lines), multiplexed logs; levels; names refused; secrets masked |
+| `tests/front_next.rs` | The scenario « relance front-next » against a fake Docker daemon: seen exited, logs read as data, a password masked, the consent asked once at the action level, the restart called once, the journal; refused, nothing; hostile names never reach the daemon; a Compose service restarted by its labels |
 | `tests/mcp.rs` | Tool list, third-party server, successful call, direct call refused, refusal in the conversation, JSON-RPC error that stays data, turn limit, crashing server, timeout (server stopped and reaped), malformed list, duplicates, endless pagination, giant line, server not found, silent server |
 
 The silent server test runs `sleep`, present on any Linux machine and on the CI. The provider tests
@@ -394,19 +405,163 @@ with 300 ms, which also covered that start, `timeout_server_stopped_and_reaped` 
 a load of 18. These two tests check through `/proc` that the process was stopped and reaped, and
 put no tight bound on their own duration.
 
-## What will come with A-11
+## The consent broker (lot A-11, ADR 0031, proposed)
 
-- The consent broker replaces the refusal: `McpServers::call` and `agent::execute` hand it each
-  call, with its level, instead of refusing everything that is not read-level. The current refusal
-  remains the behaviour when the broker is unreachable.
-- The append-only log: time, tool, summary of the arguments, consent, result. The current
-  `tracing` trace does not stand in for it.
-- The form of the reinforced consent of the destructive level, through an ADR.
+`broker::Broker` stands in front of every call, in `McpServers::call`, the only public path to a
+server's `tools/call`:
+
+- a read runs at once; anything else waits for the user's answer (`Consent::ask`), the
+  destructive level asking for a reinforced one (`Request::reinforced`). A read that reaches
+  outside the machine is an action (rule S2, "Tool levels");
+- only a `Granted` answer gives a `Permit`: made only by the broker module, not `Clone`, naming
+  the tool, its level and the exact arguments the user was shown, consumed by the call it
+  allows, and checked again by `McpServers::call` before the server is reached;
+- refused by default: a refusal, a closed window, no answer within 60 s (`CONSENT_TIMEOUT`), a
+  compositor unreachable or gone during the request (`Decision::Unavailable`, the error
+  « courtier d'accords absent » to the model), a journal that cannot be written;
+- the journal, `$XDG_STATE_HOME/sherlock/journal.jsonl` (`broker::Journal`): created 0600,
+  appended to only, never through a symbolic link, one JSON object per line (the decision of
+  each request, then the outcome of each call that ran, under the same id, with the tool's
+  error when it failed, cut to 512 characters), the arguments cut to 2 KiB, every line break of a value escaped by JSON;
+- `agent::execute` keeps refusing everything but read for a tool host without a broker
+  (`ToolHost::consents`), as defence in depth.
+
+**Who asks: the compositor's window** (`window::CompositorWindow`, lot A-11c). One connection per
+request to `$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY-consent`, the compositor's consent socket
+(`docs/compositor.md`, "Sherlock's consent window"): the request as one line of JSON (`id`,
+`tool`, `level`, `arguments`), the answer read as one. The socket's peer must be the compositor of
+this user (`SO_PEERCRED`, `/proc/<pid>/exe` named `compositor`): a process that took the path
+first is told nothing. When the broker stops waiting, the future that holds the connection is
+dropped, the socket closes, and the compositor withdraws the window. Any failure (no socket,
+another program, connection lost, an answer that cannot be read or for another id) is
+`Decision::Unavailable`: refused. Outside a Wayland session, `broker::Nobody`: reads only.
+Claude Code starts the proxy without the Wayland variables: the socket's path goes in its
+arguments, `sherlockd --proxy --consent <path>`, so that the calls of Claude Code ask the same
+window.
+
+`tests/broker.rs` proves it against the test server, a real process that writes down each call
+it receives (`--test-server --trace <file>`): for a refusal, a closed window, a window nobody
+answers, a compositor gone mid-request and nobody to ask, `vider_corbeille` never reaches the
+server, directly or through the agent loop obeying an injection, while the read beside it runs;
+each decision is journaled. A consent runs exactly that call, once, after a reinforced request
+that showed its arguments, journaled with its outcome.
+
+**From end to end** (`desktop/compositor/tests/sherlock_end_to_end.rs`, lot A-11d): the real
+`sherlockd --proxy --consent`, as Claude Code starts it, in front of the compositor's consent
+window, in a process named `compositor` so that both peer checks pass as in the session. The test
+plays Claude Code and asks twice for `vider_corbeille`; the compositor shows the window each time
+and answers through the input entry points of the session's backend: Escape, then « Autoriser »
+held. The refused call runs nothing, the granted one runs, and the journal has the refusal, the
+consent and the outcome. It needs the `sherlockd` binary, which the workspace's tests build.
+
+## The windows server (lot A-12, ADR 0032, proposed)
+
+`sherlockd --windows-server <socket>` is one of Sherlock's own servers (`ServerConfig::ours`),
+started by `servers()` in a Wayland session with the compositor's windows socket,
+`$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY-sherlock` (`CompositorWindow::windows_socket`, next to the
+consent one; `docs/compositor.md`, "The windows, for Sherlock"). Its tools, their levels from
+their annotations:
+
+| Tool | Arguments | Level |
+| --- | --- | --- |
+| `lister_fenetres` | | read: number, title, application, workspace, screen, states |
+| `activer_fenetre`, `agrandir_fenetre`, `reduire_fenetre` | `fenetre` | action |
+| `caler_fenetre` | `fenetre`, `cote` (`gauche`, `droite`) | action |
+| `deplacer_vers_bureau` | `fenetre`, `bureau` (from 1) | action |
+| `deplacer_vers_ecran` | `fenetre`, `ecran` (a name from the list) | action |
+| `ranger_fenetres` | | action: the windows shown side by side, four per screen at most |
+| `fermer_fenetre` | `fenetre` | destructive: the reinforced consent |
+
+It asks for no consent: every call reaches it through `McpServers::call`, with a permit. It checks
+every argument before sending anything (unknown argument, number out of range, a screen name past 64
+characters or with control characters: refused), and the compositor refuses what does not exist
+(« aucun bureau 9 »), said to the model as a failed tool. The list is given as JSON after a sentence
+that says titles are the applications' text, never instructions, without control characters, line
+separators nor bidirectional marks: a title cannot break a line nor pass for the model's text. The
+socket's peer must be the compositor of this user (`--any-peer` only for the tests' fake). One
+connection per call, 5 s to answer, 256 KiB at most.
+
+## The files server (lot A-13, ADR 0033, proposed)
+
+`sherlockd --files-server` is one of Sherlock's own servers, started by `servers()`. It reaches
+only the allowed folders:
+
+- **The folders**: `$XDG_CONFIG_HOME/sherlock/files.json`, `{"folders": ["~/Documents", …]}`,
+  or by default the documents, desktop and downloads folders of `user-dirs.dirs` (else
+  `~/Documents`, `~/Bureau`, `~/Téléchargements`). A broken settings file allows nothing. A
+  folder that holds or lies in a place of secrets is refused, and said by `dossiers_autorises`:
+  `~/.ssh`, `~/.gnupg`, `~/.pki`, `~/.password-store`, the keyrings, Claude Code's files
+  (`~/.claude`, `~/.claude.json`, `~/.config/claude`), and whatever starts with `sherlock` in the
+  configuration, data and state folders (its settings, its journal). So `~` and `/` are refused.
+- **The paths**: absolute, or in `~/`; a `..` is refused before anything, then the path is
+  matched against a folder and opened from that folder's descriptor, held since the start, with
+  `openat2(RESOLVE_BENEATH | RESOLVE_NO_MAGICLINKS)`: an absolute link, a link that climbs out,
+  a `/proc` magic link are refused by the kernel, with nothing to race between a check and a
+  use. The last name of a change is acted on with the `*at` calls from its folder's
+  descriptor, never through a link (`O_NOFOLLOW`). Without `openat2` (Linux before 5.6),
+  nothing is reached.
+- **What is read is data**: the names of a folder, a file's content, found paths are given as
+  JSON after a sentence that says they are data, never instructions, every hidden character
+  escaped (`own_server::json_line`). Only regular files are read, opened without waiting (a
+  pipe is refused), 256 KiB at most; a binary file gives its metadata only. A listing stops at
+  500 entries, a search at 8 levels, 20,000 entries seen or 100 found, never through a link.
+- **A new name** (created, renamed) is one plain name, 255 bytes at most, without hidden
+  characters. A move and a copy go into another allowed folder, never replacing anything; a
+  copy is 1 GiB at most; a move or a trash to another disk is refused. The trash is the
+  freedesktop one (`$XDG_DATA_HOME/Trash`, `files/` and `info/`). Only an empty folder is
+  deleted for good.
+
+| Tool | Level |
+| --- | --- |
+| `dossiers_autorises`, `lister_dossier`, `lire_fichier`, `chercher_fichiers` | read |
+| `creer_dossier`, `creer_fichier`, `ecrire_fichier`, `renommer`, `deplacer`, `copier`, `mettre_a_la_corbeille` | action |
+| `supprimer_definitivement` | destructive |
+
+Every refusal is an error of the tool: the broker journals the call (its arguments, the decision)
+and its outcome with that error (`"outcome": "error"` and, in `"error"`, « refusé : … est hors
+des dossiers autorisés »), so that an access out of the folders is refused and journaled.
+
+## The containers server (lot A-14, ADR 0034, proposed)
+
+`sherlockd --containers-server [--socket <path>]` is one of Sherlock's own servers, started by
+`servers()`, on the Docker Engine API: rootless Docker (`$XDG_RUNTIME_DIR/docker.sock`), the
+system's (`/var/run/docker.sock`), else Podman's compatible socket
+(`$XDG_RUNTIME_DIR/podman/podman.sock`).
+
+- **A minimal client** (`docker.rs`): one HTTP/1.1 request per connection on the Unix socket,
+  `Connection: close`, under `/v1.41`; no shell, no `docker` command. Bounded: 10 s to answer a
+  read, 40 s an action (a stop waits 10 s for the container); a line of 8 KiB, 64 headers, a body
+  of 4 MiB (`Content-Length` or chunked). The socket's peer must be root or this user.
+- **Names** are checked before they go into a path: a container, volume, project or service
+  name is what Docker accepts (`[A-Za-z0-9][A-Za-z0-9_.-]*`, 128 at most), an image reference
+  adds `/`, `:` and `@`, never `..` nor `//`. Nothing else reaches the daemon.
+- **What is read is data**: lists, states and logs go as JSON after a sentence that says so,
+  every hidden character escaped. Logs: the last lines (100 by default, 500 at most, 64 KiB),
+  the values of what looks like a secret (`PASSWORD=`, `token:`, `Authorization: Bearer`)
+  masked. A container's environment and its ports are never read.
+- **Compose** without the `docker compose` command: a project and its services come from the
+  labels `com.docker.compose.project` and `com.docker.compose.service`; acting on a service acts
+  on each of its containers.
+
+| Tool | Level |
+| --- | --- |
+| `lister_conteneurs`, `lister_images`, `lister_projets_compose`, `etat_conteneur`, `journaux_conteneur` | read |
+| `demarrer_conteneur`, `arreter_conteneur`, `redemarrer_conteneur`, `demarrer_service`, `arreter_service`, `redemarrer_service` | action |
+| `supprimer_conteneur`, `supprimer_image`, `supprimer_volume` | destructive (never forced: a running container, an image or a volume in use stays) |
+
+**The scenario « relance front-next »** (`tests/front_next.rs`, the J4 exit criterion): the agent
+loop, the broker and its journal, the server as a real process, the consent asked through the
+compositor's window protocol, and a fake daemon that imitates the API. Sherlock lists the
+containers and sees front-next exited, reads its logs as data (a password masked, an injection
+inert), asks to restart it: granted, the restart is called once, the journal has the consent and
+the outcome; refused, nothing is called.
+
+## What will come next
+
+- A-11b: the consent window drawn by the compositor, its private socket, its reserved input and
+  the reinforced consent (ADR 0031).
 - The setting through which the user grants another level to a tool of a third-party server
   (ADR 0015).
-- The test that proves that no call bypasses the broker.
-- A call that leaves the machine is an action (see "Tool levels", S-11): a third-party server's
-  read never runs without consent when it can send data out.
 
 Later: an API-key provider and its keyring reading, masking of secrets before sending them to the
 model, the service that links `sherlockd` to Sherlock's panel (A-19), and the MCP servers per

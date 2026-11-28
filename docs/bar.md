@@ -474,14 +474,17 @@ are ours (application icons, line icons as symbolic ones, a round pixmap): no ot
   goes. Tab reaches it before the indicators; Enter opens the popup.
 - **Clicks.** Left: `Activate` at the point under the chevron, and the popup folds back. Middle:
   `SecondaryActivate`. Wheel: `Scroll`, 120 a notch as Qt counts, vertical or horizontal. Right:
-  the item's menu (D-45a, below). `tests/tray_click.rs` clicks through the bar's real widgets, in
-  the order `iced_exwlshell` delivers the events (the button's click before the subscription
-  hears the release), against items made the way Chromium and Electron (registered by their
-  unique name), libayatana-appindicator (by an object path alone, `Activate` refused: its menu
-  opens) and `xembedsniproxy` make theirs, in the popup and kept in the bar (Q-48). What the
-  application then does with its window is up to the compositor: bringing a minimized window
-  back or raising one behind others needs the application to activate it, which the compositor
-  does not offer yet (`xdg-activation-v1`, X11's `_NET_ACTIVE_WINDOW`).
+  the item's menu (D-45a, below). With a left or middle click, the bar asks the compositor for
+  an `xdg-activation-v1` token on the surface clicked (the popup or the bar) and hands it to the
+  item with `ProvideXdgActivationToken` just before `Activate`, as Plasma does: the application
+  may bring its window forward with it, even minimized or on another workspace (lot Q-52, see
+  "Activation" in `docs/compositor.md`). An X11 application cannot hand it back; the token
+  granted lets its `_NET_ACTIVE_WINDOW` through. An item without the method activates as before.
+  `tests/tray_click.rs` clicks through the bar's real widgets, in the order `iced_exwlshell`
+  delivers the events (the button's click before the subscription hears the release), against
+  items made the way Chromium and Electron (registered by their unique name),
+  libayatana-appindicator (by an object path alone, `Activate` refused: its menu opens) and
+  `xembedsniproxy` make theirs, in the popup and kept in the bar (Q-48).
 - **Tooltip.** The line under the grid gives the hovered icon's tooltip title in bold, then its
   text without markup, ended with « … »; without a tooltip, the item's title. A floating bubble
   would need a popup of its own, and every popup of `iced_exwlshell` takes the grab.
@@ -596,15 +599,16 @@ that is neither the old one nor the new one.
 ## Sherlock menu
 
 It has the entries of the Menus board: a header with the user name and « Session ouverte »,
-then « À propos de cet ordinateur », « Réglages », « Mises à jour », « Passer en mode jeu »,
-« Verrouiller », « Fermer la session », « Éteindre ». Since D-36d they act:
+then « À propos de cet ordinateur », « Réglages » (Super+, on its right), « Verrouiller »
+(Super+L), the compositor's shortcuts, « Fermer la session », « Éteindre ». Since D-36d they act. The
+board's « Mises à jour » and « Passer en mode jeu » are not shown since D-20f: nothing is behind
+them yet, and an entry that does nothing misleads.
 
 | Entry | What it does |
 | --- | --- |
 | « À propos de cet ordinateur », « Réglages » | Starts Control Room (`control-room`, beside the session's programs in `$SHERLOCKOS_BIN` when it is there, else in the `PATH`: lot Q-39), without a shell, with the renderer variables the bar was given (`sherlock_ui::gpu::for_child`), and waits for it on a thread of its own: no zombie. Control Room has no « À propos » page yet, nor a way to be opened on a page: both open its first page |
 | « Verrouiller » | The command of the « Verrouiller » button of the control centre (`loginctl lock-session`), at once |
 | « Fermer la session », « Éteindre » | A first click arms the entry, which reads « Reclique pour confirmer » under the veil, and the menu stays open; a second click at least 400 ms later (`CONFIRM_DELAY`, a double click only arms) runs the control centre's command. Another entry, Escape or a click elsewhere disarms it. A Mac asks before it logs out or powers off; this asks in the menu itself, where the click was |
-| « Mises à jour », « Passer en mode jeu » | Faded, « Bientôt » on the right: nothing behind them yet. The keys and the pointer skip them |
 
 Every other entry closes the menu once it has run.
 
@@ -627,8 +631,7 @@ ring is drawn from that value and Enter activates that value, in the same update
 operations were tried first: under `iced_exwlshell` they are applied after the redraw, so the
 ring stayed one Tab behind the real focus and Enter activated the next button.
 
-The board also shows the shortcuts Super+, Super+G and Super+L in the menu. No compositor binds
-them yet, so the menu does not show them.
+The board also shows Super+G in the menu, which goes with the game mode, not there yet.
 
 ## Panels (D-20b, D-20c)
 
@@ -706,9 +709,9 @@ edges of the screen (`SlideX | SlideY` of `xdg_positioner`), never to flip it ab
 
 ### Quick settings
 
-The control centre, after the right column of the Panels board: four tiles (« Wi-Fi », « Bluetooth »,
-« Ne pas déranger », « Mode jeu »), the volume and brightness sliders, the keyboard backlight
-slider on a machine that has one, the graphics card and energy choices, then the user and the
+The control centre, after the right column of the Panels board: three tiles (« Wi-Fi », « Bluetooth »,
+« Ne pas déranger »), the volume and brightness sliders, the keyboard backlight
+slider on a machine that has one, the energy choices, then the user and the
 session buttons (`quick.rs`, services in `system/`; sound, brightnesses and their watchers in the
 `system-services` crate, shared with the media keys of the compositor). The panel keeps room for
 the keyboard row (`panels::KEYBOARD_ROW`): without one, it is left empty above the user row.
@@ -724,7 +727,6 @@ the keyboard row (`panels::KEYBOARD_ROW`): without one, it is left empty above t
 | Brightness | `/sys/class/backlight`, logind | `brightness` and `max_brightness` of the firmware backlight, else the platform one, else a raw one | `Session.SetBrightness("backlight", name, value)` on `/org/freedesktop/login1/session/auto` |
 | Keyboard backlight | UPower, system bus; else `/sys/class/leds` and logind | `GetBrightness`, `GetMaxBrightness` of `org.freedesktop.UPower.KbdBacklight`; else the LED `…::kbd_backlight` | `SetBrightness`; else `Session.SetBrightness("leds", name, value)` |
 | « Énergie » | power-profiles-daemon, system bus | `ActiveProfile`, `Profiles`, under `org.freedesktop.UPower.PowerProfiles`, else `net.hadess.PowerProfiles` | `ActiveProfile` |
-| « Mode jeu », « Carte graphique » | none yet | | Faded, « Bientôt » |
 | Session | the launcher's `Systemd` (`launcher::system`) | | `loginctl lock-session`, `terminate-session`, `systemctl reboot`, `poweroff` |
 
 **Every system write goes through D-Bus** to the service that owns the setting, which asks
@@ -792,8 +794,32 @@ bus for actions (`ACTION_TIMEOUT`, 60 s): polkit has time to ask for a password.
 réseau »), which asks for a confirmation under the line, then deletes every saved connection of
 that name (`Delete`, polkit `settings.modify.system`).
 
+**To Control Room** (D-20f). At the bottom of the pages of the Wi-Fi, the Bluetooth and the
+sound, after a line: « Réglages Wi-Fi… » runs `control-room --page network`, « Réglages du son… »
+`control-room --page sound` and « Réglages Bluetooth… » `control-room --page bluetooth` (the
+window already open shows that page, lot D-26n2; the Bluetooth page comes with D-26o2, and
+until then Control Room opens on its first page). The panel closes.
+
+**Outputs and inputs** (D-20g). A chevron at the right of the volume row (« Sorties et
+entrées ») opens the page of the sound (`quick/sound.rs`), as the Sound module of macOS:
+« Sortie », the outputs of `pactl list sinks` (speakers, HDMI, a Bluetooth headset), and
+« Entrée », the inputs of `pactl list sources` without the monitors of the outputs, 16 each at
+most, the one in use checked. A click moves the sound to another (`set-default-sink`,
+`set-default-source`), checked at once. Under the inputs, the slider of the microphone in use
+and its mute button (`set-source-volume`, `set-source-mute`), one call at a time, the latest
+value winning, and a read meanwhile never moves it while it is held. Every call runs on a
+thread of its own. While the page is open, `pactl subscribe` (the watcher of D-35d, which now
+also follows the inputs: `on source #`) reads it again: a headset plugged in, an output chosen
+elsewhere. Without an input, « Aucun micro ».
+
+![The outputs and the inputs](../desktop/bar/screenshots/sound-devices.png)
+
 **Bluetooth** (D-20d). As for the Wi-Fi, a chevron on the tile (« Appareils Bluetooth ») opens
-the list of devices (`quick/devices.rs`, services in `system/bluetooth.rs`):
+the list of devices (`quick/devices.rs`, services in `system_services::bluetooth`, shared with Control Room since D-26o): A device paired is
+renamed by its `Alias` (`bluetooth::rename`: control characters left out, 64 characters at
+most), and its alias is the name shown; `bluetooth::changes` gives a stream of what BlueZ
+announces (properties of `/org/bluez/…`, devices added and removed), for a view that follows
+them.
 
 - **« Mes appareils »**: the paired devices, the connected ones first, each with the glyph of
   its kind (headphones, mouse, keyboard, phone, computer, gamepad, else Bluetooth), from
@@ -806,7 +832,7 @@ the list of devices (`quick/devices.rs`, services in `system/bluetooth.rs`):
   `Trusted=true` and `Connect`. One device at a time; its line reads « Connexion… » or
   « Appairage… ».
 - **The agent.** For each pairing only, the bar serves `org.bluez.Agent1` at
-  `/org/sherlockos/bar/agent` and registers it (`KeyboardDisplay`), and unregisters it at the
+  `/org/sherlockos/agent` and registers it (`KeyboardDisplay`), and unregisters it at the
   end, whatever the end. It answers BlueZ alone: the unique name that owns `org.bluez`, read
   with `GetNameOwner` when the agent is registered, compared with the sender of every call; and
   about the device being paired alone. Anything else gets `org.bluez.Error.Rejected`. Its
@@ -1096,8 +1122,7 @@ Clicks and keys for a test (XTest) go to `:5` only, after checking the display n
 - **Sherlock menu entries** (D-36d, `app.rs`, programs and session commands recorded, never
   run): « Réglages » and « À propos » start `control-room`; « Verrouiller » runs `Lock` at once;
   « Fermer la session » and « Éteindre » arm on the first click, ignore a double click, run once
-  on a later click, and Escape disarms; « Mises à jour » and « Passer en mode jeu » do nothing,
-  say « Bientôt » and take no highlight. From « Fichier » to « Édition » under the pointer
+  on a later click, and Escape disarms. From « Fichier » to « Édition » under the pointer
   (`tests/global_menu.rs`), « Fichier » stays while « Édition » is read, which then shows at its
   size with its entries, both buttons keeping their labels.
 - **Bar focus**: the first Tab already rings Sherlock; the ringed button is the one Enter
@@ -1208,8 +1233,11 @@ Clicks and keys for a test (XTest) go to `:5` only, after checking the display n
 - **Battery**: no board draws it. Line icon like the others, percentage next to it, amber below
   15 % while discharging.
 - **User name**: the board shows a sample name. The bar reads the user's GECOS, otherwise the login.
-- **Shortcuts**: the board shows Super+, Super+G and Super+L in the menu. Nothing binds them
-  yet, so they are not shown.
+- **Shortcuts**: the board shows Super+, Super+G and Super+L in the menu. Super+, (Q-31) and
+  Super+L (D-25a) are bound and shown; Super+G goes with the game mode.
+- **Not there yet** (D-20f): the board's « Mises à jour » and « Passer en mode jeu » in the menu,
+  « Mode jeu » and « Carte graphique » in the control centre. Nothing is behind them; they come
+  back with what they control.
 - **Updates**: the board shows a « 3 » badge. No source gives that number: no badge.
 - **« Éteindre »**: the board announces a submenu that it does not draw. The chevron is there; the
   entry is logged like the others.
@@ -1226,8 +1254,7 @@ Clicks and keys for a test (XTest) go to `:5` only, after checking the display n
   scrolls; the board's centre is only as high as its cards. A card per application, not per
   notification. The board's « Réglages » button of the user row is not there (Control Room
   does not exist yet); « Se déconnecter » and « Redémarrer » are added. The Wi-Fi tile has a
-  chevron for the network list, which no board draws, nor the calendar. « Carte graphique »
-  shows no active choice, since none exists yet.
+  chevron for the network list, which no board draws, nor the calendar.
 - **Panels** (D-20c): the notification centre moved from the side of the quick settings to
   under the calendar, as the author asked, as on a Mac.
 

@@ -36,7 +36,7 @@ first three show the applications alone, as in D-22a.
 | Result | 46 high, radius 10, tile of 30 at radius 8, name in medium weight, a 12 px line under it | Same; the line of an application is its `GenericName`; the selected row takes the selection blue and the « Entrée » key cap |
 | Application icon | A line icon on a blue tile (« Conteneurs ») | The application's own icon, 30 px, from its icon theme (`icon-theme`); its initial on the blue tile when it has none |
 | Other tiles | Settings: a cream glyph on `#3A4A63`; files: a cream document on `#2B5F86` | System commands on the settings tile, files and folders on the files tile, the calculator on the application tile; glyphs of 16 on the grid of `sherlock_ui::icon` |
-| « Demander à Sherlock » | Cream row, Sherlock, title semibold `#14233B`, line `#2B3A54` « Tab pour lui passer la recherche » | Same, with the logo; « Bientôt » for now (see Sherlock); a blue ring of 2 when selected, which the board does not show |
+| « Demander à Sherlock » | Cream row, Sherlock, title semibold `#14233B`, line `#2B3A54` « Tab pour lui passer la recherche » | Same, with the logo (see Sherlock); a blue ring of 2 when selected, which the board does not show |
 | Nothing found | Not on the board | « Aucun résultat » in secondary text, one row high; it only shows without the Sherlock source, which always answers |
 
 The light theme takes the light board's values: white glass at 0.88, night blue veils at the
@@ -96,6 +96,39 @@ gets every key as soon as it maps, and the search field takes the focus at once.
 exactly the panel: 600 wide, as high as `launcher::panel_height(sections, rows)`, and it is
 resized (`LayoutChange`) when the number of results changes.
 
+**Every screen** (lot P-02e, L-1). The board's numbers (600 wide, 150 from the top, 9 results)
+are for the 1440 by 900 reference screen. The launcher learns the logical size of the screen of
+its surface from iced_exwlshell (`ShellEvent::WindowOutputChanged`) and `launcher::fit` places
+the panel there:
+
+- width: 600 at most, the screen's width less 16 on each side (`SCREEN_GUTTER`);
+- top: 150 at most, a sixth of the screen's height on a smaller one (`TOP_SHARE`, 150 / 900);
+- results: as many as fit, every section shown, between the top and the dock's room plus the
+  gutter, 9 at most and 1 at least. The dock's room (`launcher::dock_room`) follows the icon size
+  of `dock.conf`, read when the screen is learnt. On a screen too small even for one result, the
+  panel climbs toward the gutter.
+
+| Logical screen | Width | Top | Results |
+| --- | --- | --- | --- |
+| 1920 × 1080 (also 4K at 2) | 600 | 150 | 9 |
+| 1440 × 900 (reference) | 600 | 150 | 9 |
+| 1536 × 864 (1920 × 1080 at 1.25) | 600 | 144 | fewer |
+| 1366 × 768 | 600 | 128 | fewer |
+| 1280 × 720 (1920 × 1080 at 1.5) | 600 | 120 | fewer |
+| 853 × 533 (1280 × 800 at 1.5) | 600 | 89 | fewer |
+
+A new screen, or a new size, moves and resizes the panel (`LayoutChange` and `MarginChange` on
+its own surface, the padding of the full screen surface otherwise) and searches again with the
+new number of results. Until the screen is known, the board's place is used.
+
+Titles and subtitles of the results stay on one line, ending with « … » when they are too long
+(`ui::ellipsis`, L-2): a long file name or path never wraps in its 46 high row nor pushes the
+« Entrée » key cap out.
+
+![1920 × 1080](../desktop/launcher/screenshots/launcher-1920x1080.png)
+![1366 × 768: seven results, above the dock](../desktop/launcher/screenshots/launcher-1366x768.png)
+![1280 × 800 at 1.5 (853 × 533): three results](../desktop/launcher/screenshots/launcher-853x533.png)
+
 ### Search
 
 Every key typed in the field searches again: the first one already filters. An empty query (or
@@ -136,8 +169,8 @@ most precise answer to a query that is a calculation (and an expression rarely m
 anything else); the system commands take the place of the board's « Réglages », which have no
 source yet. A command found only by a keyword (`logout`) is a weaker guess than a file whose
 name holds the query: its section then comes after the files. A section gives 5 results at most (`launcher::SECTION_RESULTS`), and the panel 9 in
-all (`launcher::MAX_RESULTS`), which keeps it clear of the dock on the 900 high reference
-screen with five sections (tested). Sherlock's row is reserved: the sources before it never
+all (`launcher::MAX_RESULTS`) on the reference screen, fewer on a smaller one (see Surface,
+`launcher::fit`), which keeps it clear of the dock with every section (tested). Sherlock's row is reserved: the sources before it never
 take it (`Source::reserved`).
 
 ### Calculator
@@ -207,25 +240,31 @@ disabled. A real index (watching changes, more folders) is a later batch.
 
 ### Sherlock
 
-« Demander à Sherlock » is always the last row when the query is not empty. sherlockd has no
-interface for the shell yet, nor an option that takes a request: it knows `--demo`,
-`--claude-code` (a demonstration, its request on standard input), `--proxy` and
-`--test-server`. The row is therefore shown disabled, its line « Bientôt », and Enter does
-nothing. `ask::ASK_OPTION` names the option once it exists (`--ask`): the row then runs
-`<terminal> -e sherlockd --ask <file>`, without a shell (tested with the option set). The query
-is never in the arguments, which every local account reads (`ps`, `/proc/*/cmdline`, S-11): it
-is written when the row is chosen into a new file of `$XDG_RUNTIME_DIR/sherlockd-requests/`,
-0600 from its creation in 0700 folders, which sherlockd reads then removes.
+« Demander à Sherlock » is always the last row when the query is not empty, its line « Tab
+pour lui passer la recherche ». Tab in the field, or the row chosen, opens the panel « Demande à
+Sherlock » in place of the results (lot A-19, `sherlock.rs`, after the Sherlock board): the panel
+grows to its height (560 at most, less on a short screen), the query is the first request.
 
-What the interface should provide, for the launcher and the rest of the shell:
+- **Header**: Sherlock in his small round bubble, in 3D on the GPU (`sherlock_3d::Sherlock3d`,
+  the model read on the pool at the first opening), the still picture in software; he thinks
+  while a request runs, is happy after an answer and sorry after a failure, 2.5 s, then rests.
+- **The conversation**, scrolled to its end: each request in a soft accent bubble on the right,
+  Sherlock's texts as they come, « Le plan de Sherlock » with each step (its number, the tool,
+  its arguments ending with « … », the state as the board says it: « Attend ton accord »,
+  « Libre », « Avec ton accord », « … · fait », « Refusée », « Erreur »), then the answer, or why
+  there is none. « Sherlock réfléchit… » while it runs. Each part fades in and rises by 8 as
+  it comes, over 220 ms (lot A-19c, `sherlock::shown`): frames are asked for only that long.
+- **The field** « Ta demande » at the bottom: Enter asks the next request, once the one running
+  has ended. Escape comes back to the search, the conversation kept for the next opening.
 
-- a way to hand over a request as typed, from another program of the session, without a shell
-  and without a terminal: a socket of the user session (D-Bus or a Unix socket under
-  `$XDG_RUNTIME_DIR`) with a call like `Ask(text) -> conversation id`;
-- that Sherlock's own panel opens on that conversation, so the launcher can close at once;
-- an error the launcher can show when sherlockd is not running;
-- the board's « Tab pour lui passer la recherche »: Tab would hand over the query instead of
-  Enter, once the call exists.
+Each request runs `sherlockd --ask` (beside the session's programs, `$SHERLOCKOS_BIN`, or in
+the `PATH`), without a shell: the request and the exchanges answered so far (20 at most) go on
+its standard input, never in its arguments, which every local account reads. Its events
+(`docs/sherlockd.md`, « The shell's conversation ») are read on a thread of their own, lines of
+256 KiB at most, 10,000 events at most. The panel only shows the states the consent broker
+decided: the consent window stays the compositor's. Without sherlockd: « Sherlock ne répond pas :
+son service (sherlockd) est introuvable. »; offline: « Pas de connexion à Internet… »; without
+Claude Code or its login, sherlockd's own words.
 
 ### Keyboard
 
@@ -285,8 +324,12 @@ minus its renderer choice (`sherlock_ui::gpu::for_child`, ADR 0018), in its own 
 with no standard streams, in the entry's `Path` when it has one. `Terminal=true` entries run
 in the terminal `mime-apps` picks (`$TERMINAL`, then the usual ones). The launcher closes
 right after, and ignores any further Enter or click meanwhile, so a repeated key starts nothing
-twice. If the start fails, it stays open and logs the error; a `Path` that is not a folder is
-logged as such, apart from a missing program.
+twice. The program starts once the compositor gave the `xdg-activation-v1` token of the click
+or key (lot Q-52), in `XDG_ACTIVATION_TOKEN` and, for X11 programs, `DESKTOP_STARTUP_ID`: an
+application already open that gets the launch brings its window forward with it. Without a
+token (none given, the request dropped), it starts all the same. The launcher closes
+meanwhile: a start that fails is only logged; a `Path` that is not a folder is logged as such,
+apart from a missing program.
 
 ### Resident service
 
@@ -421,7 +464,6 @@ RUST_LOG=launcher=debug cargo run -p launcher
   not drawn, the initial shows instead.
 - The files come from a bounded walk, not an index: past 4 levels or 20 000 entries, a file is
   not found.
-- « Demander à Sherlock » is disabled until sherlockd takes requests from the shell.
 - Without `wl-copy`, a copied result lives while the launcher is open, unless a clipboard
   manager takes it; since the launcher keeps the keyboard, it cannot be pasted elsewhere
   meanwhile. `wl-clipboard` is not yet a package of the image (`distro/`): to add with the
@@ -486,8 +528,13 @@ RUST_LOG=launcher=debug cargo run -p launcher
 - calculator (`calc.rs`): priorities, `^` to the right, unary minus, modulo and percent, comma
   and point, division by zero, invalid expressions, a lone number, deep nesting, the writing of
   results;
-- « Demander à Sherlock » (`ask.rs`): disabled without the option, the query in one argument
-  with it.
+- « Demander à Sherlock » (`ask.rs`): the query as typed. The panel (`sherlock.rs`, lot A-19):
+  the events fill an exchange and Sherlock's mood follows; the reasons without an answer; a fake
+  `sherlockd` read line by line, which gets `--ask` alone as argument and the request on its
+  input. `tests/launcher.rs`: Tab opens the panel, which says when sherlockd is not there, then
+  the plan and its states as injected events tell them (`launcher-sherlock`,
+  `launcher-sherlock-1366`); `tests/sources.rs`: Enter on Sherlock's row opens it, Escape comes
+  back. Never the real sherlockd nor Claude Code.
 - single instance: the lock taken, our own id never signalled, a stand-in launcher (a copy of
   the test program) closed by `SIGTERM`, the file emptied by a normal close and the lock free
   again, a live `sleep` and a dead id never signalled, a linked lock file refused, odd file

@@ -20,7 +20,7 @@ use sherlock_ui::dock;
 use sherlock_ui::focus::{self, Direction};
 use sherlock_ui::motion::Fade;
 
-use crate::anim::{Launch, Leaving, Poof, Track};
+use crate::anim::{Bounce, Launch, Leaving, Poof, Track};
 use crate::drag::{self, Gesture, Press};
 use crate::entry::Catalog;
 use crate::hide::{self, Hide};
@@ -67,6 +67,11 @@ pub enum Message {
     StackOpen(usize),
     /// « Ouvrir dans Evidence » in the open stack.
     StackFolder,
+    /// The Wayland handles of the dock's surface, for the applications dragged from the
+    /// Applications view (lot D-41d).
+    DndReady(Option<crate::dnd::Handles>),
+    /// An application dragged over the dock, dropped on it, or gone.
+    Dnd(crate::dnd::Event),
     Surface(Id),
     Pointer(Pointer),
     Frame(Instant),
@@ -152,6 +157,8 @@ pub struct Dock {
     pub stack: Option<crate::stack::Stack>,
     /// « Vider la corbeille » clicked once, and when: a second click empties it.
     trash_armed: Option<Instant>,
+    /// The geometry of the settings, before it is fitted to the screen (`Geometry::fitted`).
+    pub base: Geometry,
     /// Size of the dock surface.
     pub surface_size: Size,
     surface: Option<Id>,
@@ -161,6 +168,12 @@ pub struct Dock {
     pub leaving: Vec<Leaving>,
     /// Applications started from the dock, bouncing until their first window.
     pub launches: Vec<Launch>,
+    /// Launches waiting for the activation token of their click (lot Q-52).
+    asks: Vec<iced_exwlshell::reexport::ActivationTokenSink>,
+    /// Applications whose window asks for attention, bouncing a few hops (lot Q-52), and the
+    /// windows that asked at the last list: a window that keeps asking bounces once.
+    pub calls: Vec<(Target, Bounce)>,
+    calling: Vec<u64>,
     /// The icon let go out of the dock, which vanishes where it is.
     dropping: Option<Target>,
     /// The puffs of smoke of the applications unpinned by a drag out of the dock.
@@ -200,6 +213,8 @@ pub struct Dock {
     placed: Vec<IconPlace>,
     /// Writes the pinned list on a thread of its own.
     saver: crate::save::Saver,
+    /// The thread of the drags from the Applications view, kept alive with its link.
+    dnd: Option<crate::dnd::Link>,
 }
 
 impl Dock {
@@ -217,11 +232,15 @@ impl Dock {
             trash: None,
             stack: None,
             trash_armed: None,
+            base: geometry,
             surface_size: Size::ZERO,
             surface: None,
             tracks: Vec::new(),
             leaving: Vec::new(),
             launches: Vec::new(),
+            asks: Vec::new(),
+            calls: Vec::new(),
+            calling: Vec::new(),
             dropping: None,
             poofs: Vec::new(),
             press: None,
@@ -246,6 +265,7 @@ impl Dock {
             sent: Sent::default(),
             placed: Vec::new(),
             saver: crate::save::Saver::default(),
+            dnd: None,
         };
         dock.rebuild(false);
         dock
@@ -285,6 +305,20 @@ impl Dock {
         } else {
             -1
         }
+    }
+
+    /// The settings' geometry fitted to the screen's length for `count` icons; as it is while
+    /// the screen is not known.
+    fn fit(&self, count: usize, separator: bool) -> Geometry {
+        let Some((width, height)) = self.screen().and_then(|s| s.size) else {
+            return self.base;
+        };
+        let room = if self.base.position.is_vertical() {
+            height
+        } else {
+            width
+        };
+        self.base.fitted(room as f32, count, separator)
     }
 
     /// The screen of the dock's surface, once known.
@@ -431,6 +465,8 @@ impl Dock {
             glyphs: &mut self.glyphs,
         };
         let (items, separator) = builder.build(&self.pinned, self.windows.as_ref());
+        // As many icons as there are now, in the length of the screen (lot D-21l).
+        self.geometry = self.fit(items.len(), separator.is_some());
         let old = std::mem::take(&mut self.items);
         let old_separator = self.separator;
         let mut old_tracks: Vec<Option<Track>> = std::mem::take(&mut self.tracks)
@@ -558,6 +594,7 @@ impl Dock {
             || !self.label.is_done(self.now)
             || !self.leaving.is_empty()
             || !self.launches.is_empty()
+            || !self.calls.is_empty()
             || !self.poofs.is_empty()
             || self.tracks.iter().any(|t| !t.is_done(self.now))
             || self.hide.running(self.busy())
@@ -675,13 +712,29 @@ impl Dock {
             return 0.0;
         };
         let target = item.target();
-        self.launches
-            .iter()
-            .find(|l| l.target == target)
-            .map_or(0.0, |l| l.bounce.lift(now, track.size.value(now) as f32))
+        let side = track.size.value(now) as f32;
+        let launch = self.launches.iter().find(|l| l.target == target);
+        let call = self.calls.iter().find(|c| c.0 == target);
+        let launched = launch.map_or(0.0, |l| l.bounce.lift(now, side));
+        launched.max(call.map_or(0.0, |c| c.1.lift(now, side)))
     }
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
+        let task = self.react(message);
+        // The launches of this message ask for the token of the click first (lot Q-52).
+        let asks = std::mem::take(&mut self.asks);
+        match self.surface {
+            Some(id) if !asks.is_empty() => {
+                let asks = asks
+                    .into_iter()
+                    .map(|sink| Task::done(Message::RequestActivationToken { id, sink }));
+                Task::batch(asks).chain(task)
+            }
+            _ => task,
+        }
+    }
+
+    fn react(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::Surface(id) => {
                 self.surface = Some(id);
@@ -691,7 +744,8 @@ impl Dock {
                     zone: Some(self.zone()),
                     hidden: Some(self.hide.hidden()),
                 };
-                return Task::batch([self.input_region(), self.follow_windows()]);
+                let dnd = window::run(id, crate::dnd::handles).map(Message::DndReady);
+                return Task::batch([self.input_region(), self.follow_windows(), dnd]);
             }
             Message::Stack(stack) => {
                 // The same folder read again: only the grid changes, the dock stays.
@@ -724,10 +778,21 @@ impl Dock {
                 let previous = self.geometry;
                 return self.refresh(previous);
             }
+            Message::DndReady(handles) => {
+                let Some((link, events)) = handles.and_then(crate::dnd::start) else {
+                    return Task::none();
+                };
+                self.dnd = Some(link);
+                return Task::run(events, Message::Dnd);
+            }
+            Message::Dnd(event) => return self.incoming(event),
             Message::Screen(id, screen) => {
                 self.outputs.insert(id, screen);
                 self.clock();
-                return self.follow_windows();
+                // Another screen, another length: the icons fit it.
+                let previous = self.geometry;
+                let refreshed = self.refresh(previous);
+                return Task::batch([refreshed, self.follow_windows()]);
             }
             Message::Pointer(event) => {
                 let now = self.clock();
@@ -808,7 +873,8 @@ impl Dock {
             self.pinned.clone_from(pinned);
         }
         self.sherlock = config.sherlock;
-        self.geometry = Geometry::from_config(&config);
+        self.base = Geometry::from_config(&config);
+        self.geometry = self.base;
         let now = self.clock();
         self.hide.set_mode(config.auto_hide, now);
         self.sources.config = config;
@@ -982,6 +1048,7 @@ impl Dock {
             launch.bounce.time_out(now);
         }
         self.launches.retain(|l| !l.bounce.is_done(now));
+        self.calls.retain(|c| !c.1.is_done(now));
         self.poofs.retain(|p| !p.is_done(now));
         let count = self.leaving.len();
         self.leaving.retain(|l| !l.track.is_gone(now));
@@ -1001,6 +1068,23 @@ impl Dock {
         let Some(windows) = self.windows.as_ref() else {
             return;
         };
+        // A window that starts asking for attention: its icon bounces a few hops (lot Q-52).
+        let asking: Vec<&crate::windows::Window> =
+            windows.list.iter().filter(|w| w.attention).collect();
+        for window in &asking {
+            if self.calling.contains(&window.id) {
+                continue;
+            }
+            let item = self.items.iter().find(|i| i.owns(&window.app_id));
+            if let Some(target) = item.map(|i| i.target())
+                && !self.calls.iter().any(|c| c.0 == target)
+            {
+                tracing::info!(app = window.app_id, "a window asks for attention");
+                self.calls
+                    .push((target, Bounce::hops(now, dock::ATTENTION_HOPS)));
+            }
+        }
+        self.calling = asking.iter().map(|w| w.id).collect();
         for launch in &mut self.launches {
             let Some(item) = self.items.iter().find(|i| i.target() == launch.target) else {
                 continue;
@@ -1640,12 +1724,17 @@ impl Dock {
             tracing::info!(app = entry.id, "already starting");
             return;
         }
-        match launch::launch(entry, what) {
-            Ok(pid) => tracing::info!(app = entry.id, pid, ?what, "started"),
-            Err(error) => {
-                tracing::warn!(app = entry.id, %error, "cannot start");
-                return;
-            }
+        // Started once the compositor gave the activation token of the click (lot Q-52): an
+        // application already open that gets the launch brings its window forward with it.
+        let app = entry.clone();
+        let start =
+            move |token: Option<String>| match launch::launch_with(&app, what, token.as_deref()) {
+                Ok(pid) => tracing::info!(app = app.id, pid, ?what, "started"),
+                Err(error) => tracing::warn!(app = app.id, %error, "cannot start"),
+            };
+        match self.surface {
+            Some(_) => self.asks.push(launch::after_token(start)),
+            None => start(None),
         }
         let before = self.windows.as_ref().map(|w| {
             let owned = w.owned(|a| item.owns(a));
@@ -1998,11 +2087,92 @@ impl Dock {
         self.save_pinned()
     }
 
+    /// An application dragged from the Applications view (lot D-41d): over the dock, a hole
+    /// opens among the pinned icons where it would go; dropped, it is pinned there; gone, the
+    /// hole closes. The icons make room and close it on their own tracks.
+    pub fn incoming(&mut self, event: crate::dnd::Event) -> Task<Message> {
+        use crate::dnd::Event;
+        match event {
+            Event::Over(x, y) => self.hole_at(Point::new(x, y)),
+            Event::Left => self.close_hole(),
+            Event::Dropped(id) => self.drop_app(&id),
+            Event::DragEnded(_) => Task::none(),
+        }
+    }
+
+    /// Opens the hole, or moves it, among the pinned icons nearest `point`; out of the dock's
+    /// band, it closes.
+    fn hole_at(&mut self, point: Point) -> Task<Message> {
+        let now = self.clock();
+        let layout = self.layout(now);
+        if layout.depth(point) > self.geometry.bar_thickness() + self.geometry.icon / 2.0 {
+            return self.close_hole();
+        }
+        self.list_sherlock();
+        let along = layout.along(point);
+        let end = self.separator.unwrap_or(self.items.len());
+        let fixed = self
+            .items
+            .iter()
+            .take_while(|i| i.kind == Kind::Applications)
+            .count();
+        let before: Option<String> = (fixed..end.min(self.items.len()))
+            .filter(|&i| self.items[i].kind != Kind::Hole)
+            .find(|&i| layout.middle(i).is_some_and(|middle| middle > along))
+            .and_then(|i| self.items[i].pin_id().map(String::from));
+        let changed = if self.pinned.iter().any(|p| p == items::HOLE) {
+            dock_config::move_pinned(&mut self.pinned, items::HOLE, before.as_deref())
+        } else {
+            let at = before
+                .and_then(|b| self.pinned.iter().position(|p| *p == b))
+                .unwrap_or(self.pinned.len());
+            self.pinned.insert(at, String::from(items::HOLE));
+            true
+        };
+        if changed {
+            return self.refresh(self.geometry);
+        }
+        Task::none()
+    }
+
+    /// The application went elsewhere: the hole closes.
+    fn close_hole(&mut self) -> Task<Message> {
+        let before = self.pinned.len();
+        self.pinned.retain(|p| p != items::HOLE);
+        if self.pinned.len() != before {
+            return self.refresh(self.geometry);
+        }
+        Task::none()
+    }
+
+    /// The application `id` dropped: pinned in the hole, moved there if it already was, and
+    /// the list written. An application the dock does not know closes the hole.
+    fn drop_app(&mut self, id: &str) -> Task<Message> {
+        if self.sources.catalog.get(id).is_none() {
+            tracing::warn!(id, "dropped application not installed");
+            return self.close_hole();
+        }
+        let Some(at) = self.pinned.iter().position(|p| p == items::HOLE) else {
+            return Task::none();
+        };
+        // Where the hole is: before the next pin that is not this application.
+        let before = self.pinned[at + 1..].iter().find(|p| *p != id).cloned();
+        self.pinned.retain(|p| p != items::HOLE && p != id);
+        let to = before
+            .and_then(|b| self.pinned.iter().position(|p| *p == b))
+            .unwrap_or(self.pinned.len());
+        self.pinned.insert(to, id.to_owned());
+        tracing::info!(id, "pinned from the Applications view");
+        self.save_pinned()
+    }
+
     /// Writes the pinned list to the configuration and rebuilds the dock. The writing is done
     /// off the interface thread (`save::Saver`); the file is read again first and only its list
     /// and Sherlock's key change (`pins::write`): the dock never writes what it has in memory,
     /// so a file it could not read at startup is not replaced by one with the pinned list alone.
     fn save_pinned(&mut self) -> Task<Message> {
+        // The hole of a drag in progress is never written.
+        self.pinned.retain(|p| p != items::HOLE);
         self.sources.config.pinned = Some(self.pinned.clone());
         self.sources.config.sherlock = self.sherlock;
         if let Some(path) = &self.sources.config_path {

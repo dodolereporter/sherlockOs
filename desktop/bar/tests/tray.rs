@@ -152,6 +152,9 @@ mod tests {
         fn activate(&self, x: i32, y: i32) {
             self.seen.lock().unwrap().push(format!("Activate {x} {y}"));
         }
+        fn provide_xdg_activation_token(&self, token: &str) {
+            self.seen.lock().unwrap().push(format!("Token {token}"));
+        }
         fn secondary_activate(&self, _x: i32, _y: i32) {
             self.seen
                 .lock()
@@ -331,6 +334,10 @@ mod tests {
         let _ = state.update(Message::TrayClick(key.clone(), Click::Primary));
         assert!(!state.tray_open());
         let client = bus.connect();
+        // The token of the click first, for the application to bring its window forward with
+        // (lot Q-52), then `Activate`.
+        zbus::block_on(tray::provide_token(&client, &service, &path, "click-token")).unwrap();
+        assert_eq!(app.seen.lock().unwrap().remove(0), "Token click-token");
         zbus::block_on(request.send(&client, &service, &path)).unwrap();
         let wheel = iced::mouse::ScrollDelta::Lines { x: 0.0, y: -1.0 };
         let scroll = Request::scroll(wheel).unwrap();

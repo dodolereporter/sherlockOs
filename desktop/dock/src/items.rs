@@ -28,6 +28,8 @@ pub enum Kind {
     Trash(bool),
     /// A stack, before the trash (lot D-21k): its folder.
     Stack(std::path::PathBuf),
+    /// The hole of an application dragged over the dock (lot D-41d).
+    Hole,
 }
 
 /// What an icon stands for, by identity rather than by place: the place of an icon changes
@@ -42,11 +44,14 @@ pub enum Target {
     Window(String),
     Trash,
     Stack,
+    Hole,
 }
 
 /// How an icon is drawn.
 #[derive(Debug, Clone)]
 pub enum Glyph {
+    /// Nothing: the hole an application dragged from the Applications view opens (lot D-41d).
+    None,
     /// An icon file, or Sherlock's tile. A PNG goes through an SVG that embeds it: tiny-skia's
     /// SVG renderer draws both, without iced's `image` feature and the decoders it would add.
     File(svg::Handle),
@@ -72,6 +77,16 @@ impl Item {
             // The author's tile, from sherlock-ui rather than the icon theme: Sherlock has no
             // desktop entry, and no theme can replace it.
             glyph: Glyph::File(svg::Handle::from_memory(AppIcon::Sherlock.svg().as_bytes())),
+            pinned: true,
+        }
+    }
+
+    /// The hole an application dragged over the dock opens among the pinned ones (lot D-41d).
+    pub fn hole() -> Self {
+        Self {
+            kind: Kind::Hole,
+            name: String::new(),
+            glyph: Glyph::None,
             pinned: true,
         }
     }
@@ -123,6 +138,7 @@ impl Item {
             Kind::Sherlock => Target::Sherlock,
             Kind::App(entry) => Target::App(entry.id.clone()),
             Kind::Window(app_id) => Target::Window(app_id.clone()),
+            Kind::Hole => Target::Hole,
         }
     }
 
@@ -132,6 +148,7 @@ impl Item {
         match &self.kind {
             Kind::App(entry) => Some(entry.id.as_str()),
             Kind::Sherlock => Some(SHERLOCK),
+            Kind::Hole => Some(HOLE),
             Kind::Applications | Kind::Window(_) | Kind::Trash(_) | Kind::Stack(_) => None,
         }
     }
@@ -148,10 +165,16 @@ impl Item {
         match &self.kind {
             Kind::App(entry) => entry.owns(app_id),
             Kind::Window(id) => id == app_id,
-            Kind::Sherlock | Kind::Applications | Kind::Trash(_) | Kind::Stack(_) => false,
+            Kind::Sherlock | Kind::Applications | Kind::Trash(_) | Kind::Stack(_) | Kind::Hole => {
+                false
+            }
         }
     }
 }
+
+/// The token of the hole in the pinned list while an application is dragged over the dock
+/// (lot D-41d): never a desktop id, and never written to the file.
+pub const HOLE: &str = "<hole>";
 
 /// Builds the icons, and finds their glyphs once: `glyphs` keeps them by desktop file id.
 pub struct Builder<'a> {
@@ -185,6 +208,10 @@ impl Builder<'_> {
         for id in pinned {
             if id == SHERLOCK {
                 items.extend(sherlock.take());
+                continue;
+            }
+            if id == HOLE {
+                items.push(Item::hole());
                 continue;
             }
             match self.catalog.get(id) {

@@ -13,6 +13,7 @@ use iced::widget::{
 use iced::window::{self, Id};
 use iced::{Alignment, Element, Event, Length, Padding, Subscription, Task, event};
 use iced_exwlshell::reexport::{Anchor, KeyboardInteractivity, Layer, LayerSize};
+use iced_exwlshell::shell::{ShellEvent, ShellReceiver};
 use iced_exwlshell::to_layer_message;
 use sherlock_ui::animated::reveal;
 use sherlock_ui::component::{self as ui, Trailing};
@@ -31,6 +32,18 @@ use crate::system::{NoSession, Session};
 
 /// Id of the search field, to give it the keyboard.
 pub const QUERY: &str = "query";
+/// Id of the field of the panel « Demande à Sherlock » (lot A-19).
+pub const REQUEST: &str = "sherlock-request";
+
+/// The model of Sherlock, once read (not in `Message`'s `Debug`).
+#[derive(Clone)]
+pub struct Mascot(pub Option<Arc<sherlock_3d::Model>>);
+
+impl std::fmt::Debug for Mascot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Mascot")
+    }
+}
 
 /// The keys the launcher acts on, whatever has the focus.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,6 +52,8 @@ pub enum Key {
     Down,
     Enter,
     Escape,
+    /// Hands the query over to Sherlock (lot A-19).
+    Tab,
 }
 
 #[to_layer_message(multi)]
@@ -66,8 +81,19 @@ pub enum Message {
     Reloaded(Reloaded),
     /// The theme of the appearance file changed.
     Theme(color::Theme),
+    /// The logical size of the screen the surface is on, from iced_exwlshell (L-1).
+    Screen(Option<(i32, i32)>),
     /// An icon drawn by the worker thread (`raster::drawn`): it shows at the next frame.
     IconDrawn,
+    /// An event of `sherlockd --ask` (lot A-19), then the end of its output.
+    Sherlock(serde_json::Value),
+    SherlockEnded,
+    /// The field of the next request, typed in.
+    Request(String),
+    /// Enter in that field.
+    Submit,
+    /// Sherlock's model, read on the pool.
+    Mascot(Mascot),
 }
 
 /// Sources and what tells when their files are walked, as `crate::sources` gives them.
@@ -87,8 +113,10 @@ impl std::fmt::Debug for Reloaded {
     }
 }
 
-/// What starts a program: `launch::spawn`, or a recorder in tests.
-pub type Spawn = Arc<dyn Fn(&Command) -> Result<u32, crate::launch::LaunchError> + Send + Sync>;
+/// What starts a program, given the activation token of the click when one came:
+/// `launch::spawn_with`, or a recorder in tests.
+pub type Spawn =
+    Arc<dyn Fn(&Command, Option<&str>) -> Result<u32, crate::launch::LaunchError> + Send + Sync>;
 
 /// How the calculator's result is copied.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -179,6 +207,19 @@ pub struct Launcher {
     drawn: Animation,
     places: Vec<Place>,
     highlight: Animation,
+    /// Logical size of the screen the panel is on, once known (L-1), and the side of the dock's
+    /// icons, read in its configuration when the screen is learnt: the panel keeps clear of it.
+    screen: Option<(f32, f32)>,
+    dock_icon: f32,
+    /// What tells the screen of the surface.
+    screens: Option<ShellReceiver>,
+    /// The panel « Demande à Sherlock » shows instead of the results (lot A-19); its
+    /// conversation, the field of the next request, Sherlock's service and his model.
+    pub sherlock: bool,
+    pub conversation: crate::sherlock::Conversation,
+    pub request: String,
+    sherlockd: std::path::PathBuf,
+    mascot: Option<Mascot>,
 }
 
 impl Launcher {
@@ -211,7 +252,40 @@ impl Launcher {
             drawn: still(look::panel_height(0, 0)),
             places: Vec::new(),
             highlight: still(0.0),
+            screen: None,
+            dock_icon: sherlock_ui::metrics::DOCK_ICON,
+            screens: None,
+            sherlock: false,
+            conversation: crate::sherlock::Conversation::default(),
+            request: String::new(),
+            sherlockd: crate::sherlock::program(),
+            mascot: None,
         }
+    }
+
+    /// Asks `program` instead of the session's `sherlockd` (the tests: never the real one).
+    pub fn with_sherlockd(mut self, program: std::path::PathBuf) -> Self {
+        self.sherlockd = program;
+        self
+    }
+
+    /// The launcher, told of the screen of its surface by `screens`.
+    pub fn with_screens(mut self, screens: ShellReceiver) -> Self {
+        self.screens = Some(screens);
+        self
+    }
+
+    /// The launcher on a screen of this logical size (tests; `Message::Screen` otherwise).
+    pub fn with_screen(mut self, size: (f32, f32)) -> Self {
+        self.screen = Some(size);
+        self
+    }
+
+    /// Where the panel goes on its screen, and how many results it shows (L-1): the board's
+    /// panel until the screen is known.
+    pub fn fit(&self) -> look::Fit {
+        self.screen
+            .map_or_else(look::Fit::default, |size| look::fit(size, self.dock_icon))
     }
 
     /// A resident launcher (lot P-02): hidden at first, shown and hidden by the requests of
@@ -245,7 +319,8 @@ impl Launcher {
             || (self.surface.is_some()
                 && !self.parked
                 && (!self.presence.is_done(self.now, look::OPEN_PRECISION)
-                    || self.list_moving(self.now)))
+                    || self.list_moving(self.now)
+                    || (self.sherlock && self.conversation.appearing(self.now))))
     }
 
     /// The rows move, appear, the panel's height or the selection follow them.
@@ -381,6 +456,15 @@ impl Launcher {
     /// Height of the panel as it is now: the search row, then the sections, or one line
     /// saying nothing matches.
     pub fn height(&self) -> f32 {
+        if self.sherlock {
+            // The whole conversation's panel, less on a short screen.
+            let room = self.screen.map_or(f32::MAX, |(_, h)| {
+                h - self.fit().top - look::dock_room(self.dock_icon) - look::SCREEN_GUTTER
+            });
+            return look::sherlock::HEIGHT
+                .min(room)
+                .max(look::panel_height(0, 3));
+        }
         let rows = self.hits().count();
         if rows == 0 && !self.query.trim().is_empty() {
             return look::panel_height(0, 1);
@@ -400,10 +484,17 @@ impl Launcher {
             }
             None => Subscription::none(),
         };
+        let screens = self
+            .screens
+            .as_ref()
+            .map_or_else(Subscription::none, |events| {
+                events.listen().filter_map(on_screen)
+            });
         Subscription::batch([
             event::listen_with(on_event),
             frames,
             service,
+            screens,
             Subscription::run(crate::appearance).map(Message::Theme),
             sherlock_ui::raster::drawn().map(|()| Message::IconDrawn),
         ])
@@ -418,7 +509,41 @@ impl Launcher {
                 color::set_active(theme);
                 return Task::none();
             }
+            Message::Screen(size) => return self.screen_changed(size),
             Message::IconDrawn => return Task::none(),
+            Message::Sherlock(event) => {
+                let now = self.clock();
+                self.conversation.apply(&event, now);
+                return Task::none();
+            }
+            Message::SherlockEnded => {
+                let now = self.clock();
+                self.conversation.closed(now);
+                return Task::none();
+            }
+            Message::Mascot(mascot) => {
+                self.mascot = Some(mascot);
+                return Task::none();
+            }
+            Message::Request(request) => {
+                self.request = request;
+                return Task::none();
+            }
+            Message::Submit => {
+                let request = std::mem::take(&mut self.request);
+                return self.ask_sherlock(request.trim());
+            }
+            Message::Key(Key::Enter) if self.sherlock => {
+                let request = std::mem::take(&mut self.request);
+                return self.ask_sherlock(request.trim());
+            }
+            Message::Key(Key::Escape) if self.sherlock => return self.leave_sherlock(),
+            Message::Key(Key::Up | Key::Down | Key::Tab) if self.sherlock => return Task::none(),
+            Message::Key(Key::Tab) if !self.query.trim().is_empty() => {
+                let query = self.query.trim().to_owned();
+                return self.open_sherlock(&query);
+            }
+            Message::Key(Key::Tab) => return Task::none(),
             _ => {}
         }
         // Anything but its own entry closes the menu; Escape closes it alone.
@@ -495,7 +620,7 @@ impl Launcher {
             &self.sources,
             &self.query,
             look::SECTION_RESULTS,
-            look::MAX_RESULTS,
+            self.fit().results,
         );
         self.armed = None;
         self.copied = None;
@@ -560,7 +685,7 @@ impl Launcher {
                 let settings = if self.full {
                     crate::screen_surface()
                 } else {
-                    crate::panel_surface(self.height())
+                    crate::panel_surface(self.height(), self.fit())
                 };
                 let (id, task) = Message::layershell_open(settings);
                 self.surface = Some(id);
@@ -697,24 +822,7 @@ impl Launcher {
         };
         match action {
             Action::Start(command) => self.start(&command),
-            Action::Ask {
-                mut command,
-                request,
-            } => {
-                let written = crate::instance::runtime_dir()
-                    .ok_or_else(|| std::io::Error::other("no XDG_RUNTIME_DIR"))
-                    .and_then(|runtime| crate::ask::request_file(&runtime, &request));
-                match written {
-                    Ok(path) => {
-                        command.args.push(path.into_os_string());
-                        self.start(&command)
-                    }
-                    Err(error) => {
-                        tracing::error!(%error, "cannot hand the request to Sherlock");
-                        Task::none()
-                    }
-                }
-            }
+            Action::Ask(request) => self.open_sherlock(&request),
             Action::Copy(value) => self.copy(index, value),
             Action::Session(power) if power.needs_confirmation() => match self.armed {
                 // Confirmed by a new press, not too soon: a double click or a key bounce
@@ -765,17 +873,70 @@ impl Launcher {
         }
     }
 
+    /// Starts `command` once the compositor gave the activation token of the click (lot Q-52):
+    /// an application already open that gets the launch brings its window forward with it.
+    /// The launcher closes meanwhile; a start that fails is only logged.
     fn start(&mut self, command: &Command) -> Task<Message> {
-        match (self.spawn)(command) {
-            Ok(pid) => {
-                tracing::info!(program = ?command.program, pid, "started");
-                self.close()
-            }
-            Err(error) => {
-                tracing::error!(%error, "cannot start the result");
+        let (spawn, command) = (Arc::clone(&self.spawn), command.clone());
+        let start = move |token: Option<String>| match spawn(&command, token.as_deref()) {
+            Ok(pid) => tracing::info!(program = ?command.program, pid, "started"),
+            Err(error) => tracing::error!(%error, "cannot start the result"),
+        };
+        let ask = match self.surface {
+            Some(id) => Task::done(Message::RequestActivationToken {
+                id,
+                sink: crate::launch::after_token(start),
+            }),
+            None => {
+                start(None);
                 Task::none()
             }
+        };
+        ask.chain(self.close())
+    }
+
+    /// Opens the panel « Demande à Sherlock » (lot A-19), and hands it `request` when there is
+    /// one. Sherlock's model is read on the pool the first time.
+    fn open_sherlock(&mut self, request: &str) -> Task<Message> {
+        self.sherlock = true;
+        self.menu = None;
+        let now = self.clock();
+        self.drawn.retarget(now, f64::from(self.height()));
+        let mascot = match self.mascot {
+            Some(_) => Task::none(),
+            None => Task::perform(
+                async {
+                    let model = sherlock_3d::locate::find()
+                        .and_then(|path| sherlock_3d::Model::open(&path).ok());
+                    Mascot(model.map(Arc::new))
+                },
+                Message::Mascot,
+            ),
+        };
+        let asked = self.ask_sherlock(request);
+        Task::batch([self.resize(), mascot, asked, operation::focus(REQUEST)])
+    }
+
+    /// Hands `request` to Sherlock, unless empty or one already runs.
+    fn ask_sherlock(&mut self, request: &str) -> Task<Message> {
+        if request.is_empty() || self.conversation.running() {
+            return Task::none();
         }
+        let now = self.clock();
+        match self.conversation.ask(&self.sherlockd, request, now) {
+            Some(events) => {
+                Task::run(events, Message::Sherlock).chain(Task::done(Message::SherlockEnded))
+            }
+            None => Task::none(),
+        }
+    }
+
+    /// Back to the search, the conversation kept.
+    fn leave_sherlock(&mut self) -> Task<Message> {
+        self.sherlock = false;
+        let now = self.clock();
+        self.drawn.retarget(now, f64::from(self.height()));
+        Task::batch([self.resize(), operation::focus(QUERY)])
     }
 
     /// Tells the compositor the new height of the surface, when it is the panel alone.
@@ -783,12 +944,37 @@ impl Launcher {
         let Some(id) = self.surface.filter(|_| !self.full) else {
             return Task::none();
         };
-        let settings = crate::surface(self.height());
-        Task::done(Message::LayoutChange {
-            id,
-            anchor: settings.anchor,
-            size: settings.size,
-        })
+        let settings = crate::surface(self.height(), self.fit());
+        Task::batch([
+            Task::done(Message::LayoutChange {
+                id,
+                anchor: settings.anchor,
+                size: settings.size,
+            }),
+            Task::done(Message::MarginChange {
+                id,
+                margin: settings.margin,
+            }),
+        ])
+    }
+
+    /// The screen of the surface, or its size, changed: the panel takes its place and its
+    /// number of results there.
+    fn screen_changed(&mut self, size: Option<(i32, i32)>) -> Task<Message> {
+        let size = size
+            .filter(|(w, h)| *w > 0 && *h > 0)
+            .map(|(w, h)| (w as f32, h as f32));
+        if size.is_none() || size == self.screen {
+            return Task::none();
+        }
+        let before = self.height();
+        self.screen = size;
+        self.dock_icon = dock_icon(self.dock_file.as_deref());
+        let resize = self.resize();
+        if self.query.trim().is_empty() {
+            return resize;
+        }
+        Task::batch([resize, self.search(before)])
     }
 
     pub fn view(&self, id: Id) -> Element<'_, Message> {
@@ -824,7 +1010,7 @@ impl Launcher {
             .on_right_press(Message::Inside);
         let placed = container(panel)
             .padding(Padding {
-                top: look::TOP,
+                top: self.fit().top,
                 ..Padding::ZERO
             })
             .center_x(Length::Fill);
@@ -839,6 +1025,24 @@ impl Launcher {
     }
 
     pub fn view_panel(&self) -> Element<'_, Message> {
+        if self.sherlock {
+            let content = crate::sherlock::view(
+                &self.conversation,
+                &self.request,
+                self.mascot.as_ref().and_then(|m| m.0.clone()),
+                self.now,
+                Message::Request,
+                Message::Submit,
+                iced::widget::Id::new(REQUEST),
+            );
+            let panel = container(content)
+                .width(self.fit().width)
+                .height(self.drawn_height())
+                .padding(look::PADDING + metrics::BORDER_WIDTH)
+                .clip(true)
+                .style(look::panel);
+            return sherlock_ui::glass::glass(panel, look::RADIUS).into();
+        }
         let p = color::palette();
         let field = text_input(texts::PLACEHOLDER, &self.query)
             .id(QUERY)
@@ -913,7 +1117,7 @@ impl Launcher {
         };
         let content = stack![veil, list];
         let panel = container(content)
-            .width(look::WIDTH)
+            .width(self.fit().width)
             .height(self.drawn_height())
             .padding(look::PADDING + metrics::BORDER_WIDTH)
             .clip(true)
@@ -959,23 +1163,24 @@ impl Launcher {
         } else {
             (typography::UI_MEDIUM, p.text_primary, p.text_secondary)
         };
+        // One line each, ending with « … » when too long: a long file name or path never
+        // wraps in its row nor pushes the key cap out (L-2).
         let mut words = column![
-            ui::body(hit.title.as_str())
+            ui::ellipsis(hit.title.as_str())
                 .font(title_font)
                 .color(title_color)
-        ];
+                .width(Length::Fill)
+        ]
+        .width(Length::Fill);
         if let Some(subtitle) = self.subtitle(hit, index) {
             words = words.push(
-                text(subtitle)
+                ui::ellipsis(subtitle)
                     .size(typography::SMALL_SIZE)
-                    .color(line_color),
+                    .color(line_color)
+                    .width(Length::Fill),
             );
         }
-        let mut line = row![
-            tile(&hit.tile, &hit.title),
-            words,
-            Space::new().width(Length::Fill)
-        ]
+        let mut line = row![tile(&hit.tile, &hit.title), words]
         .spacing(look::GAP)
         // The whole height of the row, so that a result without a second line has its tile and
         // its title in the middle of the row, not at its top (Q-21).
@@ -1006,6 +1211,24 @@ impl Launcher {
             row
         }
     }
+}
+
+/// The screen of the surface, from iced_exwlshell's events.
+fn on_screen(event: ShellEvent) -> Option<Message> {
+    match event {
+        ShellEvent::WindowOutputChanged { output, .. } => {
+            Some(Message::Screen(output.and_then(|o| o.info.logical_size)))
+        }
+        _ => None,
+    }
+}
+
+/// The side of the dock's icons at rest, from its configuration file; the default without one.
+fn dock_icon(path: Option<&std::path::Path>) -> f32 {
+    path.and_then(|path| dock_config::DockConfig::load(path).ok())
+        .map_or(sherlock_ui::metrics::DOCK_ICON, |(config, _)| {
+            config.icon_size
+        })
 }
 
 /// Set once the first view is built, for the log of the start.
@@ -1130,6 +1353,7 @@ pub fn on_event(event: Event, _: event::Status, _: Id) -> Option<Message> {
         keyboard::Key::Named(Named::ArrowDown) => Key::Down,
         keyboard::Key::Named(Named::Enter) if !repeat => Key::Enter,
         keyboard::Key::Named(Named::Escape) => Key::Escape,
+        keyboard::Key::Named(Named::Tab) => Key::Tab,
         _ => return None,
     };
     Some(Message::Key(key))

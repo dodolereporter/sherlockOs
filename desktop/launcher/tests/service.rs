@@ -58,7 +58,7 @@ mod tests {
 
     /// A resident launcher on the fixtures, nothing started, and how many times it reloaded.
     fn resident() -> (Launcher, Arc<AtomicUsize>) {
-        let spawn: app::Spawn = Arc::new(|_: &Command| Ok(1));
+        let spawn: app::Spawn = Arc::new(|_: &Command, _: Option<&str>| Ok(1));
         let reloads = Arc::new(AtomicUsize::new(0));
         let counted = Arc::clone(&reloads);
         let reload: app::Reload = Arc::new(move || {
@@ -238,7 +238,7 @@ mod tests {
         );
         let tools = [
             "sh", "dirname", "readlink", "mkdir", "mv", "awk", "date", "wc", "cat", "sleep", "env",
-            "kill",
+            "kill", "rm",
         ];
         for tool in tools {
             let found = Process::new("sh")
