@@ -200,8 +200,12 @@ mod tests {
             ("deplacer_vers_bureau", json!({ "fenetre": 7, "bureau": 2 })),
         ] {
             let refused = servers.call(name, arguments).await;
+            // Refused, then, past three refusals, refused without asking (lot A-20).
             assert!(
-                matches!(refused, Err(McpError::Refused { .. })),
+                matches!(
+                    refused,
+                    Err(McpError::Refused { .. } | McpError::StoppedAsking { .. })
+                ),
                 "{name}: {refused:?}"
             );
         }

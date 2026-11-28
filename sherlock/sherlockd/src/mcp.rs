@@ -266,6 +266,13 @@ pub enum McpError {
          seuls les outils de lecture s'exécutent"
     )]
     BrokerAbsent { tool: String, level: Level },
+    /// Not asked: the user already refused `broker::MAX_REFUSALS` times in this session (A-20).
+    #[error(
+        "appel refusé sans rien demander : l'utilisateur a déjà refusé {} fois dans cette \
+         conversation. N'insiste pas ; dis-lui ce que tu voulais faire et pourquoi.",
+        crate::broker::MAX_REFUSALS
+    )]
+    StoppedAsking { tool: String, level: Level },
     /// The user refused the call, closed the window, or did not answer in time (A-11).
     #[error("appel refusé : l'utilisateur n'a pas donné son accord pour l'outil {tool} ({level})")]
     Refused { tool: String, level: Level },
@@ -702,6 +709,15 @@ impl ToolHost for McpServers {
                 ..
             }) => {
                 return Err(McpError::BrokerAbsent {
+                    tool: tool.to_owned(),
+                    level,
+                });
+            }
+            Err(Refusal {
+                decision: Decision::Stopped,
+                ..
+            }) => {
+                return Err(McpError::StoppedAsking {
                     tool: tool.to_owned(),
                     level,
                 });
