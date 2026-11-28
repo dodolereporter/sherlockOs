@@ -16,6 +16,7 @@ pub mod blur;
 pub mod click;
 pub mod clipboard;
 pub mod color;
+pub mod consent;
 pub mod control_room;
 pub mod cursor;
 pub mod decorations;

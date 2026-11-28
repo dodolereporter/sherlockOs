@@ -231,9 +231,14 @@ impl Core {
 
     /// A click on the bubble: its default action, if it has one, then it closes.
     pub fn click(&self, id: u32) {
+        self.click_activated(id, None);
+    }
+
+    /// `click`, the action preceded by the activation `token` of the click when one came.
+    pub fn click_activated(&self, id: u32, token: Option<&str>) {
         let default = self.open(id).is_some_and(|note| note.has_default());
         if default {
-            self.invoke(id, DEFAULT_ACTION);
+            self.invoke_activated(id, DEFAULT_ACTION, token);
         } else if self.close(id) {
             self.signal_closed(id, Reason::Dismissed);
         }
@@ -242,11 +247,21 @@ impl Core {
     /// A button of the bubble, or of the notification centre: `ActionInvoked`, then it closes
     /// unless it is resident. Returns whether the notification was open with that action.
     pub fn invoke(&self, id: u32, key: &str) -> bool {
+        self.invoke_activated(id, key, None)
+    }
+
+    /// `invoke`, preceded by `ActivationToken` with the activation `token` of the click when
+    /// one came (version 1.2 of the specification, lot Q-52): the application brings its
+    /// window forward with it.
+    pub fn invoke_activated(&self, id: u32, key: &str, token: Option<&str>) -> bool {
         let Some(note) = self.open(id) else {
             return false;
         };
         if !note.actions.iter().any(|(k, _)| k == key) {
             return false;
+        }
+        if let Some(token) = token {
+            self.signal_activation_token(id, token);
         }
         self.signal_action(id, key);
         if !note.resident && self.close(id) {
@@ -405,6 +420,21 @@ impl Core {
             );
             if let Err(error) = sent {
                 tracing::warn!(%error, "cannot send Changed");
+            }
+        }
+    }
+
+    fn signal_activation_token(&self, id: u32, token: &str) {
+        if let Some(bus) = self.bus.get() {
+            let sent = bus.emit_signal(
+                None::<&str>,
+                PATH,
+                INTERFACE,
+                "ActivationToken",
+                &(id, token),
+            );
+            if let Err(error) = sent {
+                tracing::warn!(%error, "cannot send ActivationToken");
             }
         }
     }

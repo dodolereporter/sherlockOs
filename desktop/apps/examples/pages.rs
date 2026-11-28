@@ -171,13 +171,18 @@ fn main() -> Result<(), iced_exwlshell::Error> {
     let inbox = launcher::service::Inbox::from_receiver(receiver);
     let reload: apps::app::Reload = Arc::new(apps::catalog);
     let (broadcast, outputs) = iced_exwlshell::shell::channel();
-    let first = std::sync::Mutex::new(Some(View::new(apps::catalog(), Arc::new(|_: &_| Ok(0)))));
+    let first = std::sync::Mutex::new(Some(View::new(
+        apps::catalog(),
+        Arc::new(|_: &_, _: Option<&str>| Ok(0)),
+    )));
     let boot = move || {
         let view = first
             .lock()
             .ok()
             .and_then(|mut v| v.take())
-            .unwrap_or_else(|| View::new(apps::catalog(), Arc::new(|_: &_| Ok(0))));
+            .unwrap_or_else(|| {
+                View::new(apps::catalog(), Arc::new(|_: &_, _: Option<&str>| Ok(0)))
+            });
         let mut view = view
             .resident(inbox.clone(), reload.clone())
             .with_outputs(outputs.clone());
