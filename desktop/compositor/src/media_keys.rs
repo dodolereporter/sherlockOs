@@ -37,7 +37,8 @@ use crate::{
     osd::{Edge, Level},
 };
 
-/// Delay before a held key repeats, and its pace: those of the keyboard (`State::new`).
+/// Delay before a held key repeats, and its pace, by default: a media key repeats as the
+/// keyboard setting says (`State::key_repeat`).
 pub const REPEAT_DELAY: Duration = Duration::from_millis(crate::KEY_REPEAT_DELAY as u64);
 pub const REPEAT_INTERVAL: Duration = Duration::from_millis(1000 / crate::KEY_REPEAT_RATE as u64);
 /// Longest wait for logind, UPower or a media player.
@@ -359,14 +360,16 @@ impl State {
             return;
         }
         let (worker, busy) = (keys.worker.clone(), keys.busy.clone());
-        let timer = Timer::from_duration(REPEAT_DELAY);
+        // The repeat of the keyboard setting, as the other keys.
+        let (delay, interval) = self.key_repeat();
+        let timer = Timer::from_duration(delay);
         let token = self.loop_handle.insert_source(timer, move |_, _, _| {
             // A repeat only goes when the worker has done the keys before it.
             if busy.swap(true, Ordering::SeqCst) {
-                return TimeoutAction::ToDuration(REPEAT_INTERVAL);
+                return TimeoutAction::ToDuration(interval);
             }
             match worker.send(key) {
-                Ok(()) => TimeoutAction::ToDuration(REPEAT_INTERVAL),
+                Ok(()) => TimeoutAction::ToDuration(interval),
                 Err(_) => TimeoutAction::Drop,
             }
         });
