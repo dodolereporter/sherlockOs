@@ -484,6 +484,15 @@ mod tests {
             self.state.lock_frame_shown(&output);
         }
 
+        /// Once the curtain is down, the screen shows a locked frame: only such a frame confirms
+        /// the lock (lot D-24e).
+        fn show_locked_frame(&mut self) {
+            self.run_until("the curtain down", |h| {
+                h.state.curtain_lowering(h.state.now()).is_none()
+            });
+            self.show_frame();
+        }
+
         fn items(&self) -> Vec<Item> {
             let (output, view) = self.state.views().remove(0);
             compositor::render::items(&self.state, (&output, &view), None, false, self.state.now())
@@ -564,7 +573,7 @@ mod tests {
         assert!(h.state.is_locked());
         // The lock is confirmed once the screen has shown a locked frame.
         assert!(!h.peers[locker].seen.locked);
-        h.show_frame();
+        h.show_locked_frame();
         h.run_until("locked", |h| h.peers[locker].seen.locked);
 
         // Only the lock surface is drawn, in front of the background.
@@ -603,7 +612,7 @@ mod tests {
         let app = h.connect_shell();
         let locker = h.connect_program();
         let _locking = h.lock(locker).unwrap();
-        h.show_frame();
+        h.show_locked_frame();
         h.run_until("locked", |h| h.peers[locker].seen.locked);
 
         // A new window and an overlay surface anchored to every edge, with the keyboard.
@@ -666,7 +675,7 @@ mod tests {
         let window = h.show_window(app);
         let locker = h.connect_program();
         let locking = h.lock(locker).unwrap();
-        h.show_frame();
+        h.show_locked_frame();
         h.run_until("locked", |h| h.peers[locker].seen.locked);
 
         // Another client's lock is refused: `finished`. Its unlock is a protocol error, and the
@@ -783,7 +792,7 @@ mod tests {
         assert_eq!(h.state.frozen_frames(), 0);
         assert!(h.curtain_items() > 0);
         assert_eq!(h.window_items(), 0);
-        h.show_frame();
+        h.show_locked_frame();
         h.run_until("locked", |h| h.peers[locker].seen.locked);
     }
 
@@ -815,7 +824,7 @@ mod tests {
         h.show_window(app);
         let locker = h.connect_program();
         let locking = h.lock(locker).unwrap();
-        h.show_frame();
+        h.show_locked_frame();
         h.run_until("locked", |h| h.peers[locker].seen.locked);
         assert_eq!(h.window_items(), 0);
         locking.lock.unlock_and_destroy();
@@ -844,7 +853,7 @@ mod tests {
         h.show_window(app);
         let locker = h.connect_program();
         let _locking = h.lock(locker).unwrap();
-        h.show_frame();
+        h.show_locked_frame();
         h.run_until("locked", |h| h.peers[locker].seen.locked);
 
         // The lock client is killed: its connection ends without an unlock.
@@ -881,7 +890,7 @@ mod tests {
         let mut h = Harness::start(&["sleep", "5"], &["false"]);
         let locker = h.connect_program();
         let _locking = h.lock(locker).unwrap();
-        h.show_frame();
+        h.show_locked_frame();
         h.run_until("locked", |h| h.peers[locker].seen.locked);
         let killed = h.peers.remove(locker);
         drop(killed);
@@ -1242,7 +1251,7 @@ mod tests {
             }
         ));
         assert!(h.state.holds_sleep_inhibitor());
-        h.show_frame();
+        h.show_locked_frame();
         h.run_until("the inhibitor released", |h| {
             !h.state.holds_sleep_inhibitor()
         });
@@ -1344,7 +1353,7 @@ mod tests {
         h.run_until("the curtain down", |h| {
             h.state.curtain_lowering(h.state.now()).is_none()
         });
-        h.show_frame();
+        h.show_locked_frame();
         let pids = |mark: &std::path::Path| {
             std::fs::read_to_string(mark)
                 .unwrap_or_default()
@@ -1563,7 +1572,7 @@ mod tests {
         h.show_window(app);
         let locker = h.connect_program();
         let _locking = h.lock(locker).unwrap();
-        h.show_frame();
+        h.show_locked_frame();
         h.run_until("locked", |h| h.peers[locker].seen.locked);
         let syncs = h.state.log_sync_requests();
         assert!(syncs >= 1, "the log is written to disk at the lock");
@@ -1605,7 +1614,7 @@ mod tests {
             .set_switch_vt(Box::new(move |vt| seen.borrow_mut().push(vt)));
         let locker = h.connect_program();
         let _locking = h.lock(locker).unwrap();
-        h.show_frame();
+        h.show_locked_frame();
         h.run_until("locked", |h| h.peers[locker].seen.locked);
         h.settle();
         h.peers[locker].seen.keys.clear();
@@ -1636,7 +1645,7 @@ mod tests {
         let mut h = Harness::start(&["sleep", "5"], &["false"]);
         let locker = h.connect_program();
         let locking = h.lock(locker).unwrap();
-        h.show_frame();
+        h.show_locked_frame();
         h.run_until("locked", |h| h.peers[locker].seen.locked);
         h.state.set_lock_ping_timeout(Duration::from_millis(300));
         h.state.screens_off(Then::Stay);
@@ -1672,7 +1681,7 @@ mod tests {
         let mut h = Harness::start(&["sleep", "5"], &["false"]);
         let locker = h.connect_program();
         let _locking = h.lock(locker).unwrap();
-        h.show_frame();
+        h.show_locked_frame();
         h.run_until("locked", |h| h.peers[locker].seen.locked);
         h.state.screens_off(Then::Stay);
         after_the_animation(&mut h);
@@ -1690,8 +1699,9 @@ mod tests {
         let mut h = Harness::start(&["sleep", "5"], &["false"]);
         let app = h.connect();
         h.show_window(app);
-        // The resident launcher: an overlay that takes the keyboard for itself.
-        let shell_client = h.connect();
+        // The resident launcher: an overlay that takes the keyboard for itself, on the shell
+        // socket, the only one with layer-shell (lot D-46).
+        let shell_client = h.connect_shell();
         let peer = &h.peers[shell_client];
         let qh = peer.qh();
         let _seat = peer.bind::<WlSeat>();
@@ -1725,7 +1735,7 @@ mod tests {
         h.run_until("the lock after the delay", |h| h.state.is_locked());
         let locker = h.connect_program();
         let _locking = h.lock(locker).unwrap();
-        h.show_frame();
+        h.show_locked_frame();
         h.run_until("locked", |h| h.peers[locker].seen.locked);
 
         // A key and a tap reach the lock, and nothing else.
@@ -1748,7 +1758,7 @@ mod tests {
         let mut h = Harness::start(&["sleep", "5"], &["false"]);
         let locker = h.connect_program();
         let locking = h.lock(locker).unwrap();
-        h.show_frame();
+        h.show_locked_frame();
         h.run_until("locked", |h| h.peers[locker].seen.locked);
         h.state.set_lock_image_timeout(Duration::from_millis(300));
         // It shows what is typed: it stays.
@@ -1855,7 +1865,7 @@ mod tests {
         h.show_window(app);
         let locker = h.connect_program();
         let locking = h.take_lock(locker).unwrap();
-        h.show_frame();
+        h.show_locked_frame();
         h.run_until("locked", |h| h.peers[locker].seen.locked);
 
         // A key and a tap before its first image, then 3 s answering nothing, pings included.
@@ -1884,7 +1894,7 @@ mod tests {
         let mut h = Harness::start(&["sleep", "5"], &["false"]);
         let locker = h.connect_program();
         let locking = h.lock(locker).unwrap();
-        h.show_frame();
+        h.show_locked_frame();
         h.run_until("locked", |h| h.peers[locker].seen.locked);
         h.state.set_lock_image_timeout(Duration::from_millis(500));
         h.key(KEY_A);
@@ -1906,7 +1916,7 @@ mod tests {
             .set_lock_first_image_timeout(Duration::from_millis(500));
         let locker = h.connect_program();
         let _locking = h.take_lock(locker).unwrap();
-        h.show_frame();
+        h.show_locked_frame();
         h.run_until("locked", |h| h.peers[locker].seen.locked);
         h.peers[locker].frozen = true;
         h.key(KEY_A);
@@ -1922,7 +1932,7 @@ mod tests {
         h.state.set_lock_ping_timeout(Duration::from_millis(300));
         let locker = h.connect_program();
         let _locking = h.lock(locker).unwrap();
-        h.show_frame();
+        h.show_locked_frame();
         h.run_until("locked", |h| h.peers[locker].seen.locked);
         h.peers[locker].frozen = true;
         h.key(KEY_A);
@@ -1956,7 +1966,7 @@ mod tests {
         let mut h = Harness::start(&["true"], &rescue);
         h.state.set_lock_image_timeout(Duration::from_millis(300));
         h.chord(KEY_SUPER, KEY_L);
-        h.show_frame();
+        h.show_locked_frame();
         h.run_until("the rescue mode holds the lock", |h| {
             h.state.lock_confirmed() && h.state.lock_stage() == compositor::lock::Stage::Rescue
         });
@@ -1995,7 +2005,7 @@ mod tests {
         h.state.set_lock_mark(Some(mark.clone()));
         let locker = h.connect_program();
         let locking = h.lock(locker).unwrap();
-        h.show_frame();
+        h.show_locked_frame();
         h.run_until("locked", |h| h.peers[locker].seen.locked);
         assert!(mark.exists(), "marked at the lock");
 
