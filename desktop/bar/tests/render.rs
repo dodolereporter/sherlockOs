@@ -443,6 +443,60 @@ fn the_panels_render_in_both_themes() {
     }
 }
 
+/// The outputs and the inputs of the sound (D-20g): the speakers in use, HDMI and a
+/// Bluetooth headset, two inputs and the microphone's slider. `sound-devices`, both themes.
+#[test]
+fn the_outputs_and_inputs_render_in_both_themes() {
+    use bar::system::audio::Endpoint;
+    for (which, suffix) in [(Theme::Dark, ""), (Theme::Light, "-light")] {
+        in_theme(which, || {
+            let mut state = sample();
+            state.panel_margins = panel::margins(false);
+            board_quick(&mut state);
+            let endpoint = |name: &str, description: &str| Endpoint {
+                name: name.to_owned(),
+                description: description.to_owned(),
+            };
+            let devices = quick::Devices {
+                outputs: vec![
+                    endpoint("speakers", "Haut-parleurs intégrés"),
+                    endpoint("hdmi", "HDMI / DisplayPort"),
+                    endpoint("headset", "Casque WH-1000XM4"),
+                ],
+                inputs: vec![
+                    endpoint("mic", "Microphone intégré"),
+                    endpoint("headset-mic", "Casque WH-1000XM4"),
+                ],
+                output: String::from("speakers"),
+                input: String::from("mic"),
+                microphone: Some(Sound {
+                    volume: 70,
+                    muted: false,
+                }),
+            };
+            let _ = state.quick.update(quick::Message::ShowSound(true));
+            let _ = state
+                .quick
+                .update(quick::Message::Audio(Load::Ready(devices)));
+            state.quick.tick(state.quick.now + Duration::from_secs(5));
+            let size = panel_size(&state, Panel::Control);
+            let mut ui =
+                Simulator::with_size(bar::settings(), size, state.view_panel(Panel::Control));
+            assert!(ui.find("HDMI / DisplayPort").is_ok());
+            let _ = ui.click("HDMI / DisplayPort");
+            let messages: Vec<_> = ui.into_messages().collect();
+            assert!(
+                messages.iter().any(
+                    |m| matches!(m, Message::Quick(quick::Message::ChooseOutput(n)) if n == "hdmi")
+                ),
+                "{messages:?}"
+            );
+            let ui = Simulator::with_size(bar::settings(), size, state.view_panel(Panel::Control));
+            assert_written(capture(ui, &format!("sound-devices{suffix}")));
+        });
+    }
+}
+
 /// The panels on short screens (UI-08), the logical heights of 1280 × 800 at 1.5 (`-533`),
 /// 1366 × 768 at 1.25 (`-614`) and 1920 × 1080 at 1.5 (`-720`): `calendar-<height>`, the
 /// centre shorter, or both scrolling together on the shortest; `control-centre-<height>`, the

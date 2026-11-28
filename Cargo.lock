@@ -127,6 +127,7 @@ dependencies = [
  "launcher",
  "log",
  "mime-apps",
+ "shell-protocol",
  "sherlock-ui",
  "thiserror 2.0.21",
  "tracing",
@@ -640,6 +641,7 @@ dependencies = [
  "image",
  "mime-apps",
  "resvg",
+ "rustix 1.1.6",
  "shell-protocol",
  "sherlock-ui",
  "smithay",
@@ -1559,6 +1561,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "greeter"
+version = "0.0.0"
+dependencies = [
+ "iced",
+ "iced_exwlshell",
+ "iced_test",
+ "image",
+ "lock",
+ "serde_json",
+ "sherlock-3d",
+ "sherlock-ui",
+ "system-services",
+ "thiserror 2.0.21",
+ "tracing",
+ "tracing-subscriber",
+ "zbus",
+ "zeroize",
+]
+
+[[package]]
 name = "guillotiere"
 version = "0.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2170,6 +2192,7 @@ dependencies = [
  "image",
  "libc",
  "mime-apps",
+ "shell-protocol",
  "sherlock-ui",
  "thiserror 2.0.21",
  "tracing",
@@ -2297,6 +2320,7 @@ dependencies = [
  "image",
  "libc",
  "libloading",
+ "rustix 1.1.6",
  "sherlock-3d",
  "sherlock-ui",
  "system-services",
@@ -2516,6 +2540,7 @@ dependencies = [
  "iced_test",
  "libc",
  "notifications-config",
+ "shell-protocol",
  "sherlock-ui",
  "thiserror 2.0.21",
  "tracing",
