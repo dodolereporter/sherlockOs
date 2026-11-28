@@ -147,7 +147,8 @@ impl Trash {
             if fs::symlink_metadata(&path).is_err() {
                 continue;
             }
-            let Ok(record) = fs::read_to_string(entry.path()) else {
+            let Some(record) = crate::ops::read_small_text(&entry.path(), crate::ops::SMALL_FILE)
+            else {
                 continue;
             };
             let Some(original) = parse(&record) else {
@@ -169,8 +170,7 @@ impl Trash {
     /// Refuses if another item has taken its place.
     pub fn restore(&self, id: &str) -> Result<PathBuf> {
         let info = self.info_path(id);
-        let original = fs::read_to_string(&info)
-            .ok()
+        let original = crate::ops::read_small_text(&info, crate::ops::SMALL_FILE)
             .and_then(|s| parse(&s))
             .ok_or(Error::NotInTrash)?;
         let path = self.files.join(id);

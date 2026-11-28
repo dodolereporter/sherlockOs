@@ -522,6 +522,8 @@ fn bubble(b: &Bubble) -> Element<'_, Message> {
         .padding(ui::PADDING)
         .width(ui::WIDTH)
         .style(ui::bubble(note.urgency == Urgency::Critical));
+    // The blur behind its glass (lot D-37b).
+    let card = sherlock_ui::glass::glass(card, ui::RADIUS);
     mouse_area(card)
         .on_press(Message::Click(id))
         .on_enter(Message::Hover(id, true))

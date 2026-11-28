@@ -238,7 +238,7 @@ mod tests {
         );
         let tools = [
             "sh", "dirname", "readlink", "mkdir", "mv", "awk", "date", "wc", "cat", "sleep", "env",
-            "kill",
+            "kill", "rm",
         ];
         for tool in tools {
             let found = Process::new("sh")

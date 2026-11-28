@@ -1,6 +1,10 @@
 //! Anchored surfaces (`zwlr_layer_shell_v1`): the bar, the dock, the launcher and the
 //! notifications are separate programs anchored to a screen edge (ADR 0005).
 //!
+//! Only the clients of the shell socket see the global (ADR 0021, lot D-46): an application on
+//! the session's socket, a Flatpak one included, cannot put a surface over every window and
+//! take the keyboard with it, so it cannot imitate the lock screen or a password dialog.
+//!
 //! Each screen has its layer map (smithay's `LayerMap`), which places its surfaces from their
 //! anchors and margins and keeps what their exclusive zones leave to windows: the work area.
 //! Background and bottom surfaces are drawn under the windows, top and overlay ones above.
@@ -165,6 +169,7 @@ impl State {
         let checked = check_reserves(others.chain([layer.cached_state()]), screen.size);
         let shown = layer.user_data().get_or_insert(|| Cell::new(false));
         let content = has_content(surface);
+        let arrives = content && !shown.get();
         if let Err(reason) = checked {
             tracing::warn!(
                 namespace = layer.namespace(),
@@ -192,6 +197,9 @@ impl State {
         }
         let zone_changed = before != map.non_exclusive_zone();
         drop(map);
+        if arrives && shown.get() {
+            self.layer_arrives(layer.namespace());
+        }
         if zone_changed {
             self.reflow(&output);
         }

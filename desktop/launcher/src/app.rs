@@ -923,13 +923,14 @@ impl Launcher {
             Space::new().width(Length::Fill).height(Length::Fill).into()
         };
         let content = stack![veil, list];
-        container(content)
+        let panel = container(content)
             .width(look::WIDTH)
             .height(self.drawn_height())
             .padding(look::PADDING + metrics::BORDER_WIDTH)
             .clip(true)
-            .style(look::panel)
-            .into()
+            .style(look::panel);
+        // The blur behind its glass (lot D-37b).
+        sherlock_ui::glass::glass(panel, look::RADIUS).into()
     }
 
     /// An item of the list where it is drawn: on its way to its place `top`, fading in when new.
