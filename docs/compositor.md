@@ -288,6 +288,14 @@ size and margins, and computes the work area.
   one takes the grab (Q-15; before, it kept none, and a click elsewhere left it open). A
   headless test opens, closes and opens a panel again, in one batch and then in two, and
   clicks elsewhere.
+  The same holds for the menus of a window (Evidence's, lot E-02b). When a window opens its
+  menu again elsewhere, it makes the new popup, which grabs, before it destroys the old one:
+  a first menu of the window held by the grab gives it to the new one (its parent is the
+  window), while a submenu (its parent is a popup) leaves it to the first menu (Q-58; before,
+  the grab stayed with the old menu, went with it, and the new one no longer closed on a click
+  elsewhere). Tests: a window's menu closes on a click on the desktop, opened again in one batch
+  as well (`tests/headless.rs`), and on a click on the dock, a surface of another client
+  (`tests/shell.rs`).
 - **Blur.** `Scene::push_backdrop` is the place where the blur behind glass surfaces comes, with
   lot D-11b: it is called for each anchored surface, behind it, with its rectangle in the
   frame. It draws nothing yet: a translucent surface shows a sharp desktop behind it.
