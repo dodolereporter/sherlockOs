@@ -3,6 +3,7 @@
 //! The library holds the state and the logic, the binary picks the backend.
 //! Architecture and tests: `docs/compositor.md`.
 
+mod activation;
 pub mod anim;
 pub mod arrival;
 pub mod background_effect;
@@ -63,6 +64,7 @@ pub mod udev;
 pub mod wallpaper;
 pub mod window_anim;
 pub mod winit;
+mod x11_activation;
 mod x11_paste;
 mod xdnd;
 mod xwayland;
@@ -300,6 +302,9 @@ pub struct State {
     curtain: curtain::Curtain,
     /// What locks the session besides Super + L: inactivity, logind, the lid (lot D-25a3).
     triggers: triggers::Triggers,
+    /// Applications that bring their window forward, and the windows that ask for attention
+    /// (lot Q-52).
+    activation: activation::Activation,
     /// What keeps the session awake: a visible video, the bus, logind (lot D-43).
     inhibitors: inhibit::Inhibitors,
     /// The screens off, like an old television (lot D-38).
@@ -476,6 +481,9 @@ impl State {
             lock: lock::SessionLock::new(&dh),
             curtain: curtain::Curtain::default(),
             triggers: triggers::Triggers::default(),
+            activation: activation::Activation::new(
+                smithay::wayland::xdg_activation::XdgActivationState::new::<Self>(&dh),
+            ),
             inhibitors: inhibit::Inhibitors::new(&dh),
             power: power::Power::new(),
             clipboard: clipboard_history::ClipboardHistory::default(),
@@ -620,6 +628,8 @@ impl State {
             Some(window) => {
                 let count = FOCUS_COUNT.fetch_add(1, Ordering::Relaxed);
                 window_data(window).focused_at.set(count);
+                // It has what it asked for (lot Q-52).
+                self.attention_done(Some(window));
                 // From behind another window, it comes to the front with an animation (lot D-19d).
                 self.start_raise(window);
                 self.space.raise_element(window, true);
@@ -793,6 +803,7 @@ impl State {
             layer_map_for_output(output).cleanup();
         }
         self.popups.cleanup();
+        self.attention_done(None);
         self.end_minimize_effects();
         self.end_closings();
         self.end_popup_closings();
