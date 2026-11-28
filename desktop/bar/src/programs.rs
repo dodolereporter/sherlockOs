@@ -10,6 +10,8 @@ use std::sync::Arc;
 
 /// The settings application.
 pub const CONTROL_ROOM: &str = "control-room";
+/// Its network page, for a network the bar cannot join (lot D-26n).
+pub const NETWORK_PAGE: [&str; 2] = ["--page", "network"];
 
 /// Starts a program by its name: beside the session's programs (`SHERLOCKOS_BIN`), which are
 /// not in the `PATH` (lot Q-39), when it is there, else found in the `PATH`.

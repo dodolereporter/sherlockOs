@@ -14,14 +14,17 @@ use sherlock_ui::color::{Color, Palette};
 
 type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
 
-/// Mood, seconds played, file name.
-const STATES: [(Mood, f32, &str); 5] = [
-    (Mood::Idle, 1.0, "repos"),
+/// Mood, seconds played, whether he looks at the password field, file name.
+const STATES: [(Mood, f32, bool, &str); 7] = [
+    (Mood::Idle, 1.0, false, "repos"),
     // Mid-gesture: the hand up.
-    (Mood::Wave, 0.7, "salut"),
-    (Mood::EyesClosed, 1.0, "yeux-fermes"),
-    (Mood::Peek, 1.0, "peek"),
-    (Mood::Sorry, 1.0, "desole"),
+    (Mood::Wave, 0.7, false, "salut"),
+    (Mood::EyesClosed, 1.0, false, "yeux-fermes"),
+    (Mood::Peek, 1.0, false, "peek"),
+    (Mood::Sorry, 1.0, false, "desole"),
+    // As on the lock screen: the eyes, parallel, turned a little toward the field below.
+    (Mood::Idle, 1.0, true, "repos-champ"),
+    (Mood::Peek, 1.0, true, "peek-champ"),
 ];
 /// Bubble sides in pixels: about the lock screen's at scale 1, and at scale 2.
 const SIDES: [u32; 2] = [170, 340];
@@ -55,8 +58,11 @@ fn main() -> Result {
 
     let mut renderer = Renderer::new(&device, &queue, &model, wgpu::TextureFormat::Rgba8Unorm);
     let mut eyes = Vec::new();
-    for (mood, seconds, name) in STATES {
+    for (mood, seconds, gaze, name) in STATES {
         let mut animator = Animator::new(model.clone());
+        if gaze {
+            animator.look_at(Some(Camera::UPPER_BODY.unproject(FIELD, 1.0, 4.0)));
+        }
         animator.set_mood(mood);
         for _ in 0..(seconds * 30.0).round() as usize {
             animator.advance(1.0 / 30.0);
