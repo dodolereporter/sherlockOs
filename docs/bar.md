@@ -672,6 +672,21 @@ under the calendar instead, in the panel of the clock, 320 wide like on the boar
 150 kept for the dock. Its list scrolls inside it. The calendar takes the same width, its
 grid centred.
 
+**Within the screen** (UI-08). A panel never goes past the bottom of its screen: when it opens,
+the bar gives it the logical height of the screen the compositor reported
+(`panel::reserve_screen`), and its height is what it holds, at most that height less the 54
+above it and `panel::SCREEN_ROOM` (24) below. The notification centre gives up its height
+first, down to `panel::CENTER_MIN` (120), the calendar staying whole above it (1366 × 768 at
+1.25); on a shorter screen (1280 × 800 at 1.5), the calendar and the centre scroll together in
+the panel. The control centre keeps the height of its settings and scrolls them. Lists and
+cut panels scroll in `sherlock_ui::scroll` (UI-11): the scroller of macOS over them, a
+stretch past an end that springs back; a list with nothing to scroll hands the wheel to what
+holds it. The popup asks the compositor to slide it along the
+edges of the screen (`SlideX | SlideY` of `xdg_positioner`), never to flip it above the bar.
+
+![The calendar on 1366 × 768 at 1.25](../desktop/bar/screenshots/calendar-614.png)
+![The control centre on 1280 × 800 at 1.5, scrolling](../desktop/bar/screenshots/control-centre-533.png)
+
 ### Quick settings
 
 The control centre, after the right column of the Panels board: four tiles (« Wi-Fi », « Bluetooth »,
